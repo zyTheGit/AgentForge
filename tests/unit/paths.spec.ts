@@ -1,0 +1,220 @@
+/**
+ * paths 单测（Spec §2.1 / §2.1.1 / §2.2）：SoT 解析 / 四 target 目录 / UNC / 大小写不敏感 / 长路径 / OneDrive。
+ */
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import type { EnvSnapshot } from '../../src/core/env';
+import {
+  ConfigError,
+  GenericError,
+} from '../../src/core/errors';
+import {
+  currentOs,
+  detectOneDrive,
+  longPathAware,
+  resolveProjectSoT,
+  resolveTargetUserDirs,
+  resolveUserSoT,
+  samePath,
+  validatePath,
+} from '../../src/core/paths';
+import { createFakeHost } from './test-utils';
+
+const WIN = { platform: 'win32' } as const;
+const POSIX = { platform: 'linux' } as const;
+
+const envOf = (patch: Partial<EnvSnapshot> = {}): EnvSnapshot => ({
+  agfHome: undefined,
+  agfScope: undefined,
+  offline: false,
+  lineEnding: undefined,
+  ci: false,
+  codexHome: undefined,
+  userProfile: 'C:\\Users\\tester',
+  ...patch,
+});
+
+describe('resolveUserSoT（Spec §2.1）', () => {
+  it('默认：USERPROFILE 下 .agentforge（win32 分隔符）', () => {
+    expect(resolveUserSoT(envOf(), WIN)).toBe('C:\\Users\\tester\\.agentforge');
+  });
+
+  it('默认：HOME 下 .agentforge（posix 分隔符）', () => {
+    expect(resolveUserSoT(envOf({ userProfile: '/home/u' }), POSIX)).toBe('/home/u/.agentforge');
+  });
+
+  it('AGF_HOME 覆盖并规范化为绝对路径', () => {
+    expect(resolveUserSoT(envOf({ agfHome: 'D:\\af-home' }), WIN)).toBe('D:\\af-home');
+    expect(resolveUserSoT(envOf({ agfHome: 'D:\\af-home\\' }), WIN)).toBe('D:\\af-home');
+    // 相对 AGF_HOME 也解析为绝对（path.resolve 语义）
+    const rel = resolveUserSoT(envOf({ agfHome: 'af-rel' }), WIN);
+    expect(path.win32.isAbsolute(rel)).toBe(true);
+    expect(rel.endsWith('af-rel')).toBe(true);
+  });
+
+  it('AGF_HOME 为 UNC → GenericError(1)（Spec §2.1.1）', () => {
+    expect(() => resolveUserSoT(envOf({ agfHome: '\\\\server\\share\\af' }), WIN)).toThrow(GenericError);
+  });
+
+  it('userProfile 与 AGF_HOME 均缺失 → ConfigError(2)', () => {
+    expect(() => resolveUserSoT({ ...envOf(), userProfile: undefined }, WIN)).toThrow(ConfigError);
+  });
+});
+
+describe('resolveProjectSoT（Spec §2.1）', () => {
+  it('<project>\\.agentforge', () => {
+    expect(resolveProjectSoT('C:\\proj', WIN)).toBe('C:\\proj\\.agentforge');
+  });
+
+  it('posix 分隔符', () => {
+    expect(resolveProjectSoT('/home/u/proj', POSIX)).toBe('/home/u/proj/.agentforge');
+  });
+
+  it('相对 projectRoot 绝对化', () => {
+    const out = resolveProjectSoT('some/dir', POSIX);
+    expect(path.posix.isAbsolute(out)).toBe(true);
+    expect(out.endsWith('some/dir/.agentforge')).toBe(true);
+  });
+});
+
+describe('resolveTargetUserDirs（Spec §2.2 四 target 用户级目录）', () => {
+  it('win32 默认路径', () => {
+    const dirs = resolveTargetUserDirs(envOf(), WIN);
+    expect(dirs.opencode).toBe('C:\\Users\\tester\\.config\\opencode');
+    expect(dirs.codex).toBe('C:\\Users\\tester\\.codex');
+    expect(dirs.claude).toBe('C:\\Users\\tester\\.claude');
+    expect(dirs.pi).toBe('C:\\Users\\tester\\.pi\\agent');
+  });
+
+  it('CODEX_HOME 覆盖 codex 目录', () => {
+    const dirs = resolveTargetUserDirs(envOf({ codexHome: 'E:\\tools\\codex' }), WIN);
+    expect(dirs.codex).toBe('E:\\tools\\codex');
+    // 其余不受影响
+    expect(dirs.claude).toBe('C:\\Users\\tester\\.claude');
+  });
+
+  it('posix 分隔符映射（~/.config/opencode 等）', () => {
+    const dirs = resolveTargetUserDirs(envOf({ userProfile: '/home/u' }), POSIX);
+    expect(dirs.opencode).toBe('/home/u/.config/opencode');
+    expect(dirs.codex).toBe('/home/u/.codex');
+    expect(dirs.claude).toBe('/home/u/.claude');
+    expect(dirs.pi).toBe('/home/u/.pi/agent');
+  });
+
+  it('userProfile 缺失 → ConfigError', () => {
+    expect(() => resolveTargetUserDirs({ ...envOf(), userProfile: undefined }, WIN)).toThrow(ConfigError);
+  });
+});
+
+describe('validatePath（Spec §2.1.1 UNC 拒绝）', () => {
+  it('UNC 反斜杠形式 → GenericError(1) 且 hint 提示 AGF_HOME 不支持网络路径', () => {
+    try {
+      validatePath('\\\\server\\share\\af');
+      expect.unreachable('should throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(GenericError);
+      const e = err as GenericError;
+      expect(e.code).toBe(1);
+      expect(e.hint).toMatch(/本地磁盘|网络/);
+    }
+  });
+
+  it('UNC 正斜杠形式 → GenericError(1)', () => {
+    expect(() => validatePath('//server/share/af')).toThrow(GenericError);
+  });
+
+  it('正常路径返回规范化绝对路径', () => {
+    expect(validatePath('C:\\Users\\u\\.agentforge')).toBe('C:\\Users\\u\\.agentforge');
+    expect(validatePath('C:\\Users\\u\\.agentforge\\')).toBe('C:\\Users\\u\\.agentforge');
+    const rel = validatePath('rel/path');
+    expect(path.isAbsolute(rel)).toBe(true);
+  });
+});
+
+describe('samePath（Spec §2.1 win32 大小写不敏感）', () => {
+  it('win32：大小写不同视为相同', () => {
+    expect(samePath('C:\\Users\\Tester\\.agentforge', 'c:\\users\\tester\\.AGENTFORGE', WIN)).toBe(true);
+  });
+
+  it('win32：正反斜杠混用视为相同（normalize 统一）', () => {
+    expect(samePath('C:/Users/u/.agentforge', 'C:\\Users\\u\\.agentforge', WIN)).toBe(true);
+  });
+
+  it('win32：不同路径视为不同', () => {
+    expect(samePath('C:\\a', 'C:\\b', WIN)).toBe(false);
+  });
+
+  it('posix：大小写敏感', () => {
+    expect(samePath('/home/u/.agentforge', '/home/U/.agentforge', POSIX)).toBe(false);
+    expect(samePath('/home/u/.agentforge', '/home/u/.agentforge', POSIX)).toBe(true);
+  });
+});
+
+describe('longPathAware（Spec §2.1.1 长路径 >240）', () => {
+  const short = 'C:\\Users\\tester\\proj\\AGENTS.md';
+  // 241 字符：前缀 + 填充 + 结尾
+  const long = `C:\\${'a'.repeat(241 - 'C:\\'.length - 'AGENTS.md'.length)}AGENTS.md`;
+
+  it('短路径原样返回', () => {
+    expect(longPathAware(short, WIN)).toBe(short);
+  });
+
+  it('win32 长路径加 \\\\?\\ 前缀', () => {
+    expect(long.length).toBeGreaterThan(240);
+    expect(longPathAware(long, WIN)).toBe(`\\\\?\\${long}`);
+  });
+
+  it('已是 \\\\?\\ 前缀不重复添加', () => {
+    const prefixed = `\\\\?\\${long}`;
+    expect(longPathAware(prefixed, WIN)).toBe(prefixed);
+  });
+
+  it('UNC 长路径转为 \\\\?\\UNC\\ 形式', () => {
+    const uncLong = `\\\\server\\share\\${'a'.repeat(250)}`;
+    expect(longPathAware(uncLong, WIN)).toBe(`\\\\?\\UNC\\server\\share\\${'a'.repeat(250)}`);
+  });
+
+  it('posix 不加前缀（即使超长）', () => {
+    const posixLong = `/${'a'.repeat(250)}/AGENTS.md`;
+    expect(longPathAware(posixLong, POSIX)).toBe(posixLong);
+  });
+});
+
+describe('detectOneDrive（Spec §2.1.1，doctor 用 warning）', () => {
+  it('路径含 OneDrive 段 → true', () => {
+    expect(detectOneDrive('C:\\Users\\u\\OneDrive\\Documents', createFakeHost())).toBe(true);
+  });
+
+  it('路径含 OneDrive - <tenant> 段（商业版）→ true', () => {
+    expect(detectOneDrive('C:\\Users\\u\\OneDrive - Contoso\\proj', createFakeHost())).toBe(true);
+  });
+
+  it('普通路径且无 OneDrive 环境变量 → false', () => {
+    expect(detectOneDrive('C:\\Users\\u\\Documents', createFakeHost())).toBe(false);
+  });
+
+  it('路径段以 OneDrive 开头但非完整段名（如 OneDriveOld）→ false', () => {
+    expect(detectOneDrive('C:\\Users\\u\\OneDriveOld\\x', createFakeHost())).toBe(false);
+  });
+
+  it('环境变量 OneDrive 指向用户目录的子目录（用户目录在 OneDrive 下）→ true', () => {
+    const host = createFakeHost({ OneDrive: 'C:\\Users\\u\\OneDrive' });
+    expect(detectOneDrive('C:\\Users\\u\\OneDrive\\Documents', host)).toBe(true);
+  });
+
+  it('环境变量 OneDrive 位于用户目录之内（用户目录为 OneDrive 祖先）→ true', () => {
+    const host = createFakeHost({ OneDrive: 'C:\\Users\\u\\OneDrive' });
+    expect(detectOneDrive('C:\\Users\\u', host)).toBe(true);
+  });
+
+  it('环境变量 OneDrive 与用户目录无关 → false', () => {
+    const host = createFakeHost({ OneDrive: 'D:\\OneDrive' });
+    expect(detectOneDrive('C:\\Users\\u\\Documents', host)).toBe(false);
+  });
+});
+
+describe('currentOs', () => {
+  it('返回当前进程平台（win32/darwin/linux 之一）', () => {
+    expect(['win32', 'darwin', 'linux']).toContain(currentOs().platform);
+  });
+});
