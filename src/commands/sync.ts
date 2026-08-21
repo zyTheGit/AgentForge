@@ -1,9 +1,13 @@
 /**
- * aforge sync 命令（Spec §6 命令表 / §7.3）。
+ * aforge sync 命令（Spec §6 命令表 / §7.3，M6 多 target 版）。
  *
  * `aforge sync [--targets a,b,c] [--dry-run]`：
  * - 未初始化（无 SoT）→ ConfigError(2)，hint 引导先运行 aforge init；
- * - 输出：各写入文件绝对路径 + 结果摘要；--dry-run 明确标注且不落盘（含 sync-meta）。
+ * - 输出：逐项写入明细（`[target] action: path`）+ 每 target 汇总表 +
+ *   结果摘要；--dry-run 明确标注且不落盘（含 sync-meta）；
+ * - soft warning（§8.6 Pi MVP）随成功结果输出 warning 列表；
+ * - 投影失败（已回滚）时打印失败汇总表（每 target 状态 + 回滚声明）后
+ *   rethrow 原始错误——退出码 / message / hint 语义由 main.ts 统一出口保持。
  *
  * 核心逻辑在 core/project/engine.syncOnce；本层只做参数解析与输出（纯 ASCII）。
  */
@@ -11,7 +15,12 @@ import path from 'node:path';
 import type { Command } from 'commander';
 import { readEnv } from '../core/env';
 import { currentOs, type OsContext } from '../core/paths';
-import { syncOnce, type SyncResult } from '../core/project/engine';
+import {
+  getSyncFailureReport,
+  syncOnce,
+  type SyncResult,
+  type SyncTargetResult,
+} from '../core/project/engine';
 import { dryRunItem } from '../core/project/writer';
 import { SYNC_META_FILE } from '../core/project/sync-meta';
 import type { Host } from '../infra/host';
@@ -58,7 +67,34 @@ export async function runSync(
   });
 }
 
-/** 结果摘要输出（绝对路径列表 + 计数；dry-run 显式标注）。 */
+/** 单个 target 的明细行（`[claude] merge (marker): <path>`，附状态标注）。 */
+function targetItemLines(target: SyncTargetResult, dryRun: boolean): string[] {
+  return target.items.map((item, index) => {
+    const base = `${dryRun ? 'would ' : ''}${dryRunItem(item)}`;
+    const status = target.statuses[index];
+    if (status === 'unchanged') {
+      return `[${target.targetId}] ${base} (unchanged, skipped)`;
+    }
+    if (status === 'warning') {
+      return `[${target.targetId}] ${base} (soft, failed - see warnings)`;
+    }
+    return `[${target.targetId}] ${base}`;
+  });
+}
+
+/** 单个 target 的汇总行（成功 / 带 warning）。 */
+function targetSummaryLine(target: SyncTargetResult): string {
+  const written = target.statuses.filter((s) => s === 'written').length;
+  const unchanged = target.statuses.filter((s) => s === 'unchanged').length;
+  const warned = target.statuses.filter((s) => s === 'warning').length;
+  const parts = [`${target.statuses.length} file(s)`];
+  if (written > 0) parts.push(`${written} written`);
+  if (unchanged > 0) parts.push(`${unchanged} unchanged`);
+  if (warned > 0) parts.push(`${warned} soft warning(s)`);
+  return `  ${target.targetId}: ${warned > 0 ? 'ok (warnings)' : 'ok'} (${parts.join(', ')})`;
+}
+
+/** 结果摘要输出（逐项明细 + 每 target 汇总表 + 计数；dry-run 显式标注）。 */
 function printResult(result: SyncResult): void {
   const banner = result.dryRun
     ? `aforge sync (DRY RUN - no files will be written) - scope: ${result.scope}`
@@ -66,12 +102,20 @@ function printResult(result: SyncResult): void {
   const lines: string[] = [banner, ''];
 
   for (const target of result.targets) {
-    for (const item of target.items) {
-      lines.push(`[${target.targetId}] ${result.dryRun ? 'would ' : ''}${dryRunItem(item)}`);
-    }
+    lines.push(...targetItemLines(target, result.dryRun));
   }
   for (const skipped of result.skippedTargets) {
     lines.push(`[${skipped}] skipped: projector not available in this version`);
+  }
+
+  if (result.targets.length > 0) {
+    lines.push('', 'target summary:', ...result.targets.map(targetSummaryLine));
+  }
+  if (result.warnings.length > 0) {
+    lines.push('', 'warnings:');
+    for (const warning of result.warnings) {
+      lines.push(`  [${warning.targetId}] ${warning.path}: ${warning.message}`);
+    }
   }
 
   const fileCount = result.targets.reduce((n, t) => n + t.items.length, 0);
@@ -81,12 +125,40 @@ function printResult(result: SyncResult): void {
       `dry-run complete: ${result.targets.length} target(s), ${fileCount} file(s) would be written (nothing touched)`,
     );
   } else {
-    lines.push(`sync complete: ${result.targets.length} target(s), ${fileCount} file(s) written`);
+    lines.push(`sync complete: ${result.targets.length} target(s), ${fileCount} file(s) projected`);
     lines.push(`content hash: ${result.contentHash}`);
     lines.push(`sync-meta: ${path.join(result.sotRoot, SYNC_META_FILE)}`);
   }
 
   console.log(lines.join('\n'));
+}
+
+/** 投影失败汇总输出（§7.3-6：每 target 状态表 + 回滚声明；随后 rethrow 由上层统一报错）。 */
+function printFailureReport(err: unknown): void {
+  const report = getSyncFailureReport(err);
+  if (report === undefined) {
+    return;
+  }
+  const restored = report.rolledBack.filter((r) => r.restored).length;
+  const failed = report.rolledBack.filter((r) => !r.restored);
+
+  const lines: string[] = ['aforge sync failed - all written files have been rolled back', ''];
+  lines.push('target summary:');
+  for (const entry of report.targetStatuses) {
+    if (entry.status === 'failed') {
+      lines.push(`  ${entry.targetId}: failed (see error below)`);
+    } else if (entry.status === 'ok-rolled-back') {
+      lines.push(`  ${entry.targetId}: ok (rolled back to pre-sync state)`);
+    } else {
+      lines.push(`  ${entry.targetId}: not started`);
+    }
+  }
+  lines.push('');
+  lines.push(`rollback: ${restored} file(s) restored${failed.length > 0 ? `, ${failed.length} restore error(s)` : ''}`);
+  for (const entry of failed) {
+    lines.push(`  rollback failed: ${entry.path}: ${entry.error ?? 'unknown error'}`);
+  }
+  console.error(lines.join('\n'));
 }
 
 export function registerSyncCommand(program: Command): void {
@@ -96,15 +168,20 @@ export function registerSyncCommand(program: Command): void {
     .option('--targets <ids>', 'comma-separated target ids to sync (e.g. claude,pi)')
     .option('--dry-run', 'show what would be written without touching disk')
     .action(async (options: { targets?: string; dryRun?: boolean }) => {
-      const result = await runSync(
-        {
-          host: realHost,
-          cwd: process.cwd(),
-          os: currentOs(),
-          agentforgeVersion: VERSION,
-        },
-        { targets: options.targets, dryRun: options.dryRun },
-      );
-      printResult(result);
+      try {
+        const result = await runSync(
+          {
+            host: realHost,
+            cwd: process.cwd(),
+            os: currentOs(),
+            agentforgeVersion: VERSION,
+          },
+          { targets: options.targets, dryRun: options.dryRun },
+        );
+        printResult(result);
+      } catch (err) {
+        printFailureReport(err);
+        throw err;
+      }
     });
 }

@@ -9,7 +9,7 @@
  * 经 infra/fsutil.normalizeLineEnding 映射，Spec §2.5）。
  */
 import type { Habits, McpServer, Profile } from '../../schema';
-import type { LineEnding, Scope } from '../env';
+import type { EnvSnapshot, LineEnding, Scope } from '../env';
 import type { OsContext } from '../paths';
 
 /** Spec §8.1 ProjectionPlan 项的动作类型。 */
@@ -26,12 +26,23 @@ export interface ProjectionPlanItem {
    * - merge_json：AgentForge 管理键的 JSON 文本（对象，未知键由 writer 保留，Spec §8.2）。
    */
   readonly content: string;
+  /**
+   * M6（Spec §8.6 Pi MVP soft）：soft 项 apply 失败（目录/文件异常）时
+   * 仅收集 warning，不计入失败、不触发回滚。缺省（undefined）= 硬项。
+   */
+  readonly soft?: boolean;
 }
 
 /** 一个 target 的完整写入计划。 */
 export interface ProjectionPlan {
   readonly targetId: string;
   readonly items: readonly ProjectionPlanItem[];
+  /**
+   * M6（Spec §8.4）：merge_toml 动作的标记段覆盖（codex MCP 用
+   * `# BEGIN AGENTFORGE MCP` / `# END AGENTFORGE MCP` 变体）。
+   * 缺省用 writer 默认 TOML 标记；markdown marker 恒取 profile 配置（ctx.markerBegin/End）。
+   */
+  readonly tomlMarkers?: { readonly begin: string; readonly end: string };
 }
 
 /**
@@ -69,6 +80,11 @@ export interface ProjectContext {
   readonly lineEnding: LineEnding;
   readonly markerBegin: string;
   readonly markerEnd: string;
+  /**
+   * M6：投影可能需要的环境覆盖（CODEX_HOME 等，Spec §2.2/§2.4）。
+   * 可选字段——早期契约（M5）无 env，plan 内以 ctx.env?.codexHome 消费。
+   */
+  readonly env?: EnvSnapshot;
 }
 
 /** Spec §8.1 Projector。 */

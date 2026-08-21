@@ -58,6 +58,27 @@ async function readExisting(host: Host, file: string): Promise<string> {
   }
 }
 
+/**
+ * M6 事务备份读取：现有内容；不存在 → null（回滚时“删除新建文件”的判据）。
+ * 权限失败 → PermissionError(4)（备份阶段即 fail-fast，此时尚未写入任何文件）。
+ */
+export async function readExistingForBackup(host: Host, file: string): Promise<string | null> {
+  if (!(await host.exists(file))) {
+    return null;
+  }
+  try {
+    return await host.readFile(file);
+  } catch (err) {
+    if (isPermissionErrno(err)) {
+      throw new PermissionError(`无法读取现有投影文件（备份阶段）: ${file}`, {
+        hint: '检查文件的读权限与所在目录 ACL（必要时以管理员身份运行）',
+        details: err,
+      });
+    }
+    throw err;
+  }
+}
+
 /** mkdirp 目标目录 + 原子写（统一出口：保证四个动作的目录创建与换行语义一致）。 */
 async function writeNormalized(
   host: Host,
@@ -142,7 +163,13 @@ export function mergeJsonContent(existing: string, managedJson: string, file: st
 /**
  * 执行单个投影项（Spec §7.3 步骤 4 的 apply；目录自动创建见 writeNormalized）。
  *
+ * 幂等快速路径（M6，Spec §7.3 稳定性前提）：目标文件已是将写入的最终形态
+ * （含换行风格，逐字节比对落盘形态）时跳过写入，返回 false；否则落盘并返回 true。
+ * 注意比较基准是 normalizeLineEnding(merged, lineEnding)——现有文件仅换行风格不同
+ * 时不跳过（重写并统一为 profile 声明的换行，Spec §2.5“整个文件按换行设置写出”）。
+ *
  * @param markers merge 系动作使用的标记对（默认 markdown marker + TOML 标记段）。
+ * @returns 是否实际写入（false = 内容未变跳写）。
  * @throws PermissionError(4) 目标路径无写权限 / 读现有文件无权限（Spec §7.3）。
  * @throws ConflictError(3) merge_json 的现有文件损坏或无法合并。
  */
@@ -151,31 +178,39 @@ export async function applyItem(
   item: ProjectionPlanItem,
   lineEnding: LineEnding,
   markers: ProjectionMarkers = DEFAULT_PROJECTION_MARKERS,
-): Promise<void> {
+): Promise<boolean> {
   const existing = await readExisting(host, item.path);
+  const merged = computeItemContent(item, existing, markers);
 
+  if (existing !== '' && existing === normalizeLineEnding(merged, lineEnding)) {
+    return false;
+  }
+
+  await writeNormalized(host, item.path, merged, lineEnding);
+  return true;
+}
+
+/**
+ * 计算单个投影项的最终内容（纯函数，LF 基准；换行由落盘层统一）。
+ * 引擎的备份/跳写/回滚判断与 applyItem 共用同一计算（单一事实源）。
+ */
+export function computeItemContent(
+  item: ProjectionPlanItem,
+  existing: string,
+  markers: ProjectionMarkers = DEFAULT_PROJECTION_MARKERS,
+): string {
   switch (item.action) {
     case 'write':
-      await writeNormalized(host, item.path, item.content, lineEnding);
-      return;
+      return item.content;
 
-    case 'merge_marker': {
-      const merged = replaceBetween(existing, item.content, markers.begin, markers.end);
-      await writeNormalized(host, item.path, merged, lineEnding);
-      return;
-    }
+    case 'merge_marker':
+      return replaceBetween(existing, item.content, markers.begin, markers.end);
 
-    case 'merge_json': {
-      const merged = mergeJsonContent(existing, item.content, item.path);
-      await writeNormalized(host, item.path, merged, lineEnding);
-      return;
-    }
+    case 'merge_json':
+      return mergeJsonContent(existing, item.content, item.path);
 
-    case 'merge_toml': {
-      const merged = replaceBetween(existing, item.content, markers.tomlBegin, markers.tomlEnd);
-      await writeNormalized(host, item.path, merged, lineEnding);
-      return;
-    }
+    case 'merge_toml':
+      return replaceBetween(existing, item.content, markers.tomlBegin, markers.tomlEnd);
   }
 }
 

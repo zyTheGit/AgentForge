@@ -205,7 +205,7 @@ describe('syncOnce — 单 target 闭环（claude）', () => {
     expect(claude).not.toContain('user B');
   });
 
-  it('profile.targets 含未注册 target → 记入 skipped，不阻塞 claude', async () => {
+  it('M6 四 projector 全注册：opencode/claude/pi 均同步且 skipped 为空（共享根 AGENTS.md）', async () => {
     const host = createSyncHost();
     await host.writeFile(
       path.join(PROJECT_SOT, 'profile.yaml'),
@@ -213,19 +213,31 @@ describe('syncOnce — 单 target 闭环（claude）', () => {
     );
     await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), HABITS_YAML);
     const result = await syncOnce(syncOptions(host));
-    expect(result.skippedTargets).toEqual(['opencode', 'pi']);
-    expect(result.targets.map((t) => t.targetId)).toEqual(['claude']);
+    expect(result.skippedTargets).toEqual([]);
+    expect(result.targets.map((t) => t.targetId)).toEqual(['opencode', 'claude', 'pi']);
     expect(host.files.has(CLAUDE_MD)).toBe(true);
+    // opencode / pi 主规则共用根 AGENTS.md（投影矩阵 §8.7）；各自 MCP 配置独立
+    expect(host.files.has(path.join(CWD, 'AGENTS.md'))).toBe(true);
+    expect(host.files.has(path.join(CWD, 'opencode.json'))).toBe(true);
+    expect(host.files.has(path.join(CWD, '.pi', 'settings.json'))).toBe(true);
+    expect(host.files.has(path.join(CWD, '.mcp.json'))).toBe(true); // claude 在 targets 内
+    expect(host.files.has(path.join(CWD, '.codex', 'config.toml'))).toBe(false); // codex 未启用
   });
 
-  it('全部 target 均未注册（如仅 codex）→ ConfigError(2)', async () => {
+  it('仅 codex → 单 target 同步：根 AGENTS.md + .codex 下的 config.toml 标记段（M6 全注册）', async () => {
     const host = createSyncHost();
     await host.writeFile(
       path.join(PROJECT_SOT, 'profile.yaml'),
       'version: 1\ntargets: [codex]\n',
     );
     await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), HABITS_YAML);
-    await expect(syncOnce(syncOptions(host))).rejects.toThrow(/没有可同步的 target/);
+    const result = await syncOnce(syncOptions(host));
+    expect(result.targets.map((t) => t.targetId)).toEqual(['codex']);
+    expect(host.files.has(path.join(CWD, 'AGENTS.md'))).toBe(true);
+    expect(host.files.get(path.join(CWD, '.codex', 'config.toml'))).toContain(
+      '# BEGIN AGENTFORGE MCP',
+    );
+    expect(host.files.has(CLAUDE_MD)).toBe(false);
   });
 
   it('AGF_LINE_ENDING=crlf → CLAUDE.md 与 sync-meta 均为 CRLF（Spec §2.4/§2.5）', async () => {

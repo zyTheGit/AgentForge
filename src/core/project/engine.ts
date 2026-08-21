@@ -1,21 +1,35 @@
 /**
- * Sync 引擎 v1（Spec §7.3，M5 单 target 版）。
+ * Sync 引擎 v2（Spec §7.3，M6 四 projector 全事务版）。
  *
- * 流程：解析 SoT 根 → 三层配置装配（resolveEffectiveConfig）→ 初始化检查 →
- * 渲染统一 renderedRulesMd（custom + promoted learnings[空] + templates + base/default，
- * §5.2 四层）→ projector.plan()（纯函数）→ 逐项 apply / dry-run → 写 sync-meta.json
- * （§3.3：lastSyncAt / os / agentforgeVersion / targets[].contentHash+writtenAt）。
+ * 流程（§7.3 第 1-7 条）：
+ * 1. 解析 SoT 根 → 三层配置装配（resolveEffectiveConfig）→ 初始化检查；
+ * 2. 渲染统一 renderedRulesMd **一次**（custom + promoted learnings[空] + templates
+ *    + base/default，§5.2 四层；§8.2 同一 SoT 渲染一次分发全部 target）；
+ * 3. 对 profile.targets 逐个 projector.plan()（纯函数；plan 阶段失败如模板未
+ *    解析属 ConfigError fail-fast——此时尚未写入任何文件，无需回滚）；
+ * 4. **写入预校验**：对全部待写路径 mkdirp 目录（失败 → PermissionError(4)，
+ *    §7.3-7 目录自动创建；此时同样未写入任何文件）；
+ * 5. **备份**：逐项读现有文件内容存内存（不存在记 null；按路径去重——多个
+ *    target 共享同一 AGENTS.md 时只备份一次）；
+ * 6. **逐一 apply**（幂等跳写：目标已是最终形态则跳过）：
+ *    - soft 项（§8.6 Pi MVP）失败 → 仅收集 warning，不计入失败、不触发回滚；
+ *    - 任一硬项失败 → **逆序恢复全部已动文件**（备份为 null 的删除新建文件；
+ *      回滚失败按 best-effort 收集进失败报告）→ 抛出失败汇总（rethrow 原始
+ *      错误以保留类型与退出码——fail-fast 单失败点即 severityOf 最高者，
+ *      §7.3-6 退出码取失败 target 中最高严重度）；
+ * 7. 成功才写 sync-meta.json（§3.3）；回滚则不更新（保留上次记录）。
+ *    soft 失败的 target 不记入 targets（该 target 投影不完整，不提供
+ *    doctor 一致性基准——见下方 JSDoc「soft 项与 sync-meta」）。
  *
- * M5 边界（M6 升级点）：
- * - 逐项顺序执行，失败即中断向上抛（不做全 target 事务回滚，§7.3-6）；
- * - 仅注册 claude projector；profile.targets 中其余 target 记入 skipped；
- * - sync 不刷新 habits.detected（渲染只消费声明字段；探测快照仅在 init 落盘，
- *   重新探测走 aforge detect / 后续版本的刷新入口）；
- * - marker 区间冲突检测（§8.2-4，对比 sync-meta 记录 hash）留待 M7 doctor。
+ * M6 边界（后续里程碑）：
+ * - sync 不刷新 habits.detected（渲染只消费声明字段；重新探测走 aforge detect）；
+ * - marker 区间冲突检测（§8.2-4，对比 sync-meta 记录 hash）留待 M7 doctor；
+ * - skills 物化数据源（skillsToMaterialize）M8 skill add 接入；M6 引擎侧
+ *   的 write 项 / 备份 / 回滚已就绪（skills copy 为实体 copy 非 symlink，§7.6）。
  */
 import path from 'node:path';
 import type { Host } from '../../infra/host';
-import { sha256Hex } from '../../infra/fsutil';
+import { atomicWrite, mkdirp, sha256Hex } from '../../infra/fsutil';
 import type { EnvSnapshot, Scope } from '../env';
 import { resolveProjectSoT, resolveUserSoT, type OsContext } from '../paths';
 import { ConfigError } from '../errors';
@@ -24,16 +38,23 @@ import { resolveEffectiveConfig } from '../config/defaults';
 import { composeRules, type TemplateContent } from '../generate/composer';
 import { resolveTemplate } from '../generate/resolver';
 import type { Habits, Profile } from '../../schema';
-import { claudeProjector } from './projectors/claude';
+import { projectorRegistry } from './projectors/registry';
 import { readSyncMeta, writeSyncMeta } from './sync-meta';
-import { applyItem, DEFAULT_PROJECTION_MARKERS } from './writer';
-import type { ProjectContext, Projector, ProjectionPlanItem } from './types';
+import {
+  applyItem,
+  DEFAULT_PROJECTION_MARKERS,
+  readExistingForBackup,
+  TOML_MARKER_BEGIN,
+  TOML_MARKER_END,
+  type ProjectionMarkers,
+} from './writer';
+import type { ProjectContext, Projector, ProjectionPlan, ProjectionPlanItem } from './types';
 
 /** Spec §4.2 targets 全集（--targets 合法性校验基准）。 */
 export const ALL_TARGET_IDS = ['opencode', 'codex', 'claude', 'pi'] as const;
 
-/** 已注册的 projector（M5：仅 claude；M6 起补齐其余三个）。 */
-export const REGISTERED_PROJECTORS: readonly Projector[] = [claudeProjector];
+/** 已注册的 projector（M6 起四件套齐备；经注册表获取，注册顺序即投影顺序）。 */
+export const REGISTERED_PROJECTORS: readonly Projector[] = projectorRegistry.list();
 
 /** syncOnce 输入（host/os/cwd 由命令层注入；测试可注入 fake host 与任意平台）。 */
 export interface SyncOptions {
@@ -49,10 +70,21 @@ export interface SyncOptions {
   readonly dryRun: boolean;
 }
 
-/** 单个 target 的同步结果（items 为完整计划；dry-run 时即"将写入"列表）。 */
+/** 单个投影项的执行状态（apply 后；dry-run 恒为 'planned'）。 */
+export type SyncItemStatus = 'planned' | 'written' | 'unchanged' | 'warning';
+
+/** soft 项失败（§8.6 Pi MVP）：不触发回滚的 best-effort 警告。 */
+export interface SyncWarning {
+  readonly targetId: string;
+  readonly path: string;
+  readonly message: string;
+}
+
+/** 单个 target 的同步结果（items 为完整计划；statuses 与 items 一一对应）。 */
 export interface SyncTargetResult {
   readonly targetId: string;
   readonly items: readonly ProjectionPlanItem[];
+  readonly statuses: readonly SyncItemStatus[];
 }
 
 /** syncOnce 结果：命令层据此打印绝对路径与摘要。 */
@@ -66,8 +98,64 @@ export interface SyncResult {
   readonly contentHash: string;
   readonly dryRun: boolean;
   readonly targets: readonly SyncTargetResult[];
-  /** profile.targets 中已启用但本版本无 projector 的 target（提示用，非失败）。 */
+  /** profile.targets 中已启用但注册表无 projector 的 target（提示用，非失败）。 */
   readonly skippedTargets: readonly string[];
+  /** soft 项（§8.6）apply 失败收集的 warning（不阻塞 sync）。 */
+  readonly warnings: readonly SyncWarning[];
+}
+
+/** 回滚明细：单文件恢复结果（失败收集 error，不中断其余恢复）。 */
+export interface SyncRollbackEntry {
+  readonly path: string;
+  readonly restored: boolean;
+  readonly error?: string;
+}
+
+/**
+ * 失败汇总报告（§7.3-6）：附着在 rethrow 的原始错误上（getSyncFailureReport
+ * 读取），命令层据此输出「每 target 状态表（成功/失败/原因）+ 回滚声明」。
+ */
+export interface SyncFailureReport {
+  /** 失败项所属 target。 */
+  readonly failedTargetId: string;
+  /** 失败项路径。 */
+  readonly failedPath: string;
+  /** 全部 target 的终态（按投影顺序；含回滚声明语义）。 */
+  readonly targetStatuses: readonly {
+    readonly targetId: string;
+    /** ok-rolled-back：全部项成功但被回滚；failed：含失败项；not-started：未执行。 */
+    readonly status: 'ok-rolled-back' | 'failed' | 'not-started';
+  }[];
+  /** 逆序恢复的文件明细（restored=false 表示恢复失败）。 */
+  readonly rolledBack: readonly SyncRollbackEntry[];
+}
+
+/** 失败报告在错误对象上的附加键（非枚举属性，不影响既有错误语义）。 */
+const FAILURE_REPORT_KEY = 'agentforgeSyncFailureReport';
+
+/** 读取附着在错误上的失败汇总报告（无 → undefined）。 */
+export function getSyncFailureReport(err: unknown): SyncFailureReport | undefined {
+  if (typeof err === 'object' && err !== null && FAILURE_REPORT_KEY in err) {
+    const report = (err as Record<string, unknown>)[FAILURE_REPORT_KEY];
+    return report as SyncFailureReport | undefined;
+  }
+  return undefined;
+}
+
+function attachFailureReport(err: unknown, report: SyncFailureReport): unknown {
+  if (typeof err === 'object' && err !== null) {
+    try {
+      Object.defineProperty(err, FAILURE_REPORT_KEY, {
+        value: report,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    } catch {
+      // 附加失败不影响原始错误传播（命令层回退为只打印错误本体）
+    }
+  }
+  return err;
 }
 
 /**
@@ -222,12 +310,118 @@ function requireUserProfileForProjection(env: EnvSnapshot): string {
   return env.userProfile;
 }
 
+/** 一个 target 的 plan 结果与 apply 状态追踪（事务内部结构）。 */
+interface PlannedTarget {
+  readonly targetId: string;
+  readonly plan: ProjectionPlan;
+  /** 与 plan.items 对齐的执行状态（未执行到的项无记录）。 */
+  statuses: SyncItemStatus[];
+  /** 全部项是否执行完（失败或中断则为 false）。 */
+  completed: boolean;
+  /** 是否开始执行（false = not-started，失败汇总表用）。 */
+  started: boolean;
+}
+
+/** 失败捕获（事务内部结构）。 */
+interface TargetFailure {
+  readonly targetId: string;
+  readonly itemPath: string;
+  readonly error: unknown;
+}
+
+/** plan 级标记解析：md marker 恒取 profile 配置；TOML 标记段允许 plan 覆盖（§8.4）。 */
+function resolveMarkers(plan: ProjectionPlan, ctx: ProjectContext): ProjectionMarkers {
+  return {
+    ...DEFAULT_PROJECTION_MARKERS,
+    begin: ctx.markerBegin,
+    end: ctx.markerEnd,
+    ...(plan.tomlMarkers !== undefined
+      ? { tomlBegin: plan.tomlMarkers.begin, tomlEnd: plan.tomlMarkers.end }
+      : {}),
+  };
+}
+
 /**
- * 执行一次 sync（Spec §7.3，单 target 闭环版）。
+ * 逆序恢复全部已动文件（§7.3-6 回滚）：
+ * - 备份为 null → 删除本次新建的文件；
+ * - 备份非 null → 原样写回（不做换行规范化——恢复 sync 前的逐字节状态）；
+ * - mkdirp 预校验创建的目录不回收（空目录残留无害；回滚只聚焦文件内容）；
+ * - 单个恢复失败按 best-effort 收集，不中断其余恢复（report.rolledBack 呈现）。
+ */
+async function rollbackWrites(
+  host: Host,
+  writtenFiles: readonly string[],
+  backups: ReadonlyMap<string, string | null>,
+): Promise<SyncRollbackEntry[]> {
+  const entries: SyncRollbackEntry[] = [];
+  for (const file of [...writtenFiles].reverse()) {
+    const backup = backups.get(file) ?? null;
+    try {
+      if (backup === null) {
+        await host.rm(file);
+      } else {
+        await atomicWrite(host, file, backup);
+      }
+      entries.push({ path: file, restored: true });
+    } catch (err) {
+      entries.push({
+        path: file,
+        restored: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return entries;
+}
+
+/**
+ * soft 项与 sync-meta（M6 决策，Spec §8.6 / §3.3）：
+ * soft 项（pi settings.json）失败的 target **不写入** sync-meta 的该 target 记录
+ * （另一可选方案为标记 skipped，但会改动 §3.3 schema）。理由：contentHash 是
+ * doctor 一致性检测（M7）的基准，投影不完整的 target 不应提供基准，保留上次
+ * 成功记录可让后续 doctor 识别漂移。
+ */
+async function writeSyncMetaOnSuccess(
+  host: Host,
+  opts: SyncOptions,
+  os: OsContext,
+  sotRoot: string,
+  contentHash: string,
+  planned: readonly PlannedTarget[],
+  warnings: readonly SyncWarning[],
+  lineEnding: ProjectContext['lineEnding'],
+): Promise<void> {
+  const warnedTargets = new Set(warnings.map((w) => w.targetId));
+  const existing = await readSyncMeta(host, sotRoot);
+  const now = host.now().toISOString();
+  const targetsMeta = { ...(existing?.targets ?? {}) };
+  for (const target of planned) {
+    if (!warnedTargets.has(target.targetId)) {
+      targetsMeta[target.targetId] = { contentHash, writtenAt: now };
+    }
+  }
+  await writeSyncMeta(
+    host,
+    sotRoot,
+    {
+      version: 1,
+      lastSyncAt: now,
+      os: os.platform,
+      agentforgeVersion: opts.agentforgeVersion,
+      targets: targetsMeta,
+    },
+    lineEnding,
+  );
+}
+
+/**
+ * 执行一次 sync（Spec §7.3，四 target 全事务版）。
  *
  * @throws ConfigError(2) 未初始化 / --targets 非法 / 模板解析失败 / 配置损坏；
- * @throws PermissionError(4) 投影路径无写权限（Spec §7.3-7）；
- * @throws ConflictError(3) merge_json 目标损坏（writer 层映射）。
+ * @throws PermissionError(4) 目录创建失败（§7.3-7）/ 备份读取失败 / 投影写入失败；
+ * @throws ConflictError(3) merge_json 目标损坏（writer 层映射）；
+ *         投影失败时先回滚全部已写文件再 rethrow 原始错误（类型与退出码不变，
+ *         失败汇总经 getSyncFailureReport(err) 获取）。
  */
 export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   const { host, env, os, cwd } = opts;
@@ -254,67 +448,141 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     renderedRulesMd,
     habits: config.habits,
     profile: config.profile,
-    skillsToMaterialize: [], // M8：skills 物化（copy_mode）
-    mcpServers: config.profile.mcp.servers ?? [], // M6/M8：MCP 投影
+    skillsToMaterialize: [], // M8：skills 物化（copy_mode；M6 的 write 项/事务已就绪）
+    mcpServers: config.profile.mcp.servers ?? [],
     dryRun: opts.dryRun,
     lineEnding: config.profile.projection.line_ending,
     markerBegin: config.profile.projection.marker_begin,
     markerEnd: config.profile.projection.marker_end,
+    env,
   };
 
-  const byId = new Map(REGISTERED_PROJECTORS.map((p) => [p.id, p]));
-  const targets: SyncTargetResult[] = [];
+  // ---- 阶段 1：plan 全部 target（纯函数；失败 fail-fast，无需回滚）----
+  const planned: PlannedTarget[] = [];
   const skippedTargets: string[] = [];
   for (const targetId of requested) {
-    const projector = byId.get(targetId);
+    const projector = projectorRegistry.get(targetId);
     if (projector === undefined) {
       skippedTargets.push(targetId);
       continue;
     }
     const plan = projector.plan(ctx);
-    const markers = {
-      ...DEFAULT_PROJECTION_MARKERS,
-      begin: ctx.markerBegin,
-      end: ctx.markerEnd,
-    };
-    for (const item of plan.items) {
-      if (!opts.dryRun) {
-        await applyItem(host, item, ctx.lineEnding, markers);
-      }
-    }
-    targets.push({ targetId, items: plan.items });
+    planned.push({ targetId, plan, statuses: [], completed: false, started: false });
   }
 
-  if (targets.length === 0) {
+  if (planned.length === 0) {
     throw new ConfigError('没有可同步的 target', {
-      hint: `当前版本仅支持: ${REGISTERED_PROJECTORS.map((p) => p.id).join(', ')}；其余 target 将在后续里程碑提供`,
+      hint: `注册表中可用的 target: ${ALL_TARGET_IDS.join(', ')}`,
       details: { requested, skippedTargets },
     });
   }
 
-  // sync-meta.json（§3.3）：写到 effectiveScope 对应层；保留其他 target 的既有记录
-  const sotRoot = config.effectiveScope === 'project' ? projectSoTRoot : userSoTRoot;
   const contentHash = sha256Hex(renderedRulesMd);
-  if (!opts.dryRun) {
-    const existing = await readSyncMeta(host, sotRoot);
-    const now = host.now().toISOString();
-    const targetsMeta = { ...(existing?.targets ?? {}) };
-    for (const t of targets) {
-      targetsMeta[t.targetId] = { contentHash, writtenAt: now };
-    }
-    await writeSyncMeta(
-      host,
-      sotRoot,
-      {
-        version: 1,
-        lastSyncAt: now,
-        os: os.platform,
-        agentforgeVersion: opts.agentforgeVersion,
-        targets: targetsMeta,
-      },
-      ctx.lineEnding,
-    );
+
+  // ---- dry-run：返回完整计划，不 mkdirp / 不备份 / 不 apply / 不写 sync-meta ----
+  if (opts.dryRun) {
+    return {
+      scope: config.effectiveScope,
+      userSoTRoot,
+      projectSoTRoot,
+      sotRoot: config.effectiveScope === 'project' ? projectSoTRoot : userSoTRoot,
+      contentHash,
+      dryRun: true,
+      targets: planned.map((t) => ({
+        targetId: t.targetId,
+        items: t.plan.items,
+        statuses: t.plan.items.map(() => 'planned' as const),
+      })),
+      skippedTargets,
+      warnings: [],
+    };
   }
+
+  // ---- 阶段 2：写入预校验——全部待写目录 mkdirp（§7.3-7；失败即抛，未写任何文件）----
+  const dirs = new Set<string>();
+  for (const target of planned) {
+    for (const item of target.plan.items) {
+      dirs.add(path.dirname(item.path));
+    }
+  }
+  for (const dir of dirs) {
+    await mkdirp(host, dir);
+  }
+
+  // ---- 阶段 3：备份——逐项读现有内容（null = 不存在；按路径去重，共享文件只备份一次）----
+  const backups = new Map<string, string | null>();
+  for (const target of planned) {
+    for (const item of target.plan.items) {
+      if (!backups.has(item.path)) {
+        backups.set(item.path, await readExistingForBackup(host, item.path));
+      }
+    }
+  }
+
+  // ---- 阶段 4：逐一 apply（幂等跳写 + soft 容错；硬项失败 → 回滚并 rethrow）----
+  const writtenFiles: string[] = [];
+  const warnings: SyncWarning[] = [];
+  let failure: TargetFailure | undefined;
+
+  for (const target of planned) {
+    if (failure !== undefined) {
+      break; // 已失败：后续 target 一律不再执行（not-started）
+    }
+    target.started = true;
+    const markers = resolveMarkers(target.plan, ctx);
+    for (const item of target.plan.items) {
+      try {
+        const wrote = await applyItem(host, item, ctx.lineEnding, markers);
+        target.statuses.push(wrote ? 'written' : 'unchanged');
+        if (wrote) {
+          writtenFiles.push(item.path);
+        }
+      } catch (err) {
+        if (item.soft === true) {
+          // §8.6 Pi MVP soft：失败仅 warning，不计入失败、不触发回滚
+          target.statuses.push('warning');
+          warnings.push({
+            targetId: target.targetId,
+            path: item.path,
+            message: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
+        failure = { targetId: target.targetId, itemPath: item.path, error: err };
+        break;
+      }
+    }
+    target.completed = failure === undefined;
+  }
+
+  // ---- 阶段 5：失败 → 逆序回滚全部已动文件 → rethrow 原始错误（附失败汇总）----
+  if (failure !== undefined) {
+    const fail = failure;
+    const rolledBack = await rollbackWrites(host, writtenFiles, backups);
+    const report: SyncFailureReport = {
+      failedTargetId: fail.targetId,
+      failedPath: fail.itemPath,
+      targetStatuses: planned.map((t) => ({
+        targetId: t.targetId,
+        status: !t.started ? 'not-started' : t.targetId === fail.targetId ? 'failed' : 'ok-rolled-back',
+      })),
+      rolledBack,
+    };
+    throw attachFailureReport(fail.error, report);
+  }
+
+  // ---- 阶段 6：全部成功 → 写 sync-meta（soft 失败的 target 不记，见上方 JSDoc）----
+  const sotRoot = config.effectiveScope === 'project' ? projectSoTRoot : userSoTRoot;
+  await writeSyncMetaOnSuccess(
+    host,
+    opts,
+    os,
+    sotRoot,
+    contentHash,
+    planned,
+    warnings,
+    ctx.lineEnding,
+  );
 
   return {
     scope: config.effectiveScope,
@@ -322,8 +590,13 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     projectSoTRoot,
     sotRoot,
     contentHash,
-    dryRun: opts.dryRun,
-    targets,
+    dryRun: false,
+    targets: planned.map((t) => ({
+      targetId: t.targetId,
+      items: t.plan.items,
+      statuses: t.statuses,
+    })),
     skippedTargets,
+    warnings,
   };
 }

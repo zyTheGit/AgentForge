@@ -145,9 +145,9 @@ describe('init → sync 端到端（进程内，真实 fs）', () => {
 
     const result = await runSync({ host: ws.host, cwd: ws.root, os: OS, agentforgeVersion: VERSION });
     expect(result.scope).toBe('project');
-    expect(result.targets.map((t) => t.targetId)).toEqual(['claude']);
-    // init 默认 profile 启用四 target 全集；M5 仅 claude projector → 其余记入 skipped
-    expect(result.skippedTargets).toEqual(['opencode', 'codex', 'pi']);
+    // M6 四 projector 全注册：init 默认四 target 全部同步（§8.7 投影矩阵）
+    expect(result.targets.map((t) => t.targetId)).toEqual(['opencode', 'codex', 'claude', 'pi']);
+    expect(result.skippedTargets).toEqual([]);
 
     const claude = await readFile(ws.claudeMd, 'utf8');
     expect(claude).toContain(DEFAULT_MARKER_BEGIN);
@@ -195,7 +195,7 @@ describe('init → sync 端到端（进程内，真实 fs）', () => {
     );
   }, 30_000);
 
-  it('--dry-run 不写任何文件（CLAUDE.md / sync-meta 均不存在），返回将写入的绝对路径', async () => {
+  it('--dry-run 不写任何文件（四 target 全部计划均不落盘），返回将写入的绝对路径', async () => {
     await runInit({ host: ws.host, cwd: ws.root, os: OS });
 
     const result = await runSync(
@@ -204,8 +204,13 @@ describe('init → sync 端到端（进程内，真实 fs）', () => {
     );
 
     expect(result.dryRun).toBe(true);
-    expect(result.targets[0]?.items[0]?.path).toBe(ws.claudeMd);
+    const claudeTarget = result.targets.find((t) => t.targetId === 'claude');
+    expect(claudeTarget?.items[0]?.path).toBe(ws.claudeMd);
     expect(await realHost.exists(ws.claudeMd)).toBe(false);
+    expect(await realHost.exists(path.join(ws.root, 'AGENTS.md'))).toBe(false);
+    expect(await realHost.exists(path.join(ws.root, 'opencode.json'))).toBe(false);
+    expect(await realHost.exists(path.join(ws.root, '.codex', 'config.toml'))).toBe(false);
+    expect(await realHost.exists(path.join(ws.root, '.pi', 'settings.json'))).toBe(false);
     expect(await realHost.exists(ws.syncMetaPath)).toBe(false);
   }, 30_000);
 
@@ -301,8 +306,14 @@ describe('init → sync 端到端（进程内，真实 fs）', () => {
     const perm = err as PermissionError;
     expect(perm.code).toBe(ExitCode.Permission);
     expect(toExitCode(perm)).toBe(4);
-    expect(perm.message).toContain('CLAUDE.md');
+    // M6：投影顺序 opencode 先于 claude → 首个失败项是共享根 AGENTS.md
+    expect(perm.message).toContain('AGENTS.md');
     expect(perm.hint).toBeTruthy();
+    // 事务：预置的 CLAUDE.md 在首个写入项失败后保持原样（未被触碰，无需恢复）
+    expect(await readFile(ws.claudeMd, 'utf8')).toBe(
+      `${DEFAULT_MARKER_BEGIN}\nold\n${DEFAULT_MARKER_END}\n`,
+    );
+    expect(await realHost.exists(path.join(ws.root, 'AGENTS.md'))).toBe(false);
   }, 30_000);
 });
 
@@ -428,7 +439,8 @@ describe.skipIf(!isPosix || isRoot)('真实只读项目目录（POSIX chmod 0555
         encoding: 'utf8',
       });
       expect(sync.status).toBe(4);
-      expect(sync.stderr).toContain('无法写入目标文件');
+      // M6：预校验阶段 mkdirp `.codex` 目录即失败（§7.3-7 目录自动创建）
+      expect(sync.stderr).toContain('无法创建目录');
     } finally {
       await chmod(root, 0o755); // 恢复以便清理
       await rm(base, { recursive: true, force: true });

@@ -7,14 +7,21 @@
  * | Skills   | `.claude\skills\<name>\SKILL.md` | `%USERPROFILE%\.claude\skills\` |
  * | MCP      | `.mcp.json`（mcpServers）   | 对应全局配置                  |
  *
- * M5 范围：仅主规则（merge_marker，§8.2 同一 SoT 渲染一次分发）。
- * - skills：路径常量已定义（§8.5），物化在 M8（skill add / copy_mode）接入；
- * - MCP：`.mcp.json`（merge_json）留待 M6/M8，ProjectContext.mcpServers 契约已就位。
+ * M6 范围：主规则（merge_marker）+ MCP（`.mcp.json` merge_json）+ skills write 项。
+ * - 主规则：marker 外用户内容保留（Spec §8.2），区间内容为同一份 renderedRulesMd
+ *   （同一 SoT 渲染一次分发，Spec §8.2）；
+ * - MCP 恒产出（含空 servers——写入空 `mcpServers` 管理键，深合并时未知键/未知
+ *   server 保留，Spec §8.2）；payload 采用 Claude Code `.mcp.json` 惯例：
+ *   stdio → `{ command, args?, env? }`，http/sse → `{ type, url, headers? }`；
+ *   user scope 的全局 MCP 策略沿用 M5 契约位（rootDir 基准，Phase 2 MCP 对齐）；
+ * - skills：write 实体 copy（copy_mode=copy，非 symlink，Spec §7.6），
+ *   M8 skill add 接入后 skillsToMaterialize 才有内容。
  *
  * plan 为纯函数：不做任何 IO，路径按注入 os 选择分隔符（Spec §2.1）。
  */
 import path from 'node:path';
-import type { ProjectContext, Projector, ProjectionPlan } from '../types';
+import type { McpServer } from '../../../schema';
+import type { ProjectContext, Projector, ProjectionPlan, ProjectionPlanItem } from '../types';
 
 /** Spec §8.5 主规则文件名（project / user 两个 scope 同名）。 */
 export const CLAUDE_MAIN_RULE_FILENAME = 'CLAUDE.md';
@@ -54,9 +61,39 @@ export function claudeSkillPath(ctx: ProjectContext, skillName: string): string 
   return pathApi(ctx).join(ctx.rootDir, CLAUDE_DIRNAME, CLAUDE_SKILLS_DIRNAME, skillName, SKILL_DOC_FILENAME);
 }
 
-/** MCP 配置绝对路径（M5 仅定义契约；M6/M8 以 merge_json 产出投影项）。 */
+/** MCP 配置绝对路径（project 根下 .mcp.json；user scope 同样落在 rootDir 基准，全局策略 Phase 2 对齐）。 */
 export function claudeMcpPath(ctx: ProjectContext): string {
   return pathApi(ctx).join(ctx.rootDir, CLAUDE_MCP_FILENAME);
+}
+
+/**
+ * Claude MCP 管理键 JSON 载荷（merge_json 的 item.content）。
+ *
+ * 顶层 `mcpServers` 键（Claude Code `.mcp.json` 惯例）；enabled=false 的
+ * server 不投影（Spec §4.2 语义）。空数组 → `{"mcpServers":{}}`（保留管理键声明）。
+ */
+export function claudeMcpPayload(servers: readonly McpServer[]): string {
+  const mcpServers: Record<string, unknown> = {};
+  for (const server of servers) {
+    if (server.enabled === false) {
+      continue;
+    }
+    if (server.transport === 'stdio') {
+      mcpServers[server.name] = {
+        command: server.command ?? '',
+        ...(server.args !== undefined ? { args: server.args } : {}),
+        ...(server.env !== undefined ? { env: server.env } : {}),
+      };
+    } else {
+      // http / sse → type + url（+ 可选 headers）
+      mcpServers[server.name] = {
+        type: server.transport,
+        url: server.url ?? '',
+        ...(server.headers !== undefined ? { headers: server.headers } : {}),
+      };
+    }
+  }
+  return JSON.stringify({ mcpServers });
 }
 
 /** Claude Code projector 实例（纯函数 plan；apply 由引擎统一执行）。 */
@@ -64,17 +101,32 @@ export const claudeProjector: Projector = {
   id: 'claude',
 
   plan(ctx: ProjectContext): ProjectionPlan {
-    // 主规则：merge_marker——marker 外用户内容保留（Spec §8.2），
-    // 区间内容为同一份 renderedRulesMd（同一 SoT 渲染一次，§8.2）
-    return {
-      targetId: 'claude',
-      items: [
-        {
-          path: claudeMainRulePath(ctx),
-          action: 'merge_marker',
-          content: ctx.renderedRulesMd,
-        },
-      ],
-    };
+    const items: ProjectionPlanItem[] = [
+      // 主规则：merge_marker——marker 外用户内容保留（Spec §8.2），
+      // 区间内容为同一份 renderedRulesMd（同一 SoT 渲染一次，§8.2）
+      {
+        path: claudeMainRulePath(ctx),
+        action: 'merge_marker',
+        content: ctx.renderedRulesMd,
+      },
+    ];
+
+    // skills：write 实体 copy（M8 skill add 接入后非空；事务内由引擎统一备份/回滚）
+    for (const skill of ctx.skillsToMaterialize) {
+      items.push({
+        path: claudeSkillPath(ctx, skill.name),
+        action: 'write',
+        content: skill.content,
+      });
+    }
+
+    // MCP：merge_json（AgentForge 管理 `mcpServers` 键，未知键保留，Spec §8.2）
+    items.push({
+      path: claudeMcpPath(ctx),
+      action: 'merge_json',
+      content: claudeMcpPayload(ctx.mcpServers),
+    });
+
+    return { targetId: 'claude', items };
   },
 };

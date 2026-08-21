@@ -33,7 +33,7 @@ function buildCtx(overrides: Partial<ProjectContext> = {}): ProjectContext {
 }
 
 describe('claudeProjector.plan（Spec §8.5 主规则）', () => {
-  it('project scope：主规则 = <root>\\CLAUDE.md，merge_marker，内容为统一渲染结果', () => {
+  it('project scope：主规则 = <root>\CLAUDE.md，merge_marker，内容为统一渲染结果；MCP 项恒产出（空 servers → 空 mcpServers）', () => {
     const ctx = buildCtx();
     const plan = claudeProjector.plan(ctx);
     expect(plan.targetId).toBe('claude');
@@ -42,6 +42,11 @@ describe('claudeProjector.plan（Spec §8.5 主规则）', () => {
         path: 'C:\\proj\\CLAUDE.md',
         action: 'merge_marker',
         content: ctx.renderedRulesMd,
+      },
+      {
+        path: 'C:\\proj\\.mcp.json',
+        action: 'merge_json',
+        content: '{"mcpServers":{}}',
       },
     ]);
   });
