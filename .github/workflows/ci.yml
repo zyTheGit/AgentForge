@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows:
+    name: windows-latest (primary)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Bun 轨道：装依赖 + 单文件 exe
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Node 轨道：typecheck/test 用真 node 跑（vitest 内 spawn process.execPath）
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: bun install --frozen-lockfile
+      - run: npm run typecheck
+      - run: npm run test
+
+      # 双轨构建冒烟：esbuild 产物 + bun 编译产物
+      - run: npm run build:node
+      - run: node dist/aforge.js --version
+      - run: npm run build:bun
+      - run: ./dist/aforge.exe --version
+
+  ubuntu:
+    name: ubuntu-latest (regression)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: bun install --frozen-lockfile
+      - run: npm run typecheck
+      - run: npm run test

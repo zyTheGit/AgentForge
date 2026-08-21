@@ -1,0 +1,14 @@
+# dependencies
+node_modules/
+
+# build artifacts (dist/ 已含 bun 产物；*.exe 兜底捕获散落产物)
+dist/
+*.exe
+
+# agentforge 本地测试产物（SoT 目录）
+.agentforge/
+
+# misc
+*.tsbuildinfo
+*.log
+.DS_Store

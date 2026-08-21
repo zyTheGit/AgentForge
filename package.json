@@ -1,0 +1,45 @@
+{
+  "name": "agentforge",
+  "version": "0.1.0",
+  "description": "AgentForge — manage AI coding CLI rule projections (SoT → opencode/codex/claude/pi) from one source of truth",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "aforge": "dist/aforge.js"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run build:node && npm run build:bun",
+    "build:bun": "bun build --compile --target=bun-windows-x64 --minify --outfile dist/aforge.exe src/main.ts",
+    "build:node": "node scripts/build-node.mjs"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "rules",
+    "projections",
+    "opencode",
+    "codex",
+    "claude"
+  ],
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@clack/prompts": "^1",
+    "commander": "^14",
+    "handlebars": "^4.7",
+    "yaml": "^2",
+    "zod": "^4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.12",
+    "typescript": "~5.9",
+    "vitest": "^4"
+  }
+}
