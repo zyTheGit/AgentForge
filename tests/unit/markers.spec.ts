@@ -8,6 +8,7 @@ import {
   markerSectionHash,
   replaceBetween,
   splitByMarkers,
+  wrapWithMarkers,
 } from '../../src/core/markers';
 import { sha256Hex } from '../../src/infra/fsutil';
 
@@ -138,6 +139,31 @@ describe('replaceBetween', () => {
   it('自定义 marker 对', () => {
     const out = replaceBetween('x/*AF-S*/y/*AF-E*/z', 'n', '/*AF-S*/', '/*AF-E*/');
     expect(out).toBe('x/*AF-S*/\nn\n/*AF-E*/z');
+  });
+});
+
+describe('wrapWithMarkers（投影层规范包裹）', () => {
+  it('marker 独占行、body 前后无多余空行', () => {
+    expect(wrapWithMarkers('rules here')).toBe(`${B}\nrules here\n${E}`);
+  });
+
+  it('body 首尾多余空行（含 CRLF）被剥除', () => {
+    expect(wrapWithMarkers('\n\n\nrules\r\n\r\n')).toBe(`${B}\nrules\n${E}`);
+  });
+
+  it('空 body → 空块（BEGIN 紧跟 END）', () => {
+    expect(wrapWithMarkers('')).toBe(`${B}\n${E}`);
+    expect(wrapWithMarkers('\n\n')).toBe(`${B}\n${E}`);
+  });
+
+  it('自定义 marker 对', () => {
+    expect(wrapWithMarkers('x', '/*S*/', '/*E*/')).toBe('/*S*/\nx\n/*E*/');
+  });
+
+  it('与 replaceBetween 共用同一规范：无 marker 追加的块 = wrapWithMarkers + 尾换行', () => {
+    const wrapped = wrapWithMarkers('rules');
+    expect(replaceBetween('', 'rules')).toBe(`${wrapped}\n`);
+    expect(replaceBetween('# head', 'rules')).toBe(`# head\n${wrapped}\n`);
   });
 });
 

@@ -55,6 +55,22 @@ function stripEdgeNewlines(s: string): string {
 }
 
 /**
+ * 规范 marker 包裹块（投影层用）：marker 独占行、body 前后无多余空行。
+ *
+ * 返回 `BEGIN\n<body>\nEND`（空 body → `BEGIN\nEND`），不含 marker 外的任何内容。
+ * replaceBetween 的区间重建与本函数共用同一规范（单一事实源）；
+ * 投影侧需要“裸包裹块”时（如构造 merge 片段 / 测试断言）直接调用。
+ */
+export function wrapWithMarkers(
+  content: string,
+  begin: string = DEFAULT_MARKER_BEGIN,
+  end: string = DEFAULT_MARKER_END,
+): string {
+  const body = stripEdgeNewlines(content);
+  return body === '' ? `${begin}\n${end}` : `${begin}\n${body}\n${end}`;
+}
+
+/**
  * 替换 marker 区间（或 EOF 追加）。
  *
  * - 有 marker：`before + BEGIN\n<body>\nEND + after`（marker 外内容原样保留，Spec §8.2）；
@@ -68,8 +84,7 @@ export function replaceBetween(
   begin: string = DEFAULT_MARKER_BEGIN,
   end: string = DEFAULT_MARKER_END,
 ): string {
-  const body = stripEdgeNewlines(newInside);
-  const block = body === '' ? `${begin}\n${end}` : `${begin}\n${body}\n${end}`;
+  const block = wrapWithMarkers(newInside, begin, end);
 
   const split = splitByMarkers(content, begin, end);
   if (split.hasMarkers) {

@@ -7,23 +7,11 @@
  */
 import { Command } from 'commander';
 import { registerDetectCommand } from './commands/detect';
+import { registerInitCommand } from './commands/init';
+import { registerSyncCommand } from './commands/sync';
+import { VERSION } from './version';
 
-/**
- * 与 package.json "version" 保持同步。
- * 不在运行时读取 package.json：bun --compile 产物中该文件不存在。
- */
-export const VERSION = '0.1.0';
-
-/** sync 占位命令：M1 起实现（Spec §6）。 */
-function registerSyncStub(program: Command): void {
-  program
-    .command('sync')
-    .description('render SoT rules and project them to agent targets (M1)')
-    .action(() => {
-      console.error('aforge: sync is not implemented yet (planned for M1)');
-      process.exitCode = 1;
-    });
-}
+export { VERSION };
 
 export function buildProgram(): Command {
   const program = new Command();
@@ -36,7 +24,8 @@ export function buildProgram(): Command {
     .version(VERSION, '-V, --version', 'print version and exit');
 
   registerDetectCommand(program);
-  registerSyncStub(program);
+  registerInitCommand(program);
+  registerSyncCommand(program);
 
   // 无子命令 → 输出简短帮助，退出码 0（Spec §6.1）
   program.action((_options, command) => {

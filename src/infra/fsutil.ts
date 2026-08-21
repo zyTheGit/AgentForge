@@ -29,8 +29,11 @@ export function sha256Hex(content: string): string {
   return createHash('sha256').update(normalizeLineEnding(content, 'lf'), 'utf8').digest('hex');
 }
 
-/** 错误是否携带权限类 errno（EPERM/EACCES/EROFS）。 */
-function isPermissionErrno(err: unknown): boolean {
+/**
+ * 错误是否携带权限类 errno（EPERM/EACCES/EROFS）。
+ * 导出供读路径（writer 读现有投影文件）与写路径共用同一判定。
+ */
+export function isPermissionErrno(err: unknown): boolean {
   if (typeof err !== 'object' || err === null || !('code' in err)) return false;
   const code = (err as { code?: unknown }).code;
   return code === 'EPERM' || code === 'EACCES' || code === 'EROFS';
@@ -63,7 +66,18 @@ export async function mkdirp(host: Host, dir: string): Promise<void> {
 export async function atomicWrite(host: Host, target: string, content: string): Promise<void> {
   const tmp = `${target}.agf-${randomBytes(6).toString('hex')}.tmp`;
   try {
-    await host.writeFile(tmp, content);
+    try {
+      await host.writeFile(tmp, content);
+    } catch (err) {
+      // 临时文件创建失败（目标目录无写权限 / 只读卷）同样属于权限域（Spec §6.1 退出码 4）
+      if (isPermissionErrno(err)) {
+        throw new PermissionError(`无法写入目标文件: ${target}`, {
+          hint: '检查目标所在目录的写权限（必要时以管理员身份运行），或把项目移到用户可写位置',
+          details: err,
+        });
+      }
+      throw err;
+    }
 
     // Windows 只读属性：写入（rename 覆盖）前尽力去除；失败留给 rename 判定
     if (await host.exists(target)) {
