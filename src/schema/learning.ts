@@ -32,8 +32,14 @@ export const LearningCategory = z.enum([
   'other',
 ]);
 
+/** category 字面量联合（与同名 zod enum 同名导出：值 + 类型）。 */
+export type LearningCategory = z.infer<typeof LearningCategory>;
+
 /** Spec §4.3 promote_target。 */
 export const PromoteTarget = z.enum(['custom_rule', 'skill', 'habits_note']);
+
+/** promote_target 字面量联合（值 + 类型同名导出）。 */
+export type PromoteTarget = z.infer<typeof PromoteTarget>;
 
 export const LearningSchema = z.object({
   id: LearningId,

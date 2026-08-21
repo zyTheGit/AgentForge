@@ -9,8 +9,15 @@ import { Command } from 'commander';
 import { registerDetectCommand } from './commands/detect';
 import { registerDoctorCommand } from './commands/doctor';
 import { registerInitCommand } from './commands/init';
+import { registerLearnCommand } from './commands/learn';
+import { registerLearningsCommand } from './commands/learnings';
+import { registerMcpCommand } from './commands/mcp';
+import { registerPromoteCommand } from './commands/promote';
+import { registerSkillCommand } from './commands/skill';
+import { registerSourceCommand } from './commands/source';
 import { registerStatusCommand } from './commands/status';
 import { registerSyncCommand } from './commands/sync';
+import { registerTemplateCommand } from './commands/template';
 import { VERSION } from './version';
 
 export { VERSION };
@@ -30,6 +37,15 @@ export function buildProgram(): Command {
   registerSyncCommand(program);
   registerDoctorCommand(program);
   registerStatusCommand(program);
+
+  // ---- M8 区块：learn / promote / learnings / source / template / skill / mcp ----
+  registerLearnCommand(program);
+  registerPromoteCommand(program);
+  registerLearningsCommand(program);
+  registerSourceCommand(program);
+  registerTemplateCommand(program);
+  registerSkillCommand(program);
+  registerMcpCommand(program);
 
   // 无子命令 → 输出简短帮助，退出码 0（Spec §6.1）
   program.action((_options, command) => {
