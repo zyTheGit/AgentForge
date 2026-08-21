@@ -21,23 +21,31 @@
  *    soft 失败的 target 不记入 targets（该 target 投影不完整，不提供
  *    doctor 一致性基准——见下方 JSDoc「soft 项与 sync-meta」）。
  *
- * M6 边界（后续里程碑）：
+ * M7（Spec §8.2-4）：apply 前执行 marker 区间冲突预检查——读现有投影文件，
+ * 区间 hash 与 sync-meta 记录值不一致 → ConflictError(3)；--force 跳过；
+ * 首次 sync（无记录）不检查。contentHash 基准同步统一为 marker 区间形态
+ * （markers.renderedSectionHash，见其 M6→M7 调整说明）。损坏的 sync-meta
+ * 在预检查阶段 fail-fast（ConfigError(2)，sync-meta.ts 契约：不静默丢基准）。
+ *
+ * 后续里程碑边界：
  * - sync 不刷新 habits.detected（渲染只消费声明字段；重新探测走 aforge detect）；
- * - marker 区间冲突检测（§8.2-4，对比 sync-meta 记录 hash）留待 M7 doctor；
  * - skills 物化数据源（skillsToMaterialize）M8 skill add 接入；M6 引擎侧
  *   的 write 项 / 备份 / 回滚已就绪（skills copy 为实体 copy 非 symlink，§7.6）。
  */
 import path from 'node:path';
 import type { Host } from '../../infra/host';
-import { atomicWrite, mkdirp, sha256Hex } from '../../infra/fsutil';
+import { atomicWrite, isPermissionErrno, mkdirp, sha256Hex } from '../../infra/fsutil';
 import type { EnvSnapshot, Scope } from '../env';
 import { resolveProjectSoT, resolveUserSoT, type OsContext } from '../paths';
-import { ConfigError } from '../errors';
+import { ConflictError, ConfigError, PermissionError } from '../errors';
 import { HABITS_FILE, PROFILE_FILE } from '../config/load';
 import { resolveEffectiveConfig } from '../config/defaults';
 import { composeRules, type TemplateContent } from '../generate/composer';
 import { resolveTemplate } from '../generate/resolver';
-import type { Habits, Profile } from '../../schema';
+import { renderedSectionHash, splitByMarkers } from '../markers';
+import { readLearningLayer } from '../learning/store';
+import { readSkillsToMaterialize } from '../sources/skill';
+import type { Habits, Learning, Profile, SyncMeta } from '../../schema';
 import { projectorRegistry } from './projectors/registry';
 import { readSyncMeta, writeSyncMeta } from './sync-meta';
 import {
@@ -68,6 +76,8 @@ export interface SyncOptions {
   /** --targets 过滤（空 / 未给 → profile.targets 全量）。 */
   readonly targetsFilter?: readonly string[];
   readonly dryRun: boolean;
+  /** --force（Spec §8.2-4）：跳过 marker 区间冲突预检查，强制覆盖。 */
+  readonly force?: boolean;
 }
 
 /** 单个投影项的执行状态（apply 后；dry-run 恒为 'planned'）。 */
@@ -94,7 +104,11 @@ export interface SyncResult {
   readonly projectSoTRoot: string;
   /** sync-meta.json 所在 SoT 根（effectiveScope 对应层，Spec §3.3）。 */
   readonly sotRoot: string;
-  /** renderedRulesMd 的 LF 规范化 sha256（= sync-meta contentHash 基准）。 */
+  /**
+   * 渲染正文在 marker 区间形态下的 LF 规范化 sha256（= sync-meta contentHash
+   * 基准；M7 起统一为 markers.renderedSectionHash，与投影文件读回的
+   * markerSectionHash 可直接相等比较）。
+   */
   readonly contentHash: string;
   readonly dryRun: boolean;
   readonly targets: readonly SyncTargetResult[];
@@ -266,11 +280,42 @@ async function readCustomContents(
 }
 
 /**
- * 渲染统一规则正文（§7.3-1..3）：
- * custom（两层合并）→ promoted learnings（M5 恒空，M7 learn/promote 接入）→
- * profile.templates 逐个 resolve（§5.2 未解析 id → ConfigError(2)）→ base/default。
+ * 读取两层 SoT 的 promoted learnings（§5.2 第 ② 层；M8 learn/promote 接入）。
+ * 同 id project 覆盖 user（§5.3 同名优先级精神）；按 created_at 稳定排序；
+ * profile.learning.include_promoted_in_sync=false 时输出空（§4.2）。
  */
-async function renderRulesMd(
+async function readPromotedLearnings(
+  host: Host,
+  userSoTRoot: string,
+  projectSoTRoot: string,
+  profile: Profile,
+): Promise<string[]> {
+  if (profile.learning.include_promoted_in_sync === false) {
+    return [];
+  }
+  const merged = new Map<string, Learning>();
+  for (const layer of [userSoTRoot, projectSoTRoot]) {
+    for (const learning of await readLearningLayer(host, layer)) {
+      merged.set(learning.id, learning);
+    }
+  }
+  return [...merged.values()]
+    .filter((l) => l.promoted)
+    .sort((a, b) =>
+      a.created_at === b.created_at ? (a.id < b.id ? -1 : 1) : a.created_at < b.created_at ? -1 : 1,
+    )
+    .map((l) => l.content);
+}
+
+/**
+ * 渲染统一规则正文（§7.3-1..3）：
+ * custom（两层合并）→ promoted learnings（两层合并，M8 learn/promote 接入）→
+ * profile.templates 逐个 resolve（§5.2 未解析 id → ConfigError(2)）→ base/default。
+ *
+ * M7 起导出：doctor（core/doctor/checks.ts）复用同一渲染路径计算当前 SoT
+ * contentHash，与 sync-meta 记录 / 投影区间比对（单一事实源，避免两处漂移）。
+ */
+export async function renderRulesMd(
   host: Host,
   userSoTRoot: string,
   projectSoTRoot: string,
@@ -278,6 +323,7 @@ async function renderRulesMd(
   profile: Profile,
 ): Promise<string> {
   const customContents = await readCustomContents(host, userSoTRoot, projectSoTRoot);
+  const promotedLearnings = await readPromotedLearnings(host, userSoTRoot, projectSoTRoot, profile);
 
   const templateContents: TemplateContent[] = [];
   for (const id of profile.templates ?? []) {
@@ -295,7 +341,7 @@ async function renderRulesMd(
     habits,
     profile,
     customContents,
-    promotedLearnings: [], // M7：learn → promote → sync 后注入 ## Learnings 段
+    promotedLearnings, // M8：learn → promote → sync 后注入 ## Learnings 段（§5.2 第 ② 层）
     templateContents,
   });
 }
@@ -415,11 +461,79 @@ async function writeSyncMetaOnSuccess(
 }
 
 /**
+ * marker 区间冲突预检查（Spec §8.2-4，M7；在备份 / mkdirp 之前执行——
+ * 冲突时零副作用，进零目录都不创建）：
+ *
+ * - 逐个 merge_marker 项：读现有投影文件 → splitByMarkers → 有区间时，
+ *   markerSectionHash(现有文件) 与 sync-meta 记录的 contentHash 比对；
+ * - 比对基准自洽：sync 写入的 contentHash = renderedSectionHash(renderedRulesMd)
+ *   = 区间包裹后切回的 hash，与读回投影文件的 markerSectionHash 同构；
+ * - 跳过：无 sync-meta / 该 target 无记录（首次或子集 sync）/ 文件不存在 /
+ *   文件无 marker（用户已移除区间 → replaceBetween 走 EOF 追加，非冲突）；
+ * - 读现有文件权限失败 → PermissionError(4)（与备份阶段同语义）。
+ *
+ * @throws ConflictError(3) 任一区间 hash 与记录不一致（details.conflicts 列出全部路径）。
+ */
+async function assertNoMarkerConflicts(
+  host: Host,
+  planned: readonly PlannedTarget[],
+  syncMeta: SyncMeta | null,
+  ctx: ProjectContext,
+): Promise<void> {
+  if (syncMeta === null) {
+    return; // 首次 sync（或 sync-meta 尚不存在）：无基准，不检查
+  }
+  const conflicts: string[] = [];
+  for (const target of planned) {
+    const recorded = syncMeta.targets[target.targetId];
+    if (recorded === undefined) {
+      continue; // 该 target 无上次记录（如上次 --targets 子集 sync）
+    }
+    const markers = resolveMarkers(target.plan, ctx);
+    for (const item of target.plan.items) {
+      if (item.action !== 'merge_marker') {
+        continue; // 只检查 md marker 区间（§8.2-4；merge_toml/json 不在本检测范围）
+      }
+      if (!(await host.exists(item.path))) {
+        continue; // 投影文件不存在：sync 将新建，无区间可比
+      }
+      let existing: string;
+      try {
+        existing = await host.readFile(item.path);
+      } catch (err) {
+        if (isPermissionErrno(err)) {
+          throw new PermissionError(`无法读取现有投影文件（冲突预检查）: ${item.path}`, {
+            hint: '检查文件的读权限与所在目录 ACL（必要时以管理员身份运行）',
+            details: err,
+          });
+        }
+        throw err;
+      }
+      const split = splitByMarkers(existing, markers.begin, markers.end);
+      if (!split.hasMarkers) {
+        continue;
+      }
+      if (sha256Hex(split.inside) !== recorded.contentHash) {
+        conflicts.push(item.path);
+      }
+    }
+  }
+  if (conflicts.length > 0) {
+    throw new ConflictError('marker 区间可能被手动修改，请执行 aforge doctor 查看详情', {
+      hint: '确认修改无需保留后执行 aforge sync --force 强制覆盖；否则请先恢复区间内容',
+      details: { conflicts },
+    });
+  }
+}
+
+/**
  * 执行一次 sync（Spec §7.3，四 target 全事务版）。
  *
- * @throws ConfigError(2) 未初始化 / --targets 非法 / 模板解析失败 / 配置损坏；
+ * @throws ConfigError(2) 未初始化 / --targets 非法 / 模板解析失败 / 配置损坏 /
+ *         sync-meta.json 损坏（冲突预检查阶段 fail-fast）；
  * @throws PermissionError(4) 目录创建失败（§7.3-7）/ 备份读取失败 / 投影写入失败；
- * @throws ConflictError(3) merge_json 目标损坏（writer 层映射）；
+ * @throws ConflictError(3) marker 区间被手动修改（§8.2-4，--force 跳过）/
+ *         merge_json 目标损坏（writer 层映射）；
  *         投影失败时先回滚全部已写文件再 rethrow 原始错误（类型与退出码不变，
  *         失败汇总经 getSyncFailureReport(err) 获取）。
  */
@@ -439,6 +553,13 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     config.habits,
     config.profile,
   );
+  // M8：skills.always 物化数据源（§7.6 实体 copy；同名 project > user，§5.3）
+  const skillsToMaterialize = await readSkillsToMaterialize(
+    host,
+    userSoTRoot,
+    projectSoTRoot,
+    config.profile,
+  );
 
   const ctx: ProjectContext = {
     os,
@@ -448,7 +569,7 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     renderedRulesMd,
     habits: config.habits,
     profile: config.profile,
-    skillsToMaterialize: [], // M8：skills 物化（copy_mode；M6 的 write 项/事务已就绪）
+    skillsToMaterialize, // M8：skill add 接入（write 项/事务 M6 已就绪）
     mcpServers: config.profile.mcp.servers ?? [],
     dryRun: opts.dryRun,
     lineEnding: config.profile.projection.line_ending,
@@ -477,7 +598,14 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     });
   }
 
-  const contentHash = sha256Hex(renderedRulesMd);
+  const contentHash = renderedSectionHash(renderedRulesMd, ctx.markerBegin, ctx.markerEnd);
+
+  // ---- 阶段 1.5：marker 区间冲突预检查（§8.2-4；--force 跳过；此刻零写入）----
+  const sotRoot = config.effectiveScope === 'project' ? projectSoTRoot : userSoTRoot;
+  if (opts.force !== true) {
+    const syncMeta = await readSyncMeta(host, sotRoot);
+    await assertNoMarkerConflicts(host, planned, syncMeta, ctx);
+  }
 
   // ---- dry-run：返回完整计划，不 mkdirp / 不备份 / 不 apply / 不写 sync-meta ----
   if (opts.dryRun) {
@@ -485,7 +613,7 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
       scope: config.effectiveScope,
       userSoTRoot,
       projectSoTRoot,
-      sotRoot: config.effectiveScope === 'project' ? projectSoTRoot : userSoTRoot,
+      sotRoot,
       contentHash,
       dryRun: true,
       targets: planned.map((t) => ({
@@ -572,7 +700,6 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   }
 
   // ---- 阶段 6：全部成功 → 写 sync-meta（soft 失败的 target 不记，见上方 JSDoc）----
-  const sotRoot = config.effectiveScope === 'project' ? projectSoTRoot : userSoTRoot;
   await writeSyncMetaOnSuccess(
     host,
     opts,

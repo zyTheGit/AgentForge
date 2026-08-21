@@ -111,3 +111,24 @@ export function markerSectionHash(
   const { inside } = splitByMarkers(content, begin, end);
   return sha256Hex(inside);
 }
+
+/**
+ * 渲染正文在投影文件 marker 区间中的内容指纹（M7，Spec §8.2-4 冲突检测基准）。
+ *
+ * 语义：sync-meta.json 的 contentHash 记录值（M7 起）。计算方式是“先按投影层
+ * 规范包裹、再切回区间”的往返（wrapWithMarkers → splitByMarkers），与读回
+ * 真实投影文件后调用 markerSectionHash 完全同构——因此两值可直接相等比较，
+ * 不依赖 composer 输出的首尾换行惯例（换行差异由 sha256Hex 的 LF 规范化吸收）。
+ *
+ * 背景调整（M6 → M7）：M6 曾直接记录 sha256Hex(renderedRulesMd)（渲染正文
+ * 本体 hash）。但投影落盘的区间 body 是 stripEdgeNewlines 后的正文（见
+ * wrapWithMarkers），尾随换行等边缘差异会导致“读回区间 hash ≠ 记录值”的
+ * 恒定误报，无法作为冲突检测基准。故 M7 统一为 marker 区间形态（本函数）。
+ */
+export function renderedSectionHash(
+  content: string,
+  begin: string = DEFAULT_MARKER_BEGIN,
+  end: string = DEFAULT_MARKER_END,
+): string {
+  return markerSectionHash(wrapWithMarkers(content, begin, end), begin, end);
+}

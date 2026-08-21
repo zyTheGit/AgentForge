@@ -1,8 +1,9 @@
 /**
- * aforge sync 命令（Spec §6 命令表 / §7.3，M6 多 target 版）。
+ * aforge sync 命令（Spec §6 命令表 / §7.3，M6 多 target 版；M7 增 --force）。
  *
- * `aforge sync [--targets a,b,c] [--dry-run]`：
+ * `aforge sync [--targets a,b,c] [--dry-run] [--force]`：
  * - 未初始化（无 SoT）→ ConfigError(2)，hint 引导先运行 aforge init；
+ * - marker 区间冲突（§8.2-4）→ ConflictError(3)，--force 跳过预检查强制覆盖；
  * - 输出：逐项写入明细（`[target] action: path`）+ 每 target 汇总表 +
  *   结果摘要；--dry-run 明确标注且不落盘（含 sync-meta）；
  * - soft warning（§8.6 Pi MVP）随成功结果输出 warning 列表；
@@ -39,6 +40,8 @@ export interface SyncCommandOptions {
   /** --targets 原始串（"a,b,c"）；undefined / 空白 → 不过滤。 */
   readonly targets?: string;
   readonly dryRun?: boolean;
+  /** --force（§8.2-4）：跳过 marker 区间冲突预检查，强制覆盖。 */
+  readonly force?: boolean;
 }
 
 /** 解析 --targets：逗号分隔、trim、去空段；空串 → undefined（全量）。 */
@@ -64,6 +67,7 @@ export async function runSync(
     agentforgeVersion: ctx.agentforgeVersion,
     targetsFilter: parseTargetsFilter(options.targets),
     dryRun: options.dryRun === true,
+    force: options.force === true,
   });
 }
 
@@ -167,7 +171,11 @@ export function registerSyncCommand(program: Command): void {
     .description('render SoT rules and project them to agent targets')
     .option('--targets <ids>', 'comma-separated target ids to sync (e.g. claude,pi)')
     .option('--dry-run', 'show what would be written without touching disk')
-    .action(async (options: { targets?: string; dryRun?: boolean }) => {
+    .option(
+      '--force',
+      'overwrite marker sections even if manually modified (skip conflict check)',
+    )
+    .action(async (options: { targets?: string; dryRun?: boolean; force?: boolean }) => {
       try {
         const result = await runSync(
           {
@@ -176,7 +184,7 @@ export function registerSyncCommand(program: Command): void {
             os: currentOs(),
             agentforgeVersion: VERSION,
           },
-          { targets: options.targets, dryRun: options.dryRun },
+          { targets: options.targets, dryRun: options.dryRun, force: options.force },
         );
         printResult(result);
       } catch (err) {

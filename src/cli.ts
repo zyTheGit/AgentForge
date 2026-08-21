@@ -7,7 +7,9 @@
  */
 import { Command } from 'commander';
 import { registerDetectCommand } from './commands/detect';
+import { registerDoctorCommand } from './commands/doctor';
 import { registerInitCommand } from './commands/init';
+import { registerStatusCommand } from './commands/status';
 import { registerSyncCommand } from './commands/sync';
 import { VERSION } from './version';
 
@@ -26,6 +28,8 @@ export function buildProgram(): Command {
   registerDetectCommand(program);
   registerInitCommand(program);
   registerSyncCommand(program);
+  registerDoctorCommand(program);
+  registerStatusCommand(program);
 
   // 无子命令 → 输出简短帮助，退出码 0（Spec §6.1）
   program.action((_options, command) => {

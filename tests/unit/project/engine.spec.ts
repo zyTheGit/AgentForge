@@ -14,8 +14,7 @@ import { readEnv, type EnvSnapshot } from '../../../src/core/env';
 import { currentOs } from '../../../src/core/paths';
 import { filterTargets, syncOnce } from '../../../src/core/project/engine';
 import { syncMetaPath } from '../../../src/core/project/sync-meta';
-import { splitByMarkers, DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../src/core/markers';
-import { sha256Hex } from '../../../src/infra/fsutil';
+import { splitByMarkers, DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END, renderedSectionHash } from '../../../src/core/markers';
 import { createFakeHost, type FakeHost } from '../test-utils';
 
 const OS = currentOs();
@@ -297,7 +296,9 @@ describe('syncOnce — sync-meta.json（Spec §3.3）', () => {
     expect(meta.os).toBe(OS.platform);
     expect(meta.agentforgeVersion).toBe('test-0.1.0');
     expect(meta.lastSyncAt).toBe('1970-01-01T00:00:00.000Z'); // fake host 冻结时钟
-    expect(meta.targets.claude?.contentHash).toBe(sha256Hex(RENDERED_MINIMAL));
+    // M7：contentHash 基准统一为 marker 区间形态（renderedSectionHash），
+    // 与投影文件读回的 markerSectionHash 可直接相等比较（见 markers.ts 调整说明）
+    expect(meta.targets.claude?.contentHash).toBe(renderedSectionHash(RENDERED_MINIMAL));
     expect(meta.targets.claude?.writtenAt).toBe('1970-01-01T00:00:00.000Z');
     // result.contentHash 与 meta 一致（doctor 一致性检测基准）
     expect(result.contentHash).toBe(meta.targets.claude?.contentHash);
