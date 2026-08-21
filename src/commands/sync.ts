@@ -98,8 +98,8 @@ function targetSummaryLine(target: SyncTargetResult): string {
   return `  ${target.targetId}: ${warned > 0 ? 'ok (warnings)' : 'ok'} (${parts.join(', ')})`;
 }
 
-/** 结果摘要输出（逐项明细 + 每 target 汇总表 + 计数；dry-run 显式标注）。 */
-function printResult(result: SyncResult): void {
+/** 结果摘要输出（逐项明细 + 每 target 汇总表 + 计数；dry-run 显式标注）。M9 起导出供 init -i 交互末尾的「立即 sync」复用。 */
+export function printSyncResult(result: SyncResult): void {
   const banner = result.dryRun
     ? `aforge sync (DRY RUN - no files will be written) - scope: ${result.scope}`
     : `aforge sync - scope: ${result.scope}`;
@@ -186,7 +186,7 @@ export function registerSyncCommand(program: Command): void {
           },
           { targets: options.targets, dryRun: options.dryRun, force: options.force },
         );
-        printResult(result);
+        printSyncResult(result);
       } catch (err) {
         printFailureReport(err);
         throw err;

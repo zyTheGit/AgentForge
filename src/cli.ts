@@ -8,6 +8,7 @@
 import { Command } from 'commander';
 import { registerDetectCommand } from './commands/detect';
 import { registerDoctorCommand } from './commands/doctor';
+import { registerImportCommand } from './commands/import';
 import { registerInitCommand } from './commands/init';
 import { registerLearnCommand } from './commands/learn';
 import { registerLearningsCommand } from './commands/learnings';
@@ -46,6 +47,9 @@ export function buildProgram(): Command {
   registerTemplateCommand(program);
   registerSkillCommand(program);
   registerMcpCommand(program);
+
+  // ---- M9 区块：import（Spec §7.7 MVP 基础版）----
+  registerImportCommand(program);
 
   // 无子命令 → 输出简短帮助，退出码 0（Spec §6.1）
   program.action((_options, command) => {
