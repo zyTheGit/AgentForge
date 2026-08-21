@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "default": 1,
+      "type": "number",
+      "const": 1
+    },
+    "runtime": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "node": {
+          "type": "object",
+          "properties": {
+            "manager": {
+              "type": "string",
+              "enum": [
+                "fnm",
+                "nvm",
+                "asdf",
+                "mise",
+                "n",
+                "volta",
+                "system",
+                "none"
+              ]
+            },
+            "version": {
+              "type": "string"
+            },
+            "notes": {
+              "type": "string"
+            }
+          }
+        },
+        "python": {
+          "type": "object",
+          "properties": {
+            "manager": {
+              "type": "string",
+              "enum": [
+                "uv",
+                "poetry",
+                "pipenv",
+                "conda",
+                "pyenv",
+                "asdf",
+                "mise",
+                "system",
+                "none"
+              ]
+            },
+            "version": {
+              "type": "string"
+            },
+            "notes": {
+              "type": "string"
+            }
+          }
+        },
+        "package_managers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "pnpm",
+              "bun",
+              "npm",
+              "yarn",
+              "yarn-berry"
+            ]
+          }
+        },
+        "rust": {
+          "type": "object",
+          "properties": {
+            "toolchain": {
+              "type": "string"
+            },
+            "manager": {
+              "type": "string",
+              "enum": [
+                "rustup",
+                "system",
+                "none"
+              ]
+            }
+          }
+        },
+        "go": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string"
+            },
+            "manager": {
+              "type": "string",
+              "enum": [
+                "goenv",
+                "asdf",
+                "mise",
+                "system",
+                "none"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "tools": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "shell": {
+          "type": "string",
+          "enum": [
+            "powershell",
+            "pwsh",
+            "cmd",
+            "zsh",
+            "bash",
+            "fish",
+            "nushell",
+            "other"
+          ]
+        },
+        "editor": {
+          "type": "string"
+        },
+        "git": {
+          "type": "object",
+          "properties": {
+            "conventional_commits": {
+              "type": "boolean"
+            },
+            "sign_commits": {
+              "type": "boolean"
+            },
+            "default_branch": {
+              "type": "string"
+            },
+            "notes": {
+              "type": "string"
+            }
+          }
+        },
+        "container": {
+          "type": "string",
+          "enum": [
+            "docker",
+            "podman",
+            "none",
+            "other"
+          ]
+        }
+      }
+    },
+    "ai": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "language": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "style": {
+          "type": "string"
+        },
+        "verification": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "test",
+              "lint",
+              "typecheck",
+              "build",
+              "format"
+            ]
+          }
+        },
+        "forbid": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "detected": {
+      "default": {},
+      "type": "object",
+      "properties": {},
+      "additionalProperties": {}
+    },
+    "extensions": {
+      "default": {},
+      "type": "object",
+      "properties": {},
+      "additionalProperties": {}
+    }
+  },
+  "$id": "https://agentforge.dev/schema/habits.json",
+  "title": "AgentForge habits.yaml"
+}

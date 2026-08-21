@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "default": 1,
+      "type": "number",
+      "const": 1
+    },
+    "sources": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "type": {
+                "type": "string",
+                "const": "local"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "enabled": {
+                "default": true,
+                "type": "boolean"
+              },
+              "kind": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "templates",
+                    "skills",
+                    "mcp"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "type": {
+                "type": "string",
+                "const": "git"
+              },
+              "url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ref": {
+                "type": "string"
+              },
+              "commit": {
+                "type": "string"
+              },
+              "enabled": {
+                "default": true,
+                "type": "boolean"
+              },
+              "kind": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "templates",
+                    "skills",
+                    "mcp"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  },
+  "$id": "https://agentforge.dev/schema/sources.json",
+  "title": "AgentForge sources.json"
+}

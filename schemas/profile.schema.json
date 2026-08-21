@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "default": 1,
+      "type": "number",
+      "const": 1
+    },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "user",
+        "project"
+      ]
+    },
+    "targets": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "opencode",
+          "codex",
+          "claude",
+          "pi"
+        ]
+      }
+    },
+    "templates": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "mcp": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "enabled": {
+                "default": true,
+                "type": "boolean"
+              },
+              "transport": {
+                "type": "string",
+                "enum": [
+                  "stdio",
+                  "http",
+                  "sse"
+                ]
+              },
+              "command": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "env": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "url": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "name",
+              "transport"
+            ]
+          }
+        }
+      }
+    },
+    "skills": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "always": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "on_demand": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "copy_mode": {
+          "default": "copy",
+          "type": "string",
+          "enum": [
+            "copy",
+            "symlink"
+          ]
+        }
+      }
+    },
+    "merge": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "strategy": {
+          "default": "overlay",
+          "type": "string",
+          "enum": [
+            "overlay",
+            "replace"
+          ]
+        },
+        "arrays": {
+          "default": "replace",
+          "type": "string",
+          "enum": [
+            "append",
+            "replace"
+          ]
+        }
+      }
+    },
+    "projection": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "write_agents_md": {
+          "type": "boolean"
+        },
+        "write_claude_md": {
+          "type": "boolean"
+        },
+        "marker_mode": {
+          "default": "replace_between_markers",
+          "type": "string",
+          "enum": [
+            "none",
+            "append_below_marker",
+            "replace_between_markers"
+          ]
+        },
+        "marker_begin": {
+          "default": "<!-- BEGIN AGENTFORGE -->",
+          "type": "string"
+        },
+        "marker_end": {
+          "default": "<!-- END AGENTFORGE -->",
+          "type": "string"
+        },
+        "line_ending": {
+          "default": "lf",
+          "type": "string",
+          "enum": [
+            "lf",
+            "crlf"
+          ]
+        },
+        "path_style": {
+          "default": "auto",
+          "type": "string",
+          "enum": [
+            "auto",
+            "windows",
+            "posix"
+          ]
+        },
+        "gitignore_generated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "learning": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "default_scope": {
+          "default": "project",
+          "type": "string",
+          "enum": [
+            "user",
+            "project"
+          ]
+        },
+        "auto_promote": {
+          "default": false,
+          "type": "boolean"
+        },
+        "include_promoted_in_sync": {
+          "default": true,
+          "type": "boolean"
+        }
+      }
+    },
+    "extensions": {
+      "default": {},
+      "type": "object",
+      "properties": {},
+      "additionalProperties": {}
+    }
+  },
+  "required": [
+    "targets"
+  ],
+  "$id": "https://agentforge.dev/schema/profile.json",
+  "title": "AgentForge profile.yaml"
+}

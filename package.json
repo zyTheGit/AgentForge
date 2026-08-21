@@ -14,6 +14,7 @@
     "dev": "tsx src/main.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "emit-schema": "tsx src/schema/emit.ts",
     "build": "npm run build:node && npm run build:bun",
     "build:bun": "bun build --compile --target=bun-windows-x64 --minify --outfile dist/aforge.exe src/main.ts",
     "build:node": "node scripts/build-node.mjs"
