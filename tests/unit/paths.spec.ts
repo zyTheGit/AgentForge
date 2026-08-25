@@ -211,6 +211,18 @@ describe('detectOneDrive（Spec §2.1.1，doctor 用 warning）', () => {
     const host = createFakeHost({ OneDrive: 'D:\\OneDrive' });
     expect(detectOneDrive('C:\\Users\\u\\Documents', host)).toBe(false);
   });
+
+  it('冗余条件已删除：upLower === odLower 与 odLower === upLower 是同一条件，只保留一次', () => {
+    // 验证逻辑正确性：相等、前缀关系都能正确判断
+    const host1 = createFakeHost({ OneDrive: 'C:\\Users\\u\\OneDrive' });
+    expect(detectOneDrive('C:\\Users\\u\\OneDrive', host1)).toBe(true); // 相等
+    
+    const host2 = createFakeHost({ OneDrive: 'C:\\Users\\u\\OneDrive' });
+    expect(detectOneDrive('C:\\Users\\u\\OneDrive\\Documents', host2)).toBe(true); // 用户目录在 OneDrive 下
+    
+    const host3 = createFakeHost({ OneDrive: 'C:\\Users\\u\\OneDrive' });
+    expect(detectOneDrive('C:\\Users\\u', host3)).toBe(true); // OneDrive 在用户目录下
+  });
 });
 
 describe('currentOs', () => {

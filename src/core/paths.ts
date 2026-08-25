@@ -143,7 +143,6 @@ export function detectOneDrive(userProfile: string, host: Host): boolean {
   return (
     upLower === odLower ||
     upLower.startsWith(`${odLower}\\`) ||
-    odLower === upLower ||
     odLower.startsWith(`${upLower}\\`)
   );
 }

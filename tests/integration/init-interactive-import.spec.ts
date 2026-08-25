@@ -179,6 +179,48 @@ describe('init -i 交互五步（Spec §7.1.1）', () => {
     expect(await ws.host.exists(ws.profileFile)).toBe(false);
   });
 
+  it('edit 分支后取消 → 返回已创建的 habits.yaml + 子目录（cancelled=true）', async () => {
+    const scripted = createScriptedPrompt([
+      { kind: 'select', value: 'project' },
+      { kind: 'select', value: 'edit' },
+      {
+        kind: 'confirm',
+        value: true,
+        // 模拟用户在"等待编辑"期间改写 habits.yaml
+        effect: async () => {
+          await writeFile(
+            ws.habitsFile,
+            [
+              'version: 1',
+              'runtime:',
+              '  node:',
+              '    manager: fnm',
+              '',
+            ].join('\n'),
+            'utf8',
+          );
+        },
+      },
+      { kind: 'multiselect', value: ['opencode', 'codex', 'claude', 'pi'] },
+      { kind: 'confirm', value: false }, // 取消写入
+    ]);
+    const result = await runInitInteractive(
+      { host: ws.host, cwd: ws.root, os: OS, prompt: scripted.prompt, agentforgeVersion: VERSION },
+      {},
+    );
+
+    expect(result.cancelled).toBe(true);
+    // edit 分支已在 L295-297 写入 habits.yaml + 子目录
+    expect(result.createdFiles).toEqual([ws.habitsFile]);
+    expect(result.createdDirs).toEqual(SOT_SUBDIRS.map((d) => path.join(ws.sotRoot, d)));
+    // habits.yaml 确实存在且包含用户编辑内容
+    expect(await ws.host.exists(ws.habitsFile)).toBe(true);
+    const habits = parseYaml(await readFile(ws.habitsFile, 'utf8'));
+    expect(habits.runtime?.node?.manager).toBe('fnm');
+    // profile.yaml 未创建（因为取消了）
+    expect(await ws.host.exists(ws.profileFile)).toBe(false);
+  });
+
   it('n 重新探测 → 探测循环后再确认（交互步骤序列）', async () => {
     const scripted = createScriptedPrompt([
       { kind: 'select', value: 'project' },

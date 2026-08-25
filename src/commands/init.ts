@@ -349,12 +349,13 @@ export async function runInitInteractive(
 
   const confirmed = await ctx.prompt.confirm('写入以上文件？');
   if (!confirmed) {
+    // 取消时返回实际已创建的文件/目录列表（edit 分支已在 L295-297 写入 habits.yaml + 子目录）
     return {
       scope,
       sotRoot,
       targets: selectedTargets,
-      createdFiles: [],
-      createdDirs: [],
+      createdFiles: habitsWritten ? [habitsFile] : [],
+      createdDirs: habitsWritten ? SOT_SUBDIRS.map((dir) => path.join(sotRoot, dir)) : [],
       detection,
       cancelled: true,
       synced: false,

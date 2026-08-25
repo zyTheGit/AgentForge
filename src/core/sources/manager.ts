@@ -87,7 +87,8 @@ export function sourceStoreDir(ctx: SourceManagerContext, id: string): string {
 
 /**
  * 从 url / 本地路径派生源 id：末段 basename（去 .git 后缀），非法字符压成 '-'。
- * 结果不匹配 ^[a-z0-9][a-z0-9_-]{1,63}$ 时回退 `src-<随机>`（保证可作目录名）。
+ * 结果不匹配 ^[a-z0-9][a-z0-9_-]{1,63}$ 时抛错，要求用户显式指定 --id
+ * （保证幂等性：同一 URL 多次调用产生相同 id）。
  */
 export function deriveSourceId(target: string): string {
   const normalized = target.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -100,7 +101,10 @@ export function deriveSourceId(target: string): string {
   if (/^[a-z0-9][a-z0-9_-]{1,63}$/.test(sanitized)) {
     return sanitized;
   }
-  return `src-${Math.random().toString(36).slice(2, 8)}`;
+  throw new ConfigError(`无法从路径派生合法的源 id: ${target}（规范化后为 "${sanitized}"）`, {
+    hint: '请显式指定 --id（合法格式：以字母或数字开头，仅含小写字母、数字、下划线、连字符，长度 2-64），例如: aforge source add <url> --id my-source',
+    details: { target, sanitized },
+  });
 }
 
 /** 执行一条 git 命令；失败 → GenericError(1)（网络 / ref 不存在等通用域）。 */

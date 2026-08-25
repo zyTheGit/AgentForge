@@ -130,7 +130,24 @@ export async function promoteLearning(
   // 目标层：--to user 显式指定；默认 = learning 所在层
   const targetScope: 'user' | 'project' = opts.to === 'user' ? 'user' : found.scope;
   const targetSoTRoot = targetScope === 'project' ? projectSoTRoot : userSoTRoot;
-
+  
+  // 原子性保障（Spec §7.5）：先标记 promoted，再写目标文件。
+  // 若写文件失败，learning 状态为 promoted 但无目标文件，用户可重试（幂等性由 promoted 标志保证）。
+  const now = host.now().toISOString();
+  const promoted: Learning = LearningSchema.parse({
+    ...found.learning,
+    promoted: true,
+    promoted_at: now,
+    updated_at: now,
+  });
+  await atomicWrite(
+    host,
+    learningFilePath(found.sotRoot, id),
+    stringifyYaml(promoted, { lineWidth: 0 }).endsWith('\n')
+      ? stringifyYaml(promoted, { lineWidth: 0 })
+      : `${stringifyYaml(promoted, { lineWidth: 0 })}\n`,
+  );
+  
   let targetFile: string;
   switch (found.learning.promote_target) {
     case 'custom_rule': {
@@ -162,21 +179,6 @@ export async function promoteLearning(
       break;
     }
   }
-
-  // 标记 promoted（条目保留在原层，§7.5"不自动删除"）
-  const now = host.now().toISOString();
-  const promoted: Learning = LearningSchema.parse({
-    ...found.learning,
-    promoted: true,
-    promoted_at: now,
-    updated_at: now,
-  });
-  const yamlText = stringifyYaml(promoted, { lineWidth: 0 });
-  await atomicWrite(
-    host,
-    learningFilePath(found.sotRoot, id),
-    yamlText.endsWith('\n') ? yamlText : `${yamlText}\n`,
-  );
 
   return {
     learning: promoted,

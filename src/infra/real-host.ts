@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
 import type { ExecOptions, ExecResult, FileStat, Host } from './host';
 import { stripBom } from './fsutil';
+import { longPathAware, currentOs } from '../core/paths';
 
 /** execFile 超时上限：防挂死（约定到期 code=124）。 */
 const DEFAULT_EXEC_TIMEOUT_MS = 60_000;
@@ -34,7 +35,8 @@ export const realHost: Host = {
   },
 
   async writeFile(path: string, content: string): Promise<void> {
-    await fsp.writeFile(path, content, 'utf8');
+    const normalized = longPathAware(path, currentOs());
+    await fsp.writeFile(normalized, content, 'utf8');
   },
 
   async chmod(path: string, mode: number): Promise<void> {
@@ -55,7 +57,8 @@ export const realHost: Host = {
   },
 
   async mkdirp(path: string): Promise<void> {
-    await fsp.mkdir(path, { recursive: true });
+    const normalized = longPathAware(path, currentOs());
+    await fsp.mkdir(normalized, { recursive: true });
   },
 
   async rm(path: string): Promise<void> {

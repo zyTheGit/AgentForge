@@ -56,10 +56,25 @@ describe('deriveSourceId', () => {
     expect(deriveSourceId('C:\\sources\\My Source')).toBe('my-source');
   });
 
-  it('不满足 id 正则（如单字符 a）→ 回退 src-<随机>', () => {
+  it('不满足 id 正则（如单字符 a）→ 抛 ConfigError(2)，要求用户显式指定 --id', async () => {
     // 'a' 长度 1 不满足 {1,63} 起始后至少 1 字符 → 总长 ≥2
-    const id = deriveSourceId('https://example.com/a.git');
-    expect(id).toMatch(/^src-[a-z0-9]+$/);
+    expect(() => deriveSourceId('https://example.com/a.git')).toThrow();
+    try {
+      deriveSourceId('https://example.com/a.git');
+    } catch (err) {
+      expect(err).toMatchObject({ code: 2 });
+      expect((err as Error).message).toContain('无法从路径派生合法的源 id');
+      // hint 包含 '--id'
+      expect((err as any).hint).toContain('--id');
+    }
+  });
+
+  it('同一 URL 多次调用产生相同 id（确定性，非随机）', () => {
+    const url = 'https://github.com/user/repo.git';
+    const id1 = deriveSourceId(url);
+    const id2 = deriveSourceId(url);
+    expect(id1).toBe(id2);
+    expect(id1).toBe('repo');
   });
 });
 
