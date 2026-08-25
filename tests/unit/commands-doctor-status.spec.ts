@@ -10,6 +10,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { formatDoctorReport, runDoctor } from '../../src/commands/doctor';
 import { formatStatus, runStatus } from '../../src/commands/status';
+import { runInit } from '../../src/commands/init';
+import { runSync } from '../../src/commands/sync';
 import type {
   DoctorCheckResult,
   DoctorReport,
@@ -271,5 +273,40 @@ describe('runStatus — 状态装配', () => {
     expect(typeof json.projectSoTRoot).toBe('string');
     expect(json.lastSyncAt).toBeNull();
     expect(json.counts).toEqual({ custom: 0, learnings: 0, templates: 0 });
+  });
+});
+
+describe('runInit — --json 序列化形态', () => {
+  it('init 结果可 JSON 序列化：scope / sotRoot / createdFiles / createdDirs / detection 字段齐全', async () => {
+    const host = createCommandHost();
+    const result = await runInit({ host, cwd: CWD, os: OS }, { scope: 'project' });
+    const json = JSON.parse(JSON.stringify(result)) as Record<string, unknown>;
+    expect(json.scope).toBe('project');
+    expect(typeof json.sotRoot).toBe('string');
+    expect(Array.isArray(json.createdFiles)).toBe(true);
+    expect(Array.isArray(json.createdDirs)).toBe(true);
+    expect(typeof json.detection).toBe('object');
+    expect((json.createdFiles as string[]).length).toBeGreaterThan(0);
+    expect((json.createdDirs as string[]).length).toBeGreaterThan(0);
+  });
+});
+
+describe('runSync — --json 序列化形态', () => {
+  it('sync 结果可 JSON 序列化：scope / contentHash / targets / warnings 字段齐全', async () => {
+    const host = createCommandHost();
+    await seedProjectSoT(host);
+    const result = await runSync({
+      host,
+      cwd: CWD,
+      os: OS,
+      agentforgeVersion: 'test-0.1.0',
+    });
+    const json = JSON.parse(JSON.stringify(result)) as Record<string, unknown>;
+    expect(json.scope).toBe('project');
+    expect(typeof json.contentHash).toBe('string');
+    expect(Array.isArray(json.targets)).toBe(true);
+    expect(Array.isArray(json.warnings)).toBe(true);
+    expect(json.dryRun).toBe(false);
+    expect(typeof json.sotRoot).toBe('string');
   });
 });

@@ -149,6 +149,11 @@ aforge import AGENTS.md    # 或 CLAUDE.md：识别工具链关键词 → habits
 | 4 | 权限错误（目标不可写） |
 | 5 | 离线（需要网络的操作在离线模式下失败） |
 
+## 已知限制
+
+- **并发安全**：多进程并发执行 `aforge sync` 或 `aforge source add` 等行为未定义。建议避免并发操作同一 SoT 目录（`.agentforge/`）。如需自动化调度，请确保串行执行。
+- **Symlink 支持**：`skills/` 目录默认使用实体拷贝（`copy_mode: copy`），不使用 symlink。跨平台场景（尤其 Windows）symlink 可能失败，doctor 会检测并提示。
+
 ## macOS / Linux 旁注
 
 - 安装与用法一致：`fnm env --shell bash | source -`（或 zsh）后 `npm install` + `npm run build:node`；

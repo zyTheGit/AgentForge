@@ -652,5 +652,61 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
     }
   }
 
+  // ---- §9 symlink 失败检查：扫描 SoT skills/ 目录，检测断开的 symlink → warn ----
+  const skillsDirs: string[] = [];
+  if (userSoTRoot !== undefined) {
+    skillsDirs.push(path.join(userSoTRoot, 'skills'));
+  }
+  skillsDirs.push(path.join(projectSoTRoot, 'skills'));
+  let brokenSymlinks: string[] = [];
+  for (const dir of skillsDirs) {
+    let entries: string[];
+    try {
+      entries = await host.listDir(dir);
+    } catch {
+      continue; // 目录不存在 / 不可读：跳过
+    }
+    for (const name of entries) {
+      const entryPath = path.join(dir, name);
+      let lstatResult: { isSymbolicLink: boolean };
+      try {
+        lstatResult = await host.lstat(entryPath);
+      } catch {
+        continue; // lstat 失败（不应该发生，因为 listDir 已列出）：跳过
+      }
+      if (!lstatResult.isSymbolicLink) {
+        continue;
+      }
+      // 是 symlink，检查目标是否存在
+      let target: string;
+      try {
+        target = await host.readlink(entryPath);
+      } catch {
+        continue; // readlink 失败：跳过
+      }
+      // 检查 symlink 目标是否存在（用 exists，它会跟随 symlink）
+      const targetExists = await host.exists(entryPath);
+      if (!targetExists) {
+        brokenSymlinks.push(`${entryPath} -> ${target}`);
+      }
+    }
+  }
+  if (brokenSymlinks.length > 0) {
+    results.push({
+      section: 'environment',
+      level: 'warn',
+      item: 'broken-symlink',
+      detail: `发现 ${brokenSymlinks.length} 个断开的 symlink:\n${brokenSymlinks.join('\n')}`,
+      hint: '建议设置 skills.copy_mode: copy（避免 symlink 跨平台问题），或删除无效 symlink 后重新 skill add',
+    });
+  } else {
+    results.push({
+      section: 'environment',
+      level: 'ok',
+      item: 'broken-symlink',
+      detail: '未发现断开的 symlink（skills/ 目录）',
+    });
+  }
+
   return { results, exitCode: doctorExitCode(results) };
 }

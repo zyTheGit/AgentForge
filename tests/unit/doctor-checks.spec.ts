@@ -330,3 +330,55 @@ describe('runDoctorChecks — 可写性（§9 第 2 条）', () => {
     expect(report.exitCode).toBe(4);
   });
 });
+
+describe('runDoctorChecks — broken symlink（§9 symlink 失败检查）', () => {
+  it('skills/ 目录无 symlink → broken-symlink ok', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host);
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'broken-symlink');
+    expect(r.level).toBe('ok');
+    expect(r.detail).toContain('未发现断开');
+  });
+
+  it('skills/ 目录有断开的 symlink → broken-symlink warn', async () => {
+    const base = createDoctorHost();
+    await seedProjectSoT(base);
+    // 模拟一个 broken symlink：lstat 返回 isSymbolicLink=true，exists 返回 false
+    const brokenLink = path.join(PROJECT_SOT, 'skills', 'broken-skill');
+    const host: FakeHost = {
+      ...base,
+      async listDir(p) {
+        if (p === path.join(PROJECT_SOT, 'skills')) {
+          return ['broken-skill'];
+        }
+        return base.listDir(p);
+      },
+      async lstat(p) {
+        if (p === brokenLink) {
+          return { isFile: false, isDirectory: false, isSymbolicLink: true, size: 0, mtimeMs: 0 };
+        }
+        return base.lstat(p);
+      },
+      async readlink(p) {
+        if (p === brokenLink) {
+          return '/nonexistent/target';
+        }
+        return base.readlink(p);
+      },
+      async exists(p) {
+        if (p === brokenLink) {
+          return false; // symlink 目标不存在
+        }
+        return base.exists(p);
+      },
+    };
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'broken-symlink');
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain('断开');
+    expect(r.detail).toContain('broken-skill');
+    expect(r.hint).toContain('copy_mode');
+    expect(report.exitCode).toBe(0); // warn 不抬升退出码
+  });
+});

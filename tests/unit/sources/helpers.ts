@@ -86,12 +86,18 @@ export function createDirAwareHost(
     async stat(p) {
       const content = files.get(p);
       if (content !== undefined) {
-        return { isFile: true, isDirectory: false, size: content.length, mtimeMs: 0 };
+        return { isFile: true, isDirectory: false, isSymbolicLink: false, size: content.length, mtimeMs: 0 };
       }
       if (isDir(p)) {
-        return { isFile: false, isDirectory: true, size: 0, mtimeMs: 0 };
+        return { isFile: false, isDirectory: true, isSymbolicLink: false, size: 0, mtimeMs: 0 };
       }
       throw errnoError('ENOENT', `no such file or directory: ${p}`);
+    },
+    async lstat(p) {
+      return this.stat(p);
+    },
+    async readlink(p) {
+      throw errnoError('EINVAL', `not a symlink: ${p}`);
     },
     async rename(from, to) {
       const content = files.get(from);

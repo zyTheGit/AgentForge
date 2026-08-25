@@ -11,6 +11,7 @@
 export interface FileStat {
   readonly isFile: boolean;
   readonly isDirectory: boolean;
+  readonly isSymbolicLink: boolean;
   readonly size: number;
   readonly mtimeMs: number;
 }
@@ -45,7 +46,12 @@ export interface Host {
   mkdirp(path: string): Promise<void>;
   /** 删除文件或目录（recursive + force：不存在也不报错）。 */
   rm(path: string): Promise<void>;
+  /** stat（跟随 symlink）；不存在时 reject。 */
   stat(path: string): Promise<FileStat>;
+  /** lstat（不跟随 symlink）；不存在时 reject。用于检测 symlink 本身。 */
+  lstat(path: string): Promise<FileStat>;
+  /** 读 symlink 目标路径；非 symlink 时 reject。 */
+  readlink(path: string): Promise<string>;
   rename(from: string, to: string): Promise<void>;
   /** 执行外部命令（有超时保护，永不 reject；失败看 code/stderr）。 */
   exec(cmd: string, args: readonly string[], opts?: ExecOptions): Promise<ExecResult>;

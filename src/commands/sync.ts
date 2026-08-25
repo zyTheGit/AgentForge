@@ -175,21 +175,33 @@ export function registerSyncCommand(program: Command): void {
       '--force',
       'overwrite marker sections even if manually modified (skip conflict check)',
     )
-    .action(async (options: { targets?: string; dryRun?: boolean; force?: boolean }) => {
-      try {
-        const result = await runSync(
-          {
-            host: realHost,
-            cwd: process.cwd(),
-            os: currentOs(),
-            agentforgeVersion: VERSION,
-          },
-          { targets: options.targets, dryRun: options.dryRun, force: options.force },
-        );
-        printSyncResult(result);
-      } catch (err) {
-        printFailureReport(err);
-        throw err;
-      }
-    });
+    .option('--json', 'print machine-readable JSON (absolute paths)')
+    .action(
+      async (options: {
+        targets?: string;
+        dryRun?: boolean;
+        force?: boolean;
+        json?: boolean;
+      }) => {
+        try {
+          const result = await runSync(
+            {
+              host: realHost,
+              cwd: process.cwd(),
+              os: currentOs(),
+              agentforgeVersion: VERSION,
+            },
+            { targets: options.targets, dryRun: options.dryRun, force: options.force },
+          );
+          if (options.json === true) {
+            console.log(JSON.stringify(result, null, 2));
+          } else {
+            printSyncResult(result);
+          }
+        } catch (err) {
+          printFailureReport(err);
+          throw err;
+        }
+      },
+    );
 }

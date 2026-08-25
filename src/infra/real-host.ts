@@ -68,9 +68,25 @@ export const realHost: Host = {
     return {
       isFile: s.isFile(),
       isDirectory: s.isDirectory(),
+      isSymbolicLink: s.isSymbolicLink(),
       size: s.size,
       mtimeMs: s.mtimeMs,
     };
+  },
+
+  async lstat(path: string): Promise<FileStat> {
+    const s = await fsp.lstat(path);
+    return {
+      isFile: s.isFile(),
+      isDirectory: s.isDirectory(),
+      isSymbolicLink: s.isSymbolicLink(),
+      size: s.size,
+      mtimeMs: s.mtimeMs,
+    };
+  },
+
+  async readlink(path: string): Promise<string> {
+    return fsp.readlink(path, 'utf8');
   },
 
   async rename(from: string, to: string): Promise<void> {

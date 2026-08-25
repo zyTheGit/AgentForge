@@ -54,7 +54,17 @@ export function createFakeHost(envMap: Readonly<Record<string, string>> = {}): F
       if (content === undefined) {
         throw errnoError('ENOENT', `no such file: ${p}`);
       }
-      return { isFile: true, isDirectory: false, size: content.length, mtimeMs: 0 };
+      return { isFile: true, isDirectory: false, isSymbolicLink: false, size: content.length, mtimeMs: 0 };
+    },
+    async lstat(p) {
+      const content = files.get(p);
+      if (content === undefined) {
+        throw errnoError('ENOENT', `no such file: ${p}`);
+      }
+      return { isFile: true, isDirectory: false, isSymbolicLink: false, size: content.length, mtimeMs: 0 };
+    },
+    async readlink(p) {
+      throw errnoError('EINVAL', `not a symlink: ${p}`);
     },
     async rename(from, to) {
       const content = files.get(from);

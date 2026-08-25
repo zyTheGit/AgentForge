@@ -446,7 +446,8 @@ export function registerInitCommand(program: Command): void {
     .description('initialize the SoT directory (habits/profile skeletons + detect snapshot)')
     .option('--scope <scope>', 'SoT scope: project or user (default: project)')
     .option('-i, --interactive', 'interactive five-step init (requires a TTY)')
-    .action(async (options: { scope?: string; interactive?: boolean }) => {
+    .option('--json', 'print machine-readable JSON (absolute paths)')
+    .action(async (options: { scope?: string; interactive?: boolean; json?: boolean }) => {
       let scope: Scope | undefined;
       if (options.scope !== undefined) {
         if (options.scope !== 'project' && options.scope !== 'user') {
@@ -469,7 +470,25 @@ export function registerInitCommand(program: Command): void {
         );
 
         if (result.cancelled) {
-          console.log('aforge init - cancelled at write confirmation, nothing written');
+          if (options.json === true) {
+            console.log(JSON.stringify({ cancelled: true }, null, 2));
+          } else {
+            console.log('aforge init - cancelled at write confirmation, nothing written');
+          }
+          return;
+        }
+
+        if (options.json === true) {
+          console.log(JSON.stringify({
+            scope: result.scope,
+            sotRoot: result.sotRoot,
+            targets: result.targets,
+            createdFiles: result.createdFiles,
+            createdDirs: result.createdDirs,
+            detection: result.detection,
+            cancelled: false,
+            synced: result.synced,
+          }, null, 2));
           return;
         }
 
@@ -496,6 +515,17 @@ export function registerInitCommand(program: Command): void {
       }
 
       const result = await runInit(baseCtx, { scope });
+
+      if (options.json === true) {
+        console.log(JSON.stringify({
+          scope: result.scope,
+          sotRoot: result.sotRoot,
+          createdFiles: result.createdFiles,
+          createdDirs: result.createdDirs,
+          detection: result.detection,
+        }, null, 2));
+        return;
+      }
 
       const lines: string[] = [
         `aforge init - scope: ${result.scope}`,
