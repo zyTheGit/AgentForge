@@ -86,10 +86,7 @@ async function lookupStore(id: string, ctx: ResolveContext): Promise<string | un
  *
  * @throws ConfigError(2) id 非法或四处均未命中。
  */
-export async function resolveTemplate(
-  id: string,
-  ctx: ResolveContext,
-): Promise<ResolvedTemplate> {
+export async function resolveTemplate(id: string, ctx: ResolveContext): Promise<ResolvedTemplate> {
   validateTemplateId(id);
 
   // 1. 内置 base/default（恒优先，Spec §3.4 只读）

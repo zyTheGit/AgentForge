@@ -4,8 +4,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   AgentForgeError,
-  ConflictError,
   ConfigError,
+  ConflictError,
   ExitCode,
   GenericError,
   OfflineError,

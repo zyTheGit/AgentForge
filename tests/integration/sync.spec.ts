@@ -10,8 +10,8 @@
  *    POSIX 真实只读目录）。
  */
 import { spawnSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -20,11 +20,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { runInit, SOT_SUBDIRS } from '../../src/commands/init';
 import { runSync } from '../../src/commands/sync';
-import { currentOs } from '../../src/core/paths';
 import { ConfigError, ExitCode, PermissionError, toExitCode } from '../../src/core/errors';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END, splitByMarkers } from '../../src/core/markers';
-import { realHost } from '../../src/infra/real-host';
+import { currentOs } from '../../src/core/paths';
 import type { Host } from '../../src/infra/host';
+import { realHost } from '../../src/infra/real-host';
 
 const OS = currentOs();
 const VERSION = 'test-0.1.0';
@@ -143,7 +143,12 @@ describe('init → sync 端到端（进程内，真实 fs）', () => {
     const rendered = dry.targets[0]?.items[0]?.content as string;
     expect(rendered.length).toBeGreaterThan(0);
 
-    const result = await runSync({ host: ws.host, cwd: ws.root, os: OS, agentforgeVersion: VERSION });
+    const result = await runSync({
+      host: ws.host,
+      cwd: ws.root,
+      os: OS,
+      agentforgeVersion: VERSION,
+    });
     expect(result.scope).toBe('project');
     // M6 四 projector 全注册：init 默认四 target 全部同步（§8.7 投影矩阵）
     expect(result.targets.map((t) => t.targetId)).toEqual(['opencode', 'codex', 'claude', 'pi']);
@@ -216,7 +221,12 @@ describe('init → sync 端到端（进程内，真实 fs）', () => {
 
   it('sync-meta.json 结构符合 §3.3：version/lastSyncAt/os/agentforgeVersion/targets.claude.*', async () => {
     await runInit({ host: ws.host, cwd: ws.root, os: OS });
-    const result = await runSync({ host: ws.host, cwd: ws.root, os: OS, agentforgeVersion: VERSION });
+    const result = await runSync({
+      host: ws.host,
+      cwd: ws.root,
+      os: OS,
+      agentforgeVersion: VERSION,
+    });
 
     const meta = JSON.parse(await readFile(ws.syncMetaPath, 'utf8')) as {
       version: number;
@@ -236,9 +246,12 @@ describe('init → sync 端到端（进程内，真实 fs）', () => {
   }, 30_000);
 
   it('未初始化 → sync 抛 ConfigError(2)，hint 引导 aforge init（§7.3-1）', async () => {
-    const err = await runSync({ host: ws.host, cwd: ws.root, os: OS, agentforgeVersion: VERSION }).catch(
-      (e: unknown) => e,
-    );
+    const err = await runSync({
+      host: ws.host,
+      cwd: ws.root,
+      os: OS,
+      agentforgeVersion: VERSION,
+    }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ConfigError);
     expect((err as ConfigError).code).toBe(ExitCode.Config);
     expect((err as ConfigError).hint).toContain('aforge init');
@@ -418,7 +431,9 @@ describe.skipIf(!isPosix || isRoot)('真实只读项目目录（POSIX chmod 0555
 
     const env: NodeJS.ProcessEnv = { ...process.env };
     for (const key of Object.keys(env)) {
-      if (key.toUpperCase().startsWith('AGF_')) delete env[key];
+      if (key.toUpperCase().startsWith('AGF_')) {
+        delete env[key];
+      }
     }
     env.USERPROFILE = home;
     env.HOME = home;

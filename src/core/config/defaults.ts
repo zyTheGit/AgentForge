@@ -11,11 +11,11 @@
  * - 无任何配置文件时返回内置默认（init 落盘与全新环境装配共用同一来源）。
  */
 import type { Host } from '../../infra/host';
-import type { EnvSnapshot, Scope } from '../env';
-import { HabitsSchema, ProfileSchema } from '../../schema';
 import type { Habits, HabitsInput, Profile, ProfileInput } from '../../schema';
+import { HabitsSchema, ProfileSchema } from '../../schema';
+import type { EnvSnapshot, Scope } from '../env';
 import { loadHabits, loadProfile } from './load';
-import { mergeHabits, mergeProfiles, type MergeOptions } from './merge';
+import { type MergeOptions, mergeHabits, mergeProfiles } from './merge';
 
 /**
  * Spec §4.2 "Windows 安装默认值" 代码块（逐字段对齐）。

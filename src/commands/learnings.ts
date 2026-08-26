@@ -1,34 +1,35 @@
 /**
  * aforge learnings 命令（Spec §6 命令表：list | show <id> | edit <id> | rm <id>）。
  *
- * - list：两层 SoT 条目汇总（--json 机器可读输出，§6.2）；
+ * - list：两层 SoT 条目汇总；
  * - show：输出条目 YAML 原文；
  * - edit：**简单实现**——读出条目内容与文件绝对路径，提示手动编辑
  *   （$EDITOR / notepad 打开该 yaml；M8 不内嵌编辑器流程）；
  * - rm：删除条目文件（先 show 确认建议由用户自行执行）。
+ *
+ * 四个子命令都支持 `--json`（§6.2；判定走 resolveJsonFlag，故 `aforge --json
+ * learnings show <id>` 与 `aforge learnings show <id> --json` 等价）。JSON 字段
+ * 与 list 同风格：条目字段展开 + `scope` + `file`（show/edit 另带正文 `content`）。
  *
  * 条目查找：project 层优先于 user 层（与 promote 同序）。
  */
 import path from 'node:path';
 import type { Command } from 'commander';
 import { readEnv } from '../core/env';
-import { currentOs, resolveProjectSoT, resolveUserSoT, type OsContext } from '../core/paths';
 import {
   learningFilePath,
   listLearnings,
   readLearningFile,
   removeLearning,
 } from '../core/learning/store';
-import type { Learning } from '../schema';
-import type { Host } from '../infra/host';
+import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
 import { realHost } from '../infra/real-host';
+import type { Learning } from '../schema';
+import { type CommandContext, defaultCommandContext, printJson } from './context';
+import { resolveJsonFlag } from './flags';
 
 /** 命令上下文。 */
-export interface LearningsCommandContext {
-  readonly host: Host;
-  readonly cwd: string;
-  readonly os: OsContext;
-}
+export type LearningsCommandContext = CommandContext;
 
 /** list 条目（附所在层与文件路径）。 */
 export interface LearningListItem {
@@ -48,17 +49,18 @@ async function listAll(ctx: LearningsCommandContext): Promise<LearningListItem[]
     { scope: 'user' as const, sotRoot: userSoTRoot },
   ]) {
     for (const learning of await listLearnings({ host: ctx.host, sotRoot: layer.sotRoot })) {
-      items.push({ learning, scope: layer.scope, file: learningFilePath(layer.sotRoot, learning.id) });
+      items.push({
+        learning,
+        scope: layer.scope,
+        file: learningFilePath(layer.sotRoot, learning.id),
+      });
     }
   }
   return items;
 }
 
 /** 在两层中查找条目（project 优先）。 */
-async function findOne(
-  ctx: LearningsCommandContext,
-  id: string,
-): Promise<LearningListItem | null> {
+async function findOne(ctx: LearningsCommandContext, id: string): Promise<LearningListItem | null> {
   const env = readEnv(ctx.host);
   const userSoTRoot = resolveUserSoT(env, ctx.os);
   const projectSoTRoot = resolveProjectSoT(ctx.cwd, ctx.os);
@@ -75,13 +77,12 @@ async function findOne(
   return null;
 }
 
-/** list 核心逻辑（可注入）。 */
-export async function runLearningsList(ctx: LearningsCommandContext): Promise<LearningListItem[]> {
-  return listAll(ctx);
-}
-
-/** show 核心逻辑。@throws ConfigError(2) id 不存在。 */
-export async function runLearningsShow(ctx: LearningsCommandContext, id: string): Promise<string> {
+/**
+ * 在两层中查找条目，缺失即报错（show / edit / rm 共用同一条错误文案与错误码）。
+ *
+ * @throws ConfigError(2) id 不存在。
+ */
+async function requireOne(ctx: LearningsCommandContext, id: string): Promise<LearningListItem> {
   const found = await findOne(ctx, id);
   if (found === null) {
     const { ConfigError } = await import('../core/errors');
@@ -90,6 +91,17 @@ export async function runLearningsShow(ctx: LearningsCommandContext, id: string)
       details: { id },
     });
   }
+  return found;
+}
+
+/** list 核心逻辑（可注入）。 */
+export async function runLearningsList(ctx: LearningsCommandContext): Promise<LearningListItem[]> {
+  return listAll(ctx);
+}
+
+/** show 核心逻辑。@throws ConfigError(2) id 不存在。 */
+export async function runLearningsShow(ctx: LearningsCommandContext, id: string): Promise<string> {
+  const found = await requireOne(ctx, id);
   return await ctx.host.readFile(found.file);
 }
 
@@ -98,14 +110,7 @@ export async function runLearningsRemove(
   ctx: LearningsCommandContext,
   id: string,
 ): Promise<{ id: string; file: string; scope: 'user' | 'project' }> {
-  const found = await findOne(ctx, id);
-  if (found === null) {
-    const { ConfigError } = await import('../core/errors');
-    throw new ConfigError(`learning 不存在: ${id}`, {
-      hint: '运行 aforge learnings list 查看全部条目',
-      details: { id },
-    });
-  }
+  const found = await requireOne(ctx, id);
   await removeLearning({ host: ctx.host, sotRoot: path.dirname(path.dirname(found.file)) }, id);
   return { id, file: found.file, scope: found.scope };
 }
@@ -125,16 +130,10 @@ export function registerLearningsCommand(program: Command): void {
     .command('list')
     .description('list all learning entries in both SoT layers')
     .option('--json', 'machine-readable output (Spec 6.2)')
-    .action(async (options: { json?: boolean }) => {
-      const items = await runLearningsList({ host: realHost, cwd: process.cwd(), os: currentOs() });
-      if (options.json) {
-        console.log(
-          JSON.stringify(
-            items.map((i) => ({ ...i.learning, scope: i.scope, file: i.file })),
-            null,
-            2,
-          ),
-        );
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const items = await runLearningsList(defaultCommandContext());
+      if (resolveJsonFlag(command, options.json)) {
+        printJson(items.map((i) => ({ ...i.learning, scope: i.scope, file: i.file })));
         return;
       }
       if (items.length === 0) {
@@ -149,25 +148,41 @@ export function registerLearningsCommand(program: Command): void {
   cmd
     .command('show <id>')
     .description('print a learning entry as YAML')
-    .action(async (id: string) => {
-      const yaml = await runLearningsShow({ host: realHost, cwd: process.cwd(), os: currentOs() }, id);
+    .option('--json', 'machine-readable output (Spec 6.2)')
+    .action(async (id: string, options: { json?: boolean }, command: Command) => {
+      const ctx = defaultCommandContext();
+      if (resolveJsonFlag(command, options.json)) {
+        const found = await requireOne(ctx, id);
+        printJson({
+          ...found.learning,
+          scope: found.scope,
+          file: found.file,
+          content: await ctx.host.readFile(found.file),
+        });
+        return;
+      }
+      const yaml = await runLearningsShow(ctx, id);
       console.log(yaml);
     });
 
   cmd
     .command('edit <id>')
     .description('print entry file path and content for manual editing')
-    .action(async (id: string) => {
-      const found = await findOne({ host: realHost, cwd: process.cwd(), os: currentOs() }, id);
-      if (found === null) {
-        const { ConfigError } = await import('../core/errors');
-        throw new ConfigError(`learning 不存在: ${id}`, {
-          hint: '运行 aforge learnings list 查看全部条目',
-          details: { id },
-        });
-      }
+    .option('--json', 'machine-readable output (Spec 6.2)')
+    .action(async (id: string, options: { json?: boolean }, command: Command) => {
+      const found = await requireOne(defaultCommandContext(), id);
       const content = await realHost.readFile(found.file);
       const editor = realHost.env('EDITOR') ?? 'notepad';
+      if (resolveJsonFlag(command, options.json)) {
+        printJson({
+          ...found.learning,
+          scope: found.scope,
+          file: found.file,
+          editor,
+          content,
+        });
+        return;
+      }
       console.log(
         [
           `learning file: ${found.file}`,
@@ -183,11 +198,13 @@ export function registerLearningsCommand(program: Command): void {
   cmd
     .command('rm <id>')
     .description('remove a learning entry file')
-    .action(async (id: string) => {
-      const result = await runLearningsRemove(
-        { host: realHost, cwd: process.cwd(), os: currentOs() },
-        id,
-      );
+    .option('--json', 'machine-readable output (Spec 6.2)')
+    .action(async (id: string, options: { json?: boolean }, command: Command) => {
+      const result = await runLearningsRemove(defaultCommandContext(), id);
+      if (resolveJsonFlag(command, options.json)) {
+        printJson(result);
+        return;
+      }
       console.log(`learning removed: ${result.id} (${result.scope} layer)\n  ${result.file}`);
     });
 }

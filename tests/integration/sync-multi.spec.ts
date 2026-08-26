@@ -22,20 +22,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { runInit } from '../../src/commands/init';
 import { runSync } from '../../src/commands/sync';
-import { currentOs } from '../../src/core/paths';
 import { PermissionError, toExitCode } from '../../src/core/errors';
-import {
-  DEFAULT_MARKER_BEGIN,
-  DEFAULT_MARKER_END,
-  splitByMarkers,
-} from '../../src/core/markers';
+import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END, splitByMarkers } from '../../src/core/markers';
+import { currentOs } from '../../src/core/paths';
 import { getSyncFailureReport } from '../../src/core/project/engine';
-import {
-  CODEX_MCP_TOML_BEGIN,
-  CODEX_MCP_TOML_END,
-} from '../../src/core/project/projectors/codex';
-import { realHost } from '../../src/infra/real-host';
+import { CODEX_MCP_TOML_BEGIN, CODEX_MCP_TOML_END } from '../../src/core/project/projectors/codex';
 import type { Host } from '../../src/infra/host';
+import { realHost } from '../../src/infra/real-host';
 
 const OS = currentOs();
 const VERSION = 'test-0.1.0';
@@ -188,7 +181,12 @@ describe('四 target 全量 sync（§8.7 投影矩阵）', () => {
     const rendered = dry.targets[0]?.items[0]?.content as string;
     expect(rendered.length).toBeGreaterThan(0);
 
-    const result = await runSync({ host: ws.host, cwd: ws.root, os: OS, agentforgeVersion: VERSION });
+    const result = await runSync({
+      host: ws.host,
+      cwd: ws.root,
+      os: OS,
+      agentforgeVersion: VERSION,
+    });
     expect(result.targets.map((t) => t.targetId)).toEqual(['opencode', 'codex', 'claude', 'pi']);
     expect(result.skippedTargets).toEqual([]);
     expect(result.warnings).toEqual([]);
@@ -236,12 +234,24 @@ describe('四 target 全量 sync（§8.7 投影矩阵）', () => {
     // 两个主规则文件的 marker 外加用户内容
     const agentsV1 = await readFile(ws.agentsMd, 'utf8');
     const claudeV1 = await readFile(ws.claudeMd, 'utf8');
-    await writeFile(ws.agentsMd, `# AGENTS 用户开头\n\n${agentsV1}<!-- AGENTS 尾部备注 -->\n`, 'utf8');
-    await writeFile(ws.claudeMd, `# CLAUDE 用户开头\n\n${claudeV1}<!-- CLAUDE 尾部备注 -->\n`, 'utf8');
+    await writeFile(
+      ws.agentsMd,
+      `# AGENTS 用户开头\n\n${agentsV1}<!-- AGENTS 尾部备注 -->\n`,
+      'utf8',
+    );
+    await writeFile(
+      ws.claudeMd,
+      `# CLAUDE 用户开头\n\n${claudeV1}<!-- CLAUDE 尾部备注 -->\n`,
+      'utf8',
+    );
 
     // SoT custom 层增加内容（渲染结果变化）
     await mkdir(path.join(ws.sotRoot, 'custom'), { recursive: true });
-    await writeFile(path.join(ws.sotRoot, 'custom', 'extra.md'), '## 额外约定\n- 测试追加规则\n', 'utf8');
+    await writeFile(
+      path.join(ws.sotRoot, 'custom', 'extra.md'),
+      '## 额外约定\n- 测试追加规则\n',
+      'utf8',
+    );
 
     await runSync({ host: ws.host, cwd: ws.root, os: OS, agentforgeVersion: VERSION });
 
@@ -284,16 +294,16 @@ describe('MCP servers 配置后的投影（§8.3/§8.4/§8.5/§8.6 管理键）'
     // 预置用户配置（验证未知键保留 / 深合并不覆盖）
     await writeFile(
       ws.opencodeJson,
-      JSON.stringify(
+      `${JSON.stringify(
         { theme: 'dark', mcp: { fs: { type: 'local', command: ['old'], enabled: false } } },
         null,
         2,
-      ) + '\n',
+      )}\n`,
       'utf8',
     );
     await writeFile(
       ws.mcpJson,
-      JSON.stringify({ otherKey: [1, 2], mcpServers: { fs: { command: 'old' } } }, null, 2) + '\n',
+      `${JSON.stringify({ otherKey: [1, 2], mcpServers: { fs: { command: 'old' } } }, null, 2)}\n`,
       'utf8',
     );
     await mkdir(path.join(ws.root, '.codex'), { recursive: true });
@@ -532,7 +542,9 @@ describe.skipIf(!isPosix || isRoot)('真实只读 target 目录（POSIX chmod 05
 
     const env: NodeJS.ProcessEnv = { ...process.env };
     for (const key of Object.keys(env)) {
-      if (key.toUpperCase().startsWith('AGF_')) delete env[key];
+      if (key.toUpperCase().startsWith('AGF_')) {
+        delete env[key];
+      }
     }
     env.USERPROFILE = home;
     env.HOME = home;
@@ -618,7 +630,9 @@ describe.skipIf(!isPosix || isRoot)('真实只读 target 目录（POSIX chmod 05
       expect(await realHost.exists(path.join(root, 'CLAUDE.md'))).toBe(true);
       expect(await realHost.exists(path.join(piDir, 'settings.json'))).toBe(false);
 
-      const meta = JSON.parse(await readFile(path.join(root, '.agentforge', 'sync-meta.json'), 'utf8')) as {
+      const meta = JSON.parse(
+        await readFile(path.join(root, '.agentforge', 'sync-meta.json'), 'utf8'),
+      ) as {
         targets: Record<string, unknown>;
       };
       expect(Object.keys(meta.targets).sort()).toEqual(['claude', 'codex', 'opencode']);

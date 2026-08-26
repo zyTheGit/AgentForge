@@ -15,15 +15,15 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
+import { atomicWrite, mkdirp } from '../infra/fsutil';
 import type { Host } from '../infra/host';
 import { realHost } from '../infra/real-host';
-import { atomicWrite, mkdirp } from '../infra/fsutil';
 import { HabitsSchema } from './habits';
-import { ProfileSchema } from './profile';
 import { LearningSchema } from './learning';
+import { ManifestSchema } from './manifest';
+import { ProfileSchema } from './profile';
 import { SourcesFileSchema } from './sources';
 import { SyncMetaSchema } from './sync-meta';
-import { ManifestSchema } from './manifest';
 
 /** Spec §4 命名空间前缀。 */
 const SCHEMA_BASE_ID = 'https://agentforge.dev/schema/';

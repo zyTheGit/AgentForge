@@ -12,12 +12,12 @@ import {
   buildCustomContent,
   buildImportDetected,
   hasAnySuggestion,
+  type ImportBlock,
+  type ImportSuggestions,
   identifyImportFile,
   importTimestamp,
   parseImportedFile,
   splitMarkdownBlocks,
-  type ImportBlock,
-  type ImportSuggestions,
 } from '../../src/core/importer/importer';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../src/core/markers';
 

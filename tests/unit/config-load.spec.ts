@@ -4,9 +4,6 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ConfigError, ExitCode } from '../../src/core/errors';
-import type { ProfileInput } from '../../src/schema';
-import { HabitsSchema, ProfileSchema } from '../../src/schema';
 import {
   loadHabits,
   loadJson,
@@ -14,6 +11,9 @@ import {
   loadSourcesFile,
   loadYaml,
 } from '../../src/core/config/load';
+import { ConfigError, ExitCode } from '../../src/core/errors';
+import type { ProfileInput } from '../../src/schema';
+import { HabitsSchema, ProfileSchema } from '../../src/schema';
 import { createFakeHost } from './test-utils';
 
 const SOT = path.resolve('C:\\soT');
@@ -44,10 +44,7 @@ describe('loadYaml / loadProfile / loadHabits', () => {
 
   it('合法 YAML → 返回原始对象（不填充默认值，保留"未设置"语义供合并层）', async () => {
     const host = createFakeHost();
-    host.files.set(
-      PROFILE_PATH,
-      ['version: 1', 'scope: project', 'targets: [claude]'].join('\n'),
-    );
+    host.files.set(PROFILE_PATH, ['version: 1', 'scope: project', 'targets: [claude]'].join('\n'));
     const profile = await loadProfile(host, SOT);
     expect(profile).toEqual({ version: 1, scope: 'project', targets: ['claude'] });
     // 未声明的 merge/skills 等保持 undefined（区别于"显式设置为默认值"）
@@ -112,10 +109,7 @@ describe('loadYaml / loadProfile / loadHabits', () => {
 
   it('多 issue 汇总：一次报出全部问题', async () => {
     const host = createFakeHost();
-    host.files.set(
-      PROFILE_PATH,
-      'targets: []\nprojection:\n  line_ending: cr\n',
-    );
+    host.files.set(PROFILE_PATH, 'targets: []\nprojection:\n  line_ending: cr\n');
     const err = await expectConfigError(loadProfile(host, SOT));
     expect(err.message).toContain('共 2 处问题');
     expect(err.message).toContain('targets');

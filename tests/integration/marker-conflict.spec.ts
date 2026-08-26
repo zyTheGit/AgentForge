@@ -10,23 +10,22 @@
  *    fault-injection 已由 doctor-checks.spec 覆盖）。
  */
 import { spawnSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-
-import { runInit } from '../../src/commands/init';
-import { runSync } from '../../src/commands/sync';
 import { runDoctor } from '../../src/commands/doctor';
+import { runInit } from '../../src/commands/init';
 import { runStatus } from '../../src/commands/status';
-import { currentOs } from '../../src/core/paths';
+import { runSync } from '../../src/commands/sync';
 import { ConflictError, ExitCode, toExitCode } from '../../src/core/errors';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END, splitByMarkers } from '../../src/core/markers';
-import { realHost } from '../../src/infra/real-host';
+import { currentOs } from '../../src/core/paths';
 import type { Host } from '../../src/infra/host';
+import { realHost } from '../../src/infra/real-host';
 
 const OS = currentOs();
 const VERSION = 'test-0.1.0';
@@ -303,43 +302,48 @@ describe('aforge sync 冲突 / --force / doctor（子进程端到端）', () => 
 const isPosix = process.platform !== 'win32';
 const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 
-describe.skipIf(!isPosix || isRoot)('真实只读项目目录 doctor → 退出码 4（POSIX chmod 0555）', () => {
-  it('init 后项目目录去写权限 → doctor 不可写 error(4)，退出码 4（§9/§6.1）', async () => {
-    const base = await mkdtemp(path.join(tmpdir(), 'aforge-doctor-ro-'));
-    const root = path.join(base, 'proj');
-    const home = path.join(base, 'home');
-    await mkdir(root, { recursive: true });
-    await mkdir(home, { recursive: true });
+describe.skipIf(!isPosix || isRoot)(
+  '真实只读项目目录 doctor → 退出码 4（POSIX chmod 0555）',
+  () => {
+    it('init 后项目目录去写权限 → doctor 不可写 error(4)，退出码 4（§9/§6.1）', async () => {
+      const base = await mkdtemp(path.join(tmpdir(), 'aforge-doctor-ro-'));
+      const root = path.join(base, 'proj');
+      const home = path.join(base, 'home');
+      await mkdir(root, { recursive: true });
+      await mkdir(home, { recursive: true });
 
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    for (const key of Object.keys(env)) {
-      if (key.toUpperCase().startsWith('AGF_')) delete env[key];
-    }
-    env.USERPROFILE = home;
-    env.HOME = home;
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      for (const key of Object.keys(env)) {
+        if (key.toUpperCase().startsWith('AGF_')) {
+          delete env[key];
+        }
+      }
+      env.USERPROFILE = home;
+      env.HOME = home;
 
-    try {
-      const init = spawnSync(process.execPath, ['--import', tsxImport, mainTs, 'init'], {
-        cwd: root,
-        env,
-        encoding: 'utf8',
-      });
-      expect(init.status).toBe(0);
+      try {
+        const init = spawnSync(process.execPath, ['--import', tsxImport, mainTs, 'init'], {
+          cwd: root,
+          env,
+          encoding: 'utf8',
+        });
+        expect(init.status).toBe(0);
 
-      await chmod(root, 0o555); // 项目目录去写权限：目标目录探针失败
+        await chmod(root, 0o555); // 项目目录去写权限：目标目录探针失败
 
-      const doctor = spawnSync(process.execPath, ['--import', tsxImport, mainTs, 'doctor'], {
-        cwd: root,
-        env,
-        encoding: 'utf8',
-      });
-      expect(doctor.status).toBe(4);
-      expect(doctor.stdout).toContain('[FAIL]');
-      expect(doctor.stdout).toContain('不可写');
-      expect(doctor.stdout).toContain('exit code 4');
-    } finally {
-      await chmod(root, 0o755); // 恢复以便清理
-      await rm(base, { recursive: true, force: true });
-    }
-  }, 120_000);
-});
+        const doctor = spawnSync(process.execPath, ['--import', tsxImport, mainTs, 'doctor'], {
+          cwd: root,
+          env,
+          encoding: 'utf8',
+        });
+        expect(doctor.status).toBe(4);
+        expect(doctor.stdout).toContain('[FAIL]');
+        expect(doctor.stdout).toContain('不可写');
+        expect(doctor.stdout).toContain('exit code 4');
+      } finally {
+        await chmod(root, 0o755); // 恢复以便清理
+        await rm(base, { recursive: true, force: true });
+      }
+    }, 120_000);
+  },
+);

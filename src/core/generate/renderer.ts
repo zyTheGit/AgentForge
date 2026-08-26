@@ -48,9 +48,7 @@ export async function validateTemplate(source: string, label = '模板'): Promis
 
 /** 渲染结果规范化：剥首部空行与尾部全部空白；非空统一单个 \n 结尾。 */
 function normalizeRendered(rendered: string): string {
-  const stripped = rendered
-    .replace(/^(?:[ \t]*\r?\n)+/, '')
-    .replace(/\s+$/, '');
+  const stripped = rendered.replace(/^(?:[ \t]*\r?\n)+/, '').replace(/\s+$/, '');
   return stripped === '' ? '' : `${stripped}\n`;
 }
 

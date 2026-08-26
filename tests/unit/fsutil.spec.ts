@@ -2,14 +2,22 @@
  * fsutil 单测（Spec §2.5）：原子写入（含只读目标）/ 换行规范化 / BOM / sha256 / mkdirp。
  * 真实 IO 用 realHost + 系统临时目录；权限失败分支用 fake host 注入。
  */
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { PermissionError } from '../../src/core/errors';
-import { atomicWrite, mkdirp, normalizeLineEnding, sha256Hex, stripBom } from '../../src/infra/fsutil';
-import { realHost } from '../../src/infra/real-host';
+import {
+  atomicWrite,
+  ensureTrailingNewline,
+  listDirSafe,
+  mkdirp,
+  normalizeLineEnding,
+  sha256Hex,
+  stripBom,
+} from '../../src/infra/fsutil';
 import type { Host } from '../../src/infra/host';
+import { realHost } from '../../src/infra/real-host';
 import { createFakeHost, errnoError } from './test-utils';
 
 const tmpRoot = mkdtempSync(path.join(tmpdir(), 'agf-fsutil-'));
@@ -60,6 +68,26 @@ describe('normalizeLineEnding（Spec §2.5 LF/CRLF 往返）', () => {
   it('空串与无换行内容不受影响', () => {
     expect(normalizeLineEnding('', 'crlf')).toBe('');
     expect(normalizeLineEnding('abc', 'crlf')).toBe('abc');
+  });
+});
+
+describe('ensureTrailingNewline（写盘内容末尾换行，promote/store 等调用点共用）', () => {
+  it('无尾换行 → 补一个 \\n', () => {
+    expect(ensureTrailingNewline('version: 1')).toBe('version: 1\n');
+  });
+
+  it('已有尾换行 → 原样返回（不重复追加）', () => {
+    expect(ensureTrailingNewline('version: 1\n')).toBe('version: 1\n');
+    expect(ensureTrailingNewline('a\n\n')).toBe('a\n\n');
+  });
+
+  it('空串 → 原样返回（不制造孤立空行）', () => {
+    expect(ensureTrailingNewline('')).toBe('');
+  });
+
+  it('CRLF 结尾已含 \\n 不追加；孤立 \\r 结尾按无尾换行补 \\n', () => {
+    expect(ensureTrailingNewline('a\r\n')).toBe('a\r\n');
+    expect(ensureTrailingNewline('a\r')).toBe('a\r\n');
   });
 });
 
@@ -223,5 +251,44 @@ describe('mkdirp', () => {
     expect(caught).toBeInstanceOf(PermissionError);
     expect((caught as PermissionError).code).toBe(4);
     expect((caught as PermissionError).hint).toBeTruthy();
+  });
+});
+
+describe('listDirSafe', () => {
+  it('目录存在：透传 host.listDir 结果', async () => {
+    const host = createFakeHost();
+    host.files.set('C:\\sot\\templates/a.md', '');
+    host.files.set('C:\\sot\\templates/b.md', '');
+    expect(await listDirSafe(host, 'C:\\sot\\templates')).toEqual(['a.md', 'b.md']);
+  });
+
+  it('目录不存在（listDir 抛 ENOENT）→ []（"目录未创建"是正常态）', async () => {
+    const base = createFakeHost();
+    const failing: Host = {
+      ...base,
+      listDir: async () => {
+        throw errnoError('ENOENT', 'no such directory');
+      },
+    };
+    expect(await listDirSafe(failing, 'C:\\sot\\missing')).toEqual([]);
+  });
+
+  it('不可读（EACCES）同样降级为 []（不抛权限错误）', async () => {
+    const base = createFakeHost();
+    const failing: Host = {
+      ...base,
+      listDir: async () => {
+        throw errnoError('EACCES', 'permission denied');
+      },
+    };
+    expect(await listDirSafe(failing, 'C:\\locked')).toEqual([]);
+  });
+
+  it('返回可变数组：调用方可直接 sort（三处调用点依赖此签名）', async () => {
+    const host = createFakeHost();
+    host.files.set('C:\\d/b', '');
+    host.files.set('C:\\d/a', '');
+    const entries = await listDirSafe(host, 'C:\\d');
+    expect(entries.sort()).toEqual(['a', 'b']);
   });
 });

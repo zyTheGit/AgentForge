@@ -37,14 +37,18 @@ export interface EnvSnapshot {
 /** 读取环境变量：全空白视为未设置。 */
 function rawEnv(host: Host, key: string): string | undefined {
   const value = host.env(key);
-  if (value === undefined) return undefined;
+  if (value === undefined) {
+    return undefined;
+  }
   const trimmed = value.trim();
   return trimmed === '' ? undefined : trimmed;
 }
 
 /** CI 真值检测：undefined/空/false/0（大小写不敏感）→ false，其余 → true。 */
 function isTruthyCi(value: string | undefined): boolean {
-  if (value === undefined) return false;
+  if (value === undefined) {
+    return false;
+  }
   const v = value.trim().toLowerCase();
   return !(v === '' || v === 'false' || v === '0');
 }

@@ -9,26 +9,22 @@
  *   （AGF_SCOPE > project 在用 > user 在用）自己的 profile.yaml。
  */
 import type { Command } from 'commander';
-import { readEnv } from '../core/env';
-import { currentOs, resolveProjectSoT, resolveUserSoT, type OsContext } from '../core/paths';
 import { resolveEffectiveConfig } from '../core/config/defaults';
 import { resolveWriteTargetLayer } from '../core/config/target-layer';
+import { readEnv } from '../core/env';
+import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
 import {
   listTemplates,
-  setTemplateEnabled,
   type SetTemplateResult,
+  setTemplateEnabled,
   type TemplateContext,
   type TemplateListItem,
 } from '../core/sources/template';
-import type { Host } from '../infra/host';
-import { realHost } from '../infra/real-host';
+import { type CommandContext, defaultCommandContext, printJson } from './context';
+import { resolveJsonFlag } from './flags';
 
 /** 命令上下文。 */
-export interface TemplateCommandContext {
-  readonly host: Host;
-  readonly cwd: string;
-  readonly os: OsContext;
-}
+export type TemplateCommandContext = CommandContext;
 
 /**
  * 构造 list 上下文：effectiveTemplates 来自 resolveEffectiveConfig 的合并
@@ -69,25 +65,22 @@ export async function runSetTemplateEnabled(
 
 /** 单行模板摘要（ASCII；builtin 项加 always-rendered 注记）。 */
 function templateLine(item: TemplateListItem): string {
-  const origin =
-    item.origin === 'source' ? `source:${item.sourceId ?? '?'}` : item.origin;
+  const origin = item.origin === 'source' ? `source:${item.sourceId ?? '?'}` : item.origin;
   const note = item.origin === 'builtin' ? '  (always rendered, Spec 5.2)' : '';
   return `  ${item.id}  [${origin}]  ${item.enabled ? 'enabled' : 'disabled'}${note}`;
 }
 
 export function registerTemplateCommand(program: Command): void {
-  const cmd = program
-    .command('template')
-    .description('list / enable / disable rule templates');
+  const cmd = program.command('template').description('list / enable / disable rule templates');
 
   cmd
     .command('list')
     .description('list builtin + SoT + source templates with enabled state')
     .option('--json', 'machine-readable output (Spec 6.2)')
-    .action(async (options: { json?: boolean }) => {
-      const items = await runTemplateList({ host: realHost, cwd: process.cwd(), os: currentOs() });
-      if (options.json) {
-        console.log(JSON.stringify(items, null, 2));
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const items = await runTemplateList(defaultCommandContext());
+      if (resolveJsonFlag(command, options.json)) {
+        printJson(items);
         return;
       }
       const lines = items.map(templateLine);
@@ -98,12 +91,12 @@ export function registerTemplateCommand(program: Command): void {
   cmd
     .command('enable <id>')
     .description('enable a template (appends to profile.templates)')
-    .action(async (id: string) => {
-      const result = await runSetTemplateEnabled(
-        { host: realHost, cwd: process.cwd(), os: currentOs() },
-        id,
-        true,
-      );
+    .action(async (id: string, _options: unknown, command: Command) => {
+      const result = await runSetTemplateEnabled(defaultCommandContext(), id, true);
+      if (resolveJsonFlag(command)) {
+        printJson(result);
+        return;
+      }
       console.log(
         [
           result.changed
@@ -118,12 +111,12 @@ export function registerTemplateCommand(program: Command): void {
   cmd
     .command('disable <id>')
     .description('disable a template (removes from profile.templates)')
-    .action(async (id: string) => {
-      const result = await runSetTemplateEnabled(
-        { host: realHost, cwd: process.cwd(), os: currentOs() },
-        id,
-        false,
-      );
+    .action(async (id: string, _options: unknown, command: Command) => {
+      const result = await runSetTemplateEnabled(defaultCommandContext(), id, false);
+      if (resolveJsonFlag(command)) {
+        printJson(result);
+        return;
+      }
       console.log(
         [
           result.changed

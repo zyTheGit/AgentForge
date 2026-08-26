@@ -1,12 +1,13 @@
 /**
- * 文件系统工具：原子写入 / 换行规范化 / BOM / sha256 / mkdirp（Spec §2.5）。
+ * 文件系统工具：原子写入 / 换行规范化（含尾换行补齐）/ BOM / sha256 / mkdirp /
+ * 目录列举降级（listDirSafe）（Spec §2.5）。
  *
  * 实现策略：统一经注入的 Host 执行副作用（任务要求"经 Host 注入"），
  * 仅 node:crypto（sha256 / 随机后缀）为纯计算直接使用。
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { PermissionError } from '../core/errors';
 import type { LineEnding } from '../core/env';
+import { PermissionError } from '../core/errors';
 import type { Host } from './host';
 
 /** 剥离 UTF-8 BOM（U+FEFF）。无 BOM 时原样返回。 */
@@ -18,6 +19,33 @@ export function stripBom(content: string): string {
 export function normalizeLineEnding(content: string, eol: LineEnding): string {
   const lf = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   return eol === 'crlf' ? lf.replace(/\n/g, '\r\n') : lf;
+}
+
+/**
+ * 补齐末尾换行（文本文件惯例：写盘内容以换行结尾，避免 diff 出现 "\ No newline"）。
+ * 已以 `\n` 结尾 → 原样返回；空串视为"无内容"原样返回（不制造孤立空行）。
+ * 供各写盘调用点复用（原先在 promote/store/init/import/sources 各自内联重复实现）。
+ */
+export function ensureTrailingNewline(text: string): string {
+  if (text === '' || text.endsWith('\n')) {
+    return text;
+  }
+  return `${text}\n`;
+}
+
+/**
+ * 列出目录的直接子项；目录不存在 / 不可读 → `[]`。
+ *
+ * 「目录未创建」在两层 SoT 语义下是正常态（templates\ / skills\ / custom\ 都
+ * 是按需创建），故不区分 ENOENT 与其它读取失败，一律降级为空清单。
+ * 返回可变数组：调用方常直接 `.sort()`（Host.listDir 已返回新数组，无别名风险）。
+ */
+export async function listDirSafe(host: Host, dir: string): Promise<string[]> {
+  try {
+    return await host.listDir(dir);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -34,7 +62,9 @@ export function sha256Hex(content: string): string {
  * 导出供读路径（writer 读现有投影文件）与写路径共用同一判定。
  */
 export function isPermissionErrno(err: unknown): boolean {
-  if (typeof err !== 'object' || err === null || !('code' in err)) return false;
+  if (typeof err !== 'object' || err === null || !('code' in err)) {
+    return false;
+  }
   const code = (err as { code?: unknown }).code;
   return code === 'EPERM' || code === 'EACCES' || code === 'EROFS';
 }

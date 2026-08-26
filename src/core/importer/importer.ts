@@ -16,6 +16,7 @@
  */
 import { normalizeLineEnding } from '../../infra/fsutil';
 import { splitByMarkers } from '../markers';
+import { toPosixSeparators } from '../paths';
 
 /** Node 版本管理器关键词（§7.7-3；命中顺序即优先级序）。 */
 export const NODE_MANAGER_KEYWORDS = ['fnm', 'nvm', 'volta', 'mise'] as const;
@@ -43,10 +44,14 @@ export type ImportFileKind = 'AGENTS.md' | 'CLAUDE.md';
 
 /** 按文件名识别导入类型：basename 大小写不敏感匹配；其余 → undefined。 */
 export function identifyImportFile(fileName: string): ImportFileKind | undefined {
-  const base = fileName.replaceAll('\\', '/').split('/').pop() ?? '';
+  const base = toPosixSeparators(fileName).split('/').pop() ?? '';
   const lower = base.toLowerCase();
-  if (lower === 'agents.md') return 'AGENTS.md';
-  if (lower === 'claude.md') return 'CLAUDE.md';
+  if (lower === 'agents.md') {
+    return 'AGENTS.md';
+  }
+  if (lower === 'claude.md') {
+    return 'CLAUDE.md';
+  }
   return undefined;
 }
 

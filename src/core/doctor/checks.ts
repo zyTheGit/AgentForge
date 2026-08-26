@@ -10,7 +10,8 @@
  * 5. 未解析的 template id（error(2)——sync 将失败）；
  * 6. OneDrive 检测（§2.1.1 → warn）；
  * 7. 声明值与 detected 不一致（§4.1：声明优先，仅提示 → warn）；
- * 8. 现有 merge_json 投影损坏（硬项 error(3)，soft 项 warn——§8.2/§8.6）。
+ * 8. 现有 merge_json 投影损坏（硬项 error(3)，soft 项 warn——§8.2/§8.6）；
+ * 9. profile.skills.on_demand 清单（信息项：MVP 只登记不物化，§4.2 注记）。
  *
  * 设计原则：
  * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题；
@@ -19,21 +20,28 @@
  * - 渲染路径与 sync 共用（engine.renderRulesMd，单一事实源）；
  * - 聚合退出码见 doctorExitCode（Permission 4 > Conflict 3 > 其他 error；仅 warn → 0）。
  */
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
-import type { Host } from '../../infra/host';
 import { sha256Hex } from '../../infra/fsutil';
+import type { Host } from '../../infra/host';
+import type { SyncMeta } from '../../schema';
+import { type EffectiveConfig, resolveEffectiveConfig } from '../config/defaults';
+import { HABITS_FILE, loadHabits, loadProfile, PROFILE_FILE } from '../config/load';
 import type { EnvSnapshot, Scope } from '../env';
-import { detectOneDrive, resolveProjectSoT, resolveUserSoT, type OsContext } from '../paths';
 import { AgentForgeError, ExitCode } from '../errors';
-import { HABITS_FILE, PROFILE_FILE, loadHabits, loadProfile } from '../config/load';
-import { resolveEffectiveConfig, type EffectiveConfig } from '../config/defaults';
 import { resolveTemplate } from '../generate/resolver';
 import { renderedSectionHash, splitByMarkers } from '../markers';
-import { readSyncMeta, SYNC_META_FILE } from '../project/sync-meta';
-import { renderRulesMd } from '../project/engine';
+import {
+  detectOneDrive,
+  type OsContext,
+  resolveProjectSoT,
+  resolveUserSoT,
+  SKILLS_DIRNAME,
+} from '../paths';
+import { inspectSyncResiduals, renderRulesMd, type SyncResidual } from '../project/engine';
 import { projectorRegistry } from '../project/projectors/registry';
+import { readSyncMeta, SYNC_META_FILE } from '../project/sync-meta';
 import type { ProjectContext } from '../project/types';
-import type { SyncMeta } from '../../schema';
 
 /** 单项检查结果级别（人类可读输出映射为 OK / WARN / FAIL，纯 ASCII）。 */
 export type DoctorLevel = 'ok' | 'warn' | 'error';
@@ -117,7 +125,15 @@ function detectedManagerOf(
   return typeof manager === 'string' ? manager : undefined;
 }
 
-/** doctor 内部的 plan ctx 构造（与 engine.syncOnce 的 ctx 同构；dryRun: true 表诊断不写）。 */
+/**
+ * doctor 内部的 plan ctx 构造（与 engine.syncOnce 的 ctx 同构；dryRun: true 表诊断不写）。
+ *
+ * markerMode 必须注入（P2 修复）：缺失时 ProjectContext 按历史默认
+ * `replace_between_markers` 处理，projector 的主规则动作恒为 merge_marker；而
+ * 用户配置 `marker_mode: none` 时 sync 实际走整文件 write（types.mainRuleAction），
+ * 两侧不一致会让 doctor 的 marker 区间比对（checkProjectionHash）在无 marker 的
+ * 投影上误报"marker 被移除"。engine / status / init 三处 plan ctx 均已注入，此处对齐。
+ */
 function buildPlanCtx(
   os: OsContext,
   scope: Scope,
@@ -139,6 +155,7 @@ function buildPlanCtx(
     lineEnding: config.profile.projection.line_ending,
     markerBegin: config.profile.projection.marker_begin,
     markerEnd: config.profile.projection.marker_end,
+    markerMode: config.profile.projection.marker_mode,
     env,
   };
 }
@@ -150,18 +167,35 @@ interface ProbeResult {
 
 /**
  * 目录可写性探测：mkdirp（§7.3-7 目录自动创建语义——sync 同样会创建）→
- * 写入探针文件 → 删除。任何失败均视为不可写（探针写入失败的场景，
+ * 写入探针文件 → 删除。任何**写入**失败均视为不可写（探针写入失败的场景，
  * 实际投影写入同样会失败）。
+ *
+ * P3 修复：
+ * - 探针删除放进 finally——rm 失败或写入抛错时都不留残留文件；且 rm 自身失败
+ *   不再改变可写判定（能写入即证明可写，清理失败只是垃圾文件）；
+ * - 文件名加随机后缀（参照 fsutil.atomicWrite 的 randomBytes 做法）：仅用毫秒
+ *   时间戳时并发 doctor 会撞名并互删对方探针，导致误判不可写。
  */
 async function probeWritable(host: Host, dir: string): Promise<ProbeResult> {
+  let probe: string | undefined;
   try {
     await host.mkdirp(dir);
-    const probe = path.join(dir, `.agf-doctor-probe-${host.now().getTime()}`);
+    probe = path.join(
+      dir,
+      `.agf-doctor-probe-${host.now().getTime()}-${randomBytes(6).toString('hex')}`,
+    );
     await host.writeFile(probe, '');
-    await host.rm(probe);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: errMessage(err) };
+  } finally {
+    if (probe !== undefined) {
+      try {
+        await host.rm(probe);
+      } catch {
+        // 清理失败不改变可写判定（随机后缀保证不会误伤并发 doctor 的探针）
+      }
+    }
   }
 }
 
@@ -249,6 +283,47 @@ async function checkProjectionHash(
  *
  * @returns 结构化报告（results + 聚合退出码）。本函数不打印、不因单项失败中断。
  */
+/**
+ * 事务残留 → 诊断结果（§9；level/hint 的取舍见下）。
+ *
+ * `lock-live` 报 ok 而非 warn：另一个 sync 正在写入是**正常并发**，报警会诱导用户
+ * 去删别人正在用的锁。`backup-failed` 的 hint 绝不能提"删掉即可"——那是回滚不完整
+ * 时用户手上唯一的原文副本，必须先核对再由用户自己处置。
+ */
+async function residualResults(
+  host: Host,
+  sotRoot: string,
+  os: OsContext,
+): Promise<DoctorCheckResult[]> {
+  const residuals = await inspectSyncResiduals(host, sotRoot, os);
+  if (residuals.length === 0) {
+    return [
+      { section: 'consistency', level: 'ok', item: 'residuals', detail: `无事务残留: ${sotRoot}` },
+    ];
+  }
+  return residuals.map((residual) => ({
+    section: 'consistency' as const,
+    level: residual.kind === 'lock-live' ? ('ok' as const) : ('warn' as const),
+    item: `residual/${residual.kind}`,
+    detail: `${residual.detail}\n  ${residual.path}`,
+    hint: residualHint(residual),
+  }));
+}
+
+/** 每类残留的可操作提示（`lock-live` 无需动作 → undefined）。 */
+function residualHint(residual: SyncResidual): string | undefined {
+  switch (residual.kind) {
+    case 'lock-live':
+      return undefined;
+    case 'lock-stale':
+      return '确认无 aforge 进程在运行后删除该锁目录；下次 sync 也会在超过陈旧阈值时自行抢占';
+    case 'journal-pending':
+      return '下次 aforge sync 会据此日志回滚上次被中断的写入，通常无需手工处理';
+    case 'backup-failed':
+      return '这是上次回滚未能恢复的文件的唯一备份副本：请先与当前投影文件逐一核对，确认无需恢复后再自行删除该目录';
+  }
+}
+
 export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport> {
   const results: DoctorCheckResult[] = [];
   const { host, env, os, cwd } = opts;
@@ -317,6 +392,11 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
             hint: '检查目录写权限（必要时以管理员身份运行），或把 SoT 移到用户可写位置',
           },
     );
+  }
+
+  // ---- 事务残留（锁 / 未提交 journal / 回滚失败保留的备份；只读诊断，不清理）----
+  for (const dir of sotDirs) {
+    results.push(...(await residualResults(host, dir, os)));
   }
 
   // ---- 坏 YAML 检查（§9：逐文件报告损坏的 habits / profile）----
@@ -445,6 +525,20 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
       }
     }
 
+    // ---- profile.skills.on_demand：MVP 只登记不物化（Spec §4.2 注记）----
+    // 与 status 的展示口径一致（同一句 "declared only - not projected in MVP"），
+    // 让"声明了但不会被投影"这件事在 doctor 里也可见；纯信息项，恒 ok（不影响退出码）
+    const onDemandSkills = config.profile.skills.on_demand ?? [];
+    results.push({
+      section: 'config',
+      level: 'ok',
+      item: 'skills-on-demand',
+      detail:
+        onDemandSkills.length === 0
+          ? 'profile.skills.on_demand 未声明'
+          : `${onDemandSkills.join(', ')} (declared only - not projected in MVP)`,
+    });
+
     // ---- sync-meta 读取（损坏 → error(2)；不存在 → 信息性 ok）----
     const sotRoot = config.effectiveScope === 'project' ? projectSoTRoot : userRootForLoad;
     let syncMeta: SyncMeta | null = null;
@@ -481,8 +575,7 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
     }
 
     // ---- 有效 scope 的投影 rootDir（user scope 需要用户目录，§8.5）----
-    const rootDir =
-      config.effectiveScope === 'project' ? cwd : env.userProfile;
+    const rootDir = config.effectiveScope === 'project' ? cwd : env.userProfile;
     if (rootDir === undefined || rootDir === '') {
       results.push({
         section: 'consistency',
@@ -655,10 +748,10 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
   // ---- §9 symlink 失败检查：扫描 SoT skills/ 目录，检测断开的 symlink → warn ----
   const skillsDirs: string[] = [];
   if (userSoTRoot !== undefined) {
-    skillsDirs.push(path.join(userSoTRoot, 'skills'));
+    skillsDirs.push(path.join(userSoTRoot, SKILLS_DIRNAME));
   }
-  skillsDirs.push(path.join(projectSoTRoot, 'skills'));
-  let brokenSymlinks: string[] = [];
+  skillsDirs.push(path.join(projectSoTRoot, SKILLS_DIRNAME));
+  const brokenSymlinks: string[] = [];
   for (const dir of skillsDirs) {
     let entries: string[];
     try {

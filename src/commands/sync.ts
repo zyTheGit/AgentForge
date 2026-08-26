@@ -8,31 +8,32 @@
  *   结果摘要；--dry-run 明确标注且不落盘（含 sync-meta）；
  * - soft warning（§8.6 Pi MVP）随成功结果输出 warning 列表；
  * - 投影失败（已回滚）时打印失败汇总表（每 target 状态 + 回滚声明）后
- *   rethrow 原始错误——退出码 / message / hint 语义由 main.ts 统一出口保持。
+ *   rethrow 原始错误——退出码 / message / hint 语义由 main.ts 统一出口保持；
+ * - 回滚**未能全部恢复**时改用「rollback incomplete」措辞、前置未恢复清单、给出
+ *   保留下来的备份目录（`.agf-backup-failed-<ts>`），并把退出码抬升为
+ *   EXIT_CODE_ROLLBACK_INCOMPLETE(6)；
+ * - 事务设施级警告（崩溃恢复能力降级等）以 `crash recovery disabled` 前缀输出；
+ * - 同一 SoT 已有 sync 在写入（`.sync.lock/` 被占用）→ ConflictError(3)。
  *
  * 核心逻辑在 core/project/engine.syncOnce；本层只做参数解析与输出（纯 ASCII）。
  */
 import path from 'node:path';
 import type { Command } from 'commander';
 import { readEnv } from '../core/env';
-import { currentOs, type OsContext } from '../core/paths';
 import {
   getSyncFailureReport,
-  syncOnce,
   type SyncResult,
   type SyncTargetResult,
+  syncOnce,
 } from '../core/project/engine';
-import { dryRunItem } from '../core/project/writer';
 import { SYNC_META_FILE } from '../core/project/sync-meta';
-import type { Host } from '../infra/host';
-import { realHost } from '../infra/real-host';
+import { dryRunItem } from '../core/project/writer';
 import { VERSION } from '../version';
+import { type CommandContext, defaultCommandContext, printJson } from './context';
+import { resolveJsonFlag } from './flags';
 
 /** 命令上下文（host/os/cwd/版本注入；测试用真实临时目录 + realHost）。 */
-export interface SyncCommandContext {
-  readonly host: Host;
-  readonly cwd: string;
-  readonly os: OsContext;
+export interface SyncCommandContext extends CommandContext {
   readonly agentforgeVersion: string;
 }
 
@@ -46,7 +47,9 @@ export interface SyncCommandOptions {
 
 /** 解析 --targets：逗号分隔、trim、去空段；空串 → undefined（全量）。 */
 export function parseTargetsFilter(raw: string | undefined): string[] | undefined {
-  if (raw === undefined) return undefined;
+  if (raw === undefined) {
+    return undefined;
+  }
   const ids = raw
     .split(',')
     .map((s) => s.trim())
@@ -92,9 +95,15 @@ function targetSummaryLine(target: SyncTargetResult): string {
   const unchanged = target.statuses.filter((s) => s === 'unchanged').length;
   const warned = target.statuses.filter((s) => s === 'warning').length;
   const parts = [`${target.statuses.length} file(s)`];
-  if (written > 0) parts.push(`${written} written`);
-  if (unchanged > 0) parts.push(`${unchanged} unchanged`);
-  if (warned > 0) parts.push(`${warned} soft warning(s)`);
+  if (written > 0) {
+    parts.push(`${written} written`);
+  }
+  if (unchanged > 0) {
+    parts.push(`${unchanged} unchanged`);
+  }
+  if (warned > 0) {
+    parts.push(`${warned} soft warning(s)`);
+  }
   return `  ${target.targetId}: ${warned > 0 ? 'ok (warnings)' : 'ok'} (${parts.join(', ')})`;
 }
 
@@ -105,8 +114,25 @@ export function printSyncResult(result: SyncResult): void {
     : `aforge sync - scope: ${result.scope}`;
   const lines: string[] = [banner, ''];
 
+  if (result.recovered.length > 0) {
+    // 上次 sync 被强杀（SIGKILL / 断电）遗留的落盘备份已在本次取锁后恢复
+    lines.push('recovered from an interrupted previous sync:');
+    for (const entry of result.recovered) {
+      lines.push(
+        entry.restored
+          ? `  restored: ${entry.path}`
+          : `  NOT restored: ${entry.path}: ${entry.error ?? 'unknown error'}`,
+      );
+    }
+    lines.push('');
+  }
+
   for (const target of result.targets) {
     lines.push(...targetItemLines(target, result.dryRun));
+  }
+  if (result.gitignore !== null) {
+    // §4.2 projection.gitignore_generated：项目 .gitignore 的标记段（非 agent target）
+    lines.push(...targetItemLines(result.gitignore, result.dryRun));
   }
   for (const skipped of result.skippedTargets) {
     lines.push(`[${skipped}] skipped: projector not available in this version`);
@@ -114,11 +140,21 @@ export function printSyncResult(result: SyncResult): void {
 
   if (result.targets.length > 0) {
     lines.push('', 'target summary:', ...result.targets.map(targetSummaryLine));
+    if (result.gitignore !== null) {
+      lines.push(targetSummaryLine(result.gitignore));
+    }
   }
   if (result.warnings.length > 0) {
     lines.push('', 'warnings:');
     for (const warning of result.warnings) {
       lines.push(`  [${warning.targetId}] ${warning.path}: ${warning.message}`);
+    }
+  }
+  if (result.transactionWarnings.length > 0) {
+    // 事务设施级问题：崩溃恢复能力已失效 / 有备份被保留下来待人工核对
+    lines.push('', 'transaction warnings:');
+    for (const warning of result.transactionWarnings) {
+      lines.push(`  ${warning.message} (${warning.path})`);
     }
   }
 
@@ -137,16 +173,87 @@ export function printSyncResult(result: SyncResult): void {
   console.log(lines.join('\n'));
 }
 
-/** 投影失败汇总输出（§7.3-6：每 target 状态表 + 回滚声明；随后 rethrow 由上层统一报错）。 */
-function printFailureReport(err: unknown): void {
-  const report = getSyncFailureReport(err);
-  if (report === undefined) {
+// ---------------------------------------------------------------------------
+// 失败汇总输出与退出码（回滚未完成必须与「已完全回滚」区分）
+// ---------------------------------------------------------------------------
+
+/**
+ * 回滚未完成的退出码。
+ *
+ * Spec §6.1 的退出码表占用 0-5（0 成功 / 1 通用含部分投影失败回滚 / 2 配置 /
+ * 3 冲突 / 4 权限 / 5 离线），6 未占用，故取 6 表示「投影失败且回滚未能全部
+ * 恢复」——磁盘上留下了半新半旧的文件，严重度高于任何单一失败原因，脚本可据此
+ * 与「已完全回滚」（沿用原始错误码 1/3/4）区分并停止后续自动化步骤。
+ */
+export const EXIT_CODE_ROLLBACK_INCOMPLETE = 6;
+
+/** 退出码覆盖在错误对象上的附加键（非枚举属性，不影响既有错误语义）。 */
+const EXIT_CODE_OVERRIDE_KEY = 'agentforgeExitCodeOverride';
+
+/** 给错误附加退出码覆盖（main.ts 统一出口优先采用它）。 */
+export function attachExitCodeOverride(err: unknown, code: number): void {
+  if (typeof err !== 'object' || err === null) {
     return;
   }
+  try {
+    Object.defineProperty(err, EXIT_CODE_OVERRIDE_KEY, {
+      value: code,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  } catch {
+    // 附加失败则退回原始错误码（输出中的文案仍然如实说明回滚未完成）
+  }
+}
+
+/** 读取错误上的退出码覆盖（无 → undefined）。 */
+export function getExitCodeOverride(err: unknown): number | undefined {
+  if (typeof err === 'object' && err !== null && EXIT_CODE_OVERRIDE_KEY in err) {
+    const code = (err as Record<string, unknown>)[EXIT_CODE_OVERRIDE_KEY];
+    return typeof code === 'number' ? code : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * 失败汇总文本（纯函数，便于单测）。
+ *
+ * 首行按未恢复数量分支：全部恢复 → `all written files have been rolled back`；
+ * 存在未恢复 → `rollback incomplete - N file(s) could not be restored`，且把未恢复
+ * 清单**前置**（用户最需要先看到哪些文件还处于被改动状态），随后给出保留下来的
+ * 备份目录——「手工处理」的提示只有配上 sync 前的原文才有意义。
+ */
+export function formatFailureReport(report: {
+  readonly targetStatuses: readonly { readonly targetId: string; readonly status: string }[];
+  readonly rolledBack: readonly {
+    readonly path: string;
+    readonly restored: boolean;
+    readonly error?: string;
+  }[];
+  readonly preservedBackupDir?: string;
+}): string {
   const restored = report.rolledBack.filter((r) => r.restored).length;
   const failed = report.rolledBack.filter((r) => !r.restored);
 
-  const lines: string[] = ['aforge sync failed - all written files have been rolled back', ''];
+  const lines: string[] = [];
+  if (failed.length === 0) {
+    lines.push('aforge sync failed - all written files have been rolled back', '');
+  } else {
+    lines.push(
+      `aforge sync failed - rollback incomplete - ${failed.length} file(s) could not be restored`,
+      '',
+      'files left in a modified state (restore them manually before the next sync):',
+    );
+    for (const entry of failed) {
+      lines.push(`  ${entry.path}: ${entry.error ?? 'unknown error'}`);
+    }
+    lines.push('');
+    if (report.preservedBackupDir !== undefined) {
+      lines.push(`pre-sync backups kept for manual recovery: ${report.preservedBackupDir}`, '');
+    }
+  }
+
   lines.push('target summary:');
   for (const entry of report.targetStatuses) {
     if (entry.status === 'failed') {
@@ -157,12 +264,28 @@ function printFailureReport(err: unknown): void {
       lines.push(`  ${entry.targetId}: not started`);
     }
   }
+
   lines.push('');
-  lines.push(`rollback: ${restored} file(s) restored${failed.length > 0 ? `, ${failed.length} restore error(s)` : ''}`);
-  for (const entry of failed) {
-    lines.push(`  rollback failed: ${entry.path}: ${entry.error ?? 'unknown error'}`);
+  lines.push(
+    `rollback: ${restored} file(s) restored${failed.length > 0 ? `, ${failed.length} restore error(s)` : ''}`,
+  );
+  if (failed.length > 0) {
+    lines.push(`exit code: ${EXIT_CODE_ROLLBACK_INCOMPLETE} (rollback incomplete)`);
   }
-  console.error(lines.join('\n'));
+  return lines.join('\n');
+}
+
+/** 投影失败汇总输出（§7.3-6：每 target 状态表 + 回滚声明；随后 rethrow 由上层统一报错）。 */
+function printFailureReport(err: unknown): void {
+  const report = getSyncFailureReport(err);
+  if (report === undefined) {
+    return;
+  }
+  console.error(formatFailureReport(report));
+  if (report.rolledBack.some((r) => !r.restored)) {
+    // 回滚未完成：退出码抬升为 6（比原始错误更严重——磁盘上留下了半新半旧的文件）
+    attachExitCodeOverride(err, EXIT_CODE_ROLLBACK_INCOMPLETE);
+  }
 }
 
 export function registerSyncCommand(program: Command): void {
@@ -171,30 +294,20 @@ export function registerSyncCommand(program: Command): void {
     .description('render SoT rules and project them to agent targets')
     .option('--targets <ids>', 'comma-separated target ids to sync (e.g. claude,pi)')
     .option('--dry-run', 'show what would be written without touching disk')
-    .option(
-      '--force',
-      'overwrite marker sections even if manually modified (skip conflict check)',
-    )
+    .option('--force', 'overwrite marker sections even if manually modified (skip conflict check)')
     .option('--json', 'print machine-readable JSON (absolute paths)')
     .action(
-      async (options: {
-        targets?: string;
-        dryRun?: boolean;
-        force?: boolean;
-        json?: boolean;
-      }) => {
+      async (
+        options: { targets?: string; dryRun?: boolean; force?: boolean; json?: boolean },
+        command: Command,
+      ) => {
         try {
           const result = await runSync(
-            {
-              host: realHost,
-              cwd: process.cwd(),
-              os: currentOs(),
-              agentforgeVersion: VERSION,
-            },
+            { ...defaultCommandContext(), agentforgeVersion: VERSION },
             { targets: options.targets, dryRun: options.dryRun, force: options.force },
           );
-          if (options.json === true) {
-            console.log(JSON.stringify(result, null, 2));
+          if (resolveJsonFlag(command, options.json)) {
+            printJson(result);
           } else {
             printSyncResult(result);
           }

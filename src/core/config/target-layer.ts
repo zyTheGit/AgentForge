@@ -10,8 +10,8 @@
 import path from 'node:path';
 import type { Host } from '../../infra/host';
 import type { EnvSnapshot, Scope } from '../env';
-import { resolveProjectSoT, resolveUserSoT, type OsContext } from '../paths';
 import { ConfigError } from '../errors';
+import { type OsContext, resolveProjectSoT, resolveUserSoT } from '../paths';
 import { HABITS_FILE, PROFILE_FILE } from './load';
 
 /** 解析结果：写入目标层。 */

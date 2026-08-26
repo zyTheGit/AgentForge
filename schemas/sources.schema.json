@@ -36,19 +36,11 @@
                 "type": "array",
                 "items": {
                   "type": "string",
-                  "enum": [
-                    "templates",
-                    "skills",
-                    "mcp"
-                  ]
+                  "enum": ["templates", "skills", "mcp"]
                 }
               }
             },
-            "required": [
-              "id",
-              "type",
-              "path"
-            ],
+            "required": ["id", "type", "path"],
             "additionalProperties": false
           },
           {
@@ -81,19 +73,11 @@
                 "type": "array",
                 "items": {
                   "type": "string",
-                  "enum": [
-                    "templates",
-                    "skills",
-                    "mcp"
-                  ]
+                  "enum": ["templates", "skills", "mcp"]
                 }
               }
             },
-            "required": [
-              "id",
-              "type",
-              "url"
-            ],
+            "required": ["id", "type", "url"],
             "additionalProperties": false
           }
         ]

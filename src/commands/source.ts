@@ -15,34 +15,28 @@
  */
 import type { Command } from 'commander';
 import { readEnv } from '../core/env';
-import { currentOs, resolveUserSoT, type OsContext } from '../core/paths';
+import { resolveUserSoT } from '../core/paths';
 import {
+  type AddSourceResult,
   addGitSource,
   addLocalSource,
   listSources,
   removeSource,
-  updateSource,
-  type AddSourceResult,
   type SourceManagerContext,
   type UpdateSourceResult,
+  updateSource,
 } from '../core/sources/manager';
 import type { Source } from '../schema';
-import type { Host } from '../infra/host';
-import { realHost } from '../infra/real-host';
+import { type CommandContext, defaultCommandContext, printJson } from './context';
+import { resolveJsonFlag } from './flags';
 
 /** 命令上下文。 */
-export interface SourceCommandContext {
-  readonly host: Host;
-  readonly cwd: string;
-  readonly os: OsContext;
-}
+export type SourceCommandContext = CommandContext;
 
 /** git/local 语义识别：url 协议 / git@ scp 语法 / .git 后缀 → git；其余 local。 */
 export function isGitTarget(target: string): boolean {
   return (
-    /^(https?|git|ssh|file):\/\//i.test(target) ||
-    /^git@/i.test(target) ||
-    /\.git$/i.test(target)
+    /^(https?|git|ssh|file):\/\//i.test(target) || /^git@/i.test(target) || /\.git$/i.test(target)
   );
 }
 
@@ -84,7 +78,10 @@ export async function runSourceRemove(
 }
 
 /** update 核心逻辑。@see updateSource 异常契约。 */
-export async function runSourceUpdate(ctx: SourceCommandContext, id: string): Promise<UpdateSourceResult> {
+export async function runSourceUpdate(
+  ctx: SourceCommandContext,
+  id: string,
+): Promise<UpdateSourceResult> {
   return updateSource(managerContext(ctx), id);
 }
 
@@ -107,12 +104,12 @@ export function registerSourceCommand(program: Command): void {
     .description('register a source: local path or git url (git requires --ref)')
     .option('--ref <ref>', 'git ref to pin (tag / branch / commit; required for git sources)')
     .option('--id <id>', 'custom source id (default: derived from url/path basename)')
-    .action(async (target: string, options: { ref?: string; id?: string }) => {
-      const result = await runSourceAdd(
-        { host: realHost, cwd: process.cwd(), os: currentOs() },
-        target,
-        options,
-      );
+    .action(async (target: string, options: { ref?: string; id?: string }, command: Command) => {
+      const result = await runSourceAdd(defaultCommandContext(), target, options);
+      if (resolveJsonFlag(command)) {
+        printJson(result);
+        return;
+      }
       const s = result.source;
       const lines: string[] = [`source added: ${s.id} (${s.type})`];
       if (s.type === 'git') {
@@ -133,10 +130,10 @@ export function registerSourceCommand(program: Command): void {
     .command('list')
     .description('list all registered sources')
     .option('--json', 'machine-readable output (Spec 6.2)')
-    .action(async (options: { json?: boolean }) => {
-      const sources = await runSourceList({ host: realHost, cwd: process.cwd(), os: currentOs() });
-      if (options.json) {
-        console.log(JSON.stringify(sources, null, 2));
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const sources = await runSourceList(defaultCommandContext());
+      if (resolveJsonFlag(command, options.json)) {
+        printJson(sources);
         return;
       }
       if (sources.length === 0) {
@@ -151,8 +148,12 @@ export function registerSourceCommand(program: Command): void {
   cmd
     .command('remove <id>')
     .description('remove a registered source (store cache is deleted too)')
-    .action(async (id: string) => {
-      const result = await runSourceRemove({ host: realHost, cwd: process.cwd(), os: currentOs() }, id);
+    .action(async (id: string, _options: unknown, command: Command) => {
+      const result = await runSourceRemove(defaultCommandContext(), id);
+      if (resolveJsonFlag(command)) {
+        printJson(result);
+        return;
+      }
       const lines = [`source removed: ${result.removed.id} (${result.removed.type})`];
       if (result.storeDir !== undefined) {
         lines.push(`  store cleaned: ${result.storeDir}`);
@@ -164,8 +165,12 @@ export function registerSourceCommand(program: Command): void {
   cmd
     .command('update <id>')
     .description('re-fetch a git source and checkout its pinned commit')
-    .action(async (id: string) => {
-      const result = await runSourceUpdate({ host: realHost, cwd: process.cwd(), os: currentOs() }, id);
+    .action(async (id: string, _options: unknown, command: Command) => {
+      const result = await runSourceUpdate(defaultCommandContext(), id);
+      if (resolveJsonFlag(command)) {
+        printJson(result);
+        return;
+      }
       const s = result.source;
       console.log(
         [

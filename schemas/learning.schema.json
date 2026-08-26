@@ -8,10 +8,7 @@
     },
     "scope": {
       "type": "string",
-      "enum": [
-        "user",
-        "project"
-      ]
+      "enum": ["user", "project"]
     },
     "confidence": {
       "type": "number",
@@ -26,15 +23,7 @@
     },
     "category": {
       "type": "string",
-      "enum": [
-        "tooling",
-        "code-style",
-        "architecture",
-        "debugging",
-        "process",
-        "security",
-        "other"
-      ]
+      "enum": ["tooling", "code-style", "architecture", "debugging", "process", "security", "other"]
     },
     "source": {
       "type": "string"
@@ -69,11 +58,7 @@
     "promote_target": {
       "default": "custom_rule",
       "type": "string",
-      "enum": [
-        "custom_rule",
-        "skill",
-        "habits_note"
-      ]
+      "enum": ["custom_rule", "skill", "habits_note"]
     }
   },
   "required": [

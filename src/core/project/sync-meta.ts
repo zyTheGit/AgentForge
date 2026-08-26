@@ -8,12 +8,12 @@
  *   （Spec §2.5：JSON 同样按 line_ending 写出），默认 LF。
  */
 import path from 'node:path';
-import { SyncMetaSchema } from '../../schema';
-import type { SyncMeta, SyncMetaInput } from '../../schema';
-import type { LineEnding } from '../env';
-import { ConfigError } from '../errors';
 import { atomicWrite, mkdirp, normalizeLineEnding } from '../../infra/fsutil';
 import type { Host } from '../../infra/host';
+import type { SyncMeta, SyncMetaInput } from '../../schema';
+import { SyncMetaSchema } from '../../schema';
+import type { LineEnding } from '../env';
+import { ConfigError } from '../errors';
 
 /** Spec §3.3 / §3.1 / §3.2：SoT 根目录内的元数据文件名。 */
 export const SYNC_META_FILE = 'sync-meta.json';
@@ -61,6 +61,11 @@ export async function readSyncMeta(host: Host, sotRoot: string): Promise<SyncMet
  *
  * 输入为 SyncMetaInput（targets 可缺省），出口统一 Schema.parse 填充默认值后
  * 序列化——保证落盘形态完整、读取方无需判空。
+ *
+ * 并发约束：本层只做「整表覆盖写」，不做读-改-写；需要保留其他 target
+ * 既有记录的调用方（engine.writeSyncMetaOnSuccess）必须在 SoT 事务锁
+ * （`<sotRoot>/.sync.lock/`，见 project/engine.ts）内完成读 → 合并 → 写，
+ * 否则并发的子集 sync（--targets）会互相丢失记录。
  */
 export async function writeSyncMeta(
   host: Host,

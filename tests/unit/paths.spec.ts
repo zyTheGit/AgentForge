@@ -4,10 +4,7 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { EnvSnapshot } from '../../src/core/env';
-import {
-  ConfigError,
-  GenericError,
-} from '../../src/core/errors';
+import { ConfigError, GenericError } from '../../src/core/errors';
 import {
   currentOs,
   detectOneDrive,
@@ -15,7 +12,10 @@ import {
   resolveProjectSoT,
   resolveTargetUserDirs,
   resolveUserSoT,
+  SKILL_DOC_FILENAME,
+  SKILLS_DIRNAME,
   samePath,
+  toPosixSeparators,
   validatePath,
 } from '../../src/core/paths';
 import { createFakeHost } from './test-utils';
@@ -53,7 +53,9 @@ describe('resolveUserSoT（Spec §2.1）', () => {
   });
 
   it('AGF_HOME 为 UNC → GenericError(1)（Spec §2.1.1）', () => {
-    expect(() => resolveUserSoT(envOf({ agfHome: '\\\\server\\share\\af' }), WIN)).toThrow(GenericError);
+    expect(() => resolveUserSoT(envOf({ agfHome: '\\\\server\\share\\af' }), WIN)).toThrow(
+      GenericError,
+    );
   });
 
   it('userProfile 与 AGF_HOME 均缺失 → ConfigError(2)', () => {
@@ -102,7 +104,9 @@ describe('resolveTargetUserDirs（Spec §2.2 四 target 用户级目录）', () 
   });
 
   it('userProfile 缺失 → ConfigError', () => {
-    expect(() => resolveTargetUserDirs({ ...envOf(), userProfile: undefined }, WIN)).toThrow(ConfigError);
+    expect(() => resolveTargetUserDirs({ ...envOf(), userProfile: undefined }, WIN)).toThrow(
+      ConfigError,
+    );
   });
 });
 
@@ -133,7 +137,9 @@ describe('validatePath（Spec §2.1.1 UNC 拒绝）', () => {
 
 describe('samePath（Spec §2.1 win32 大小写不敏感）', () => {
   it('win32：大小写不同视为相同', () => {
-    expect(samePath('C:\\Users\\Tester\\.agentforge', 'c:\\users\\tester\\.AGENTFORGE', WIN)).toBe(true);
+    expect(samePath('C:\\Users\\Tester\\.agentforge', 'c:\\users\\tester\\.AGENTFORGE', WIN)).toBe(
+      true,
+    );
   });
 
   it('win32：正反斜杠混用视为相同（normalize 统一）', () => {
@@ -216,17 +222,85 @@ describe('detectOneDrive（Spec §2.1.1，doctor 用 warning）', () => {
     // 验证逻辑正确性：相等、前缀关系都能正确判断
     const host1 = createFakeHost({ OneDrive: 'C:\\Users\\u\\OneDrive' });
     expect(detectOneDrive('C:\\Users\\u\\OneDrive', host1)).toBe(true); // 相等
-    
+
     const host2 = createFakeHost({ OneDrive: 'C:\\Users\\u\\OneDrive' });
     expect(detectOneDrive('C:\\Users\\u\\OneDrive\\Documents', host2)).toBe(true); // 用户目录在 OneDrive 下
-    
+
     const host3 = createFakeHost({ OneDrive: 'C:\\Users\\u\\OneDrive' });
     expect(detectOneDrive('C:\\Users\\u', host3)).toBe(true); // OneDrive 在用户目录下
+  });
+
+  it('posix 分隔符：环境变量与用户目录用 / 时前缀关系仍能命中（macOS/Linux 版 OneDrive）', () => {
+    // 修复前只拼 `\\` 做前缀比较，posix 分隔符下前缀判定恒为 false（只有完全相等才命中）。
+    // 这里刻意用不含 OneDrive 段名的目录，确保命中来自「环境变量前缀」判据而非段扫描。
+    const host = createFakeHost({ OneDrive: '/Users/u/Library/CloudStorage/od-sync' });
+    // 用户目录在 OneDrive 之下
+    expect(detectOneDrive('/Users/u/Library/CloudStorage/od-sync/proj', host)).toBe(true);
+    // OneDrive 在用户目录之下
+    expect(detectOneDrive('/Users/u/Library', host)).toBe(true);
+    // 完全相等（修复前唯一能命中的形态）
+    expect(detectOneDrive('/Users/u/Library/CloudStorage/od-sync', host)).toBe(true);
+    // 无关目录仍为 false
+    expect(detectOneDrive('/Users/other/Documents', host)).toBe(false);
+  });
+
+  it('混用分隔符：环境变量用 / 而用户目录用 \\（或反之）也能命中', () => {
+    const host = createFakeHost({ OneDrive: 'C:/Users/u/od-sync' });
+    expect(detectOneDrive('C:\\Users\\u\\od-sync\\Documents', host)).toBe(true);
+    expect(detectOneDrive('C:\\Users\\u', host)).toBe(true);
+  });
+
+  it('posix：非分隔符边界的同名前缀不误判（od-sync-extra 不属于 od-sync）', () => {
+    const host = createFakeHost({ OneDrive: '/Users/u/od-sync' });
+    expect(detectOneDrive('/Users/u/od-sync-extra', host)).toBe(false);
   });
 });
 
 describe('currentOs', () => {
   it('返回当前进程平台（win32/darwin/linux 之一）', () => {
     expect(['win32', 'darwin', 'linux']).toContain(currentOs().platform);
+  });
+});
+
+describe('toPosixSeparators（逻辑路径的分隔符归一，跨平台恒为 /）', () => {
+  it('空串 → 空串', () => {
+    expect(toPosixSeparators('')).toBe('');
+  });
+
+  it('无分隔符原样返回', () => {
+    expect(toPosixSeparators('SKILL.md')).toBe('SKILL.md');
+  });
+
+  it('win32 相对路径：每个 \\ 映射为 /', () => {
+    expect(toPosixSeparators('a\\b\\c.md')).toBe('a/b/c.md');
+  });
+
+  it('已是 posix 分隔符时幂等', () => {
+    expect(toPosixSeparators('a/b/c.md')).toBe('a/b/c.md');
+    expect(toPosixSeparators(toPosixSeparators('a\\b'))).toBe('a/b');
+  });
+
+  it('混用分隔符统一为 /', () => {
+    expect(toPosixSeparators('a\\b/c\\d')).toBe('a/b/c/d');
+  });
+
+  it('不折叠连续分隔符（与 detectOneDrive 的比较用归一化区别所在）', () => {
+    expect(toPosixSeparators('a\\\\b')).toBe('a//b');
+  });
+
+  it('不 trim、不去尾部分隔符（纯字符映射）', () => {
+    expect(toPosixSeparators(' a\\b\\ ')).toBe(' a/b/ ');
+    expect(toPosixSeparators('a\\b\\')).toBe('a/b/');
+  });
+
+  it('win32 绝对路径（含盘符）也整体归一', () => {
+    expect(toPosixSeparators('C:\\proj\\.claude\\skills')).toBe('C:/proj/.claude/skills');
+  });
+});
+
+describe('skills 布局常量（Spec §2.3；projectors/shared 原样再导出）', () => {
+  it('SKILLS_DIRNAME / SKILL_DOC_FILENAME 取值固定', () => {
+    expect(SKILLS_DIRNAME).toBe('skills');
+    expect(SKILL_DOC_FILENAME).toBe('SKILL.md');
   });
 });

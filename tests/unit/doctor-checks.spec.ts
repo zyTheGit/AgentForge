@@ -9,10 +9,10 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  doctorExitCode,
-  runDoctorChecks,
   type DoctorCheckResult,
   type DoctorReport,
+  doctorExitCode,
+  runDoctorChecks,
 } from '../../src/core/doctor/checks';
 import { readEnv } from '../../src/core/env';
 import { currentOs } from '../../src/core/paths';
@@ -42,7 +42,9 @@ function createDoctorHost(env: Record<string, string> = {}): FakeHost {
       for (const key of base.files.keys()) {
         if (key.startsWith(prefix)) {
           const rest = key.slice(prefix.length);
-          if (rest === '') continue;
+          if (rest === '') {
+            continue;
+          }
           const sep = rest.search(/[\\/]/);
           names.add(sep === -1 ? rest : rest.slice(0, sep));
         }
@@ -200,7 +202,10 @@ describe('runDoctorChecks — 健康 SoT 全绿', () => {
 describe('runDoctorChecks — 未解析模板（§9 第 5 条）', () => {
   it('profile.templates 引用不存在的 id → template/<id> error(2)，exitCode 2', async () => {
     const host = createDoctorHost();
-    await seedProjectSoT(host, 'version: 1\nscope: project\ntargets: [claude]\ntemplates: [no-such-template]\n');
+    await seedProjectSoT(
+      host,
+      'version: 1\nscope: project\ntargets: [claude]\ntemplates: [no-such-template]\n',
+    );
     const report = await runDoctorChecks(doctorOpts(host));
     const bad = resultOf(report, 'template/no-such-template');
     expect(bad.level).toBe('error');
@@ -279,13 +284,66 @@ describe('runDoctorChecks — 投影 hash 三方比对（§8.2-4 基准）', () 
   });
 });
 
+describe('runDoctorChecks — marker_mode: none 时 plan 与 sync 一致（buildPlanCtx 必须注入 markerMode）', () => {
+  const NONE_PROFILE = [
+    'version: 1',
+    'scope: project',
+    'targets: [claude]',
+    'projection:',
+    '  marker_mode: none',
+    '',
+  ].join('\n');
+
+  it('marker_mode: none → 主规则动作降级为 write，doctor 不再按 merge_marker 比对（无 marker 误报）', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host, NONE_PROFILE);
+    await syncOnce({
+      host,
+      env: readEnv(host),
+      os: OS,
+      cwd: CWD,
+      agentforgeVersion: 'test-0.1.0',
+      dryRun: false,
+    });
+
+    // sync 的实际产物：整文件 write，无 marker 区间
+    const projected = host.files.get(CLAUDE_MD) ?? '';
+    expect(projected).not.toContain('BEGIN AGENTFORGE');
+
+    const report = await runDoctorChecks(doctorOpts(host));
+    // buildPlanCtx 漏传 markerMode 时 plan 仍产出 merge_marker →
+    // checkProjectionHash 会在这份无 marker 的投影上误报"无 marker 区间"
+    const markerChecks = report.results.filter((r) => r.item.startsWith('projection-hash/'));
+    expect(markerChecks).toEqual([]);
+    expect(report.results.some((r) => r.detail.includes('无 marker 区间'))).toBe(false);
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('缺省 marker_mode（replace_between_markers）仍按 marker 区间比对 → projection-hash/claude ok', async () => {
+    const host = createDoctorHost();
+    await seedSynced(host);
+    expect(host.files.get(CLAUDE_MD) ?? '').toContain('BEGIN AGENTFORGE');
+    const report = await runDoctorChecks(doctorOpts(host));
+    expect(resultOf(report, 'projection-hash/claude').level).toBe('ok');
+  });
+});
+
 describe('runDoctorChecks — 声明 vs detected（§4.1 声明优先，仅提示）', () => {
   it('声明 fnm 但 detected 快照为 nvm → declared-vs-detected/node warn', async () => {
     const host = createDoctorHost();
     await host.writeFile(path.join(PROJECT_SOT, 'profile.yaml'), PROFILE_YAML);
     await host.writeFile(
       path.join(PROJECT_SOT, 'habits.yaml'),
-      ['version: 1', 'runtime:', '  node:', '    manager: fnm', 'detected:', '  node:', '    manager: nvm', ''].join('\n'),
+      [
+        'version: 1',
+        'runtime:',
+        '  node:',
+        '    manager: fnm',
+        'detected:',
+        '  node:',
+        '    manager: nvm',
+        '',
+      ].join('\n'),
     );
     const report = await runDoctorChecks(doctorOpts(host));
     const r = resultOf(report, 'declared-vs-detected/node');
@@ -328,6 +386,77 @@ describe('runDoctorChecks — 可写性（§9 第 2 条）', () => {
     expect(broken.every((r) => r.code === 4)).toBe(true);
     expect(broken[0]?.detail).toContain('不可写');
     expect(report.exitCode).toBe(4);
+  });
+});
+
+describe('runDoctorChecks — 可写性探针（P3：残留清理 + 并发安全）', () => {
+  /** 记录所有探针文件名的 host（探针 = 以 .agf-doctor-probe- 开头的写入）。 */
+  function withProbeRecorder(base: FakeHost, probes: string[]): FakeHost {
+    return {
+      ...base,
+      async writeFile(p, content) {
+        if (path.basename(p).startsWith('.agf-doctor-probe-')) {
+          probes.push(path.basename(p));
+        }
+        await base.writeFile(p, content);
+      },
+    };
+  }
+
+  it('探针文件名带随机后缀 → 两次（并发）doctor 的探针互不撞名', async () => {
+    const base = createDoctorHost();
+    await seedProjectSoT(base);
+    const probes: string[] = [];
+    const host = withProbeRecorder(base, probes);
+
+    await runDoctorChecks(doctorOpts(host));
+    await runDoctorChecks(doctorOpts(host));
+
+    expect(probes.length).toBeGreaterThan(1);
+    expect(new Set(probes).size).toBe(probes.length); // 全部唯一（仅毫秒时间戳会撞名）
+    expect(probes.every((name) => /^\.agf-doctor-probe-\d+-[0-9a-f]{12}$/.test(name))).toBe(true);
+    expect([...base.files.keys()].some((k) => k.includes('.agf-doctor-probe-'))).toBe(false);
+  });
+
+  it('探针删除失败 → 仍判定可写（写入成功即可写；清理失败不改变结论）', async () => {
+    const base = createDoctorHost();
+    await seedProjectSoT(base);
+    const host: FakeHost = {
+      ...base,
+      async rm(p) {
+        if (path.basename(p).startsWith('.agf-doctor-probe-')) {
+          throw errnoError('EPERM', `permission denied: ${p}`);
+        }
+        await base.rm(p);
+      },
+    };
+
+    const report = await runDoctorChecks(doctorOpts(host));
+    const writables = report.results.filter((r) => r.item === 'writable');
+    expect(writables.length).toBeGreaterThan(0);
+    expect(writables.every((r) => r.level === 'ok')).toBe(true);
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('探针写入抛错（不可写）→ error(4)，且不留探针残留（finally 清理）', async () => {
+    const base = createDoctorHost();
+    await seedProjectSoT(base);
+    const host: FakeHost = {
+      ...base,
+      async writeFile(p, content) {
+        if (
+          path.basename(p).startsWith('.agf-doctor-probe-') &&
+          p.startsWith(`${CWD}${path.sep}`)
+        ) {
+          throw errnoError('EACCES', `permission denied: ${p}`);
+        }
+        await base.writeFile(p, content);
+      },
+    };
+
+    const report = await runDoctorChecks(doctorOpts(host));
+    expect(report.results.some((r) => r.item === 'writable' && r.level === 'error')).toBe(true);
+    expect([...base.files.keys()].some((k) => k.includes('.agf-doctor-probe-'))).toBe(false);
   });
 });
 

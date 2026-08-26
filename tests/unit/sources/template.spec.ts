@@ -5,14 +5,15 @@
  * 判定；setTemplateEnabled 只改 profile.templates（enable 追加 / disable 移除 /
  * 幂等 no-op / 禁到空数组）。
  */
-import { describe, expect, it } from 'vitest';
+
 import path from 'node:path';
+import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-import type { EnvSnapshot } from '../../../src/core/env';
-import { listTemplates, setTemplateEnabled } from '../../../src/core/sources/template';
-import { addLocalSource, type SourceManagerContext } from '../../../src/core/sources/manager';
 import { loadProfile } from '../../../src/core/config/load';
 import type { TargetLayer } from '../../../src/core/config/target-layer';
+import type { EnvSnapshot } from '../../../src/core/env';
+import { addLocalSource, type SourceManagerContext } from '../../../src/core/sources/manager';
+import { listTemplates, setTemplateEnabled } from '../../../src/core/sources/template';
 import { createDirAwareHost } from './helpers';
 
 const USER_SOT = 'C:\\user-sot';
@@ -76,7 +77,10 @@ describe('listTemplates', () => {
     host.files.set(path.win32.join(USER_SOT, 'templates', 'global.md'), 'c');
 
     const items = await listTemplates(tplCtx(host, ['review']));
-    expect(items.find((i) => i.id === 'review')).toMatchObject({ origin: 'project', enabled: true });
+    expect(items.find((i) => i.id === 'review')).toMatchObject({
+      origin: 'project',
+      enabled: true,
+    });
     expect(items.find((i) => i.id === 'team/style')).toMatchObject({
       origin: 'project',
       enabled: false,

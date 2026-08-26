@@ -9,8 +9,8 @@
  */
 export * from './common';
 export * from './habits';
-export * from './profile';
 export * from './learning';
+export * from './manifest';
+export * from './profile';
 export * from './sources';
 export * from './sync-meta';
-export * from './manifest';

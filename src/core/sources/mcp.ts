@@ -7,13 +7,11 @@
  *   stdio → command 必填；http/sse → url 必填；
  * - 编辑 z.input 原始形态往返（不展开默认值），写入前 ProfileSchema 全量校验。
  */
-import { stringify as stringifyYaml } from 'yaml';
 import type { Host } from '../../infra/host';
-import { atomicWrite } from '../../infra/fsutil';
-import { ConfigError } from '../errors';
-import { loadProfile } from '../config/load';
-import { ProfileSchema, type McpServer, type McpServerInput, type ProfileInput } from '../../schema';
+import type { McpServer, McpServerInput } from '../../schema';
+import { editProfile } from '../config/edit-profile';
 import type { TargetLayer } from '../config/target-layer';
+import { ConfigError } from '../errors';
 
 /** addMcpServer 结果。 */
 export interface AddMcpServerResult {
@@ -63,21 +61,15 @@ export async function addMcpServer(
 ): Promise<AddMcpServerResult> {
   validateMcpServer(server, `（写入 ${targetLayer.profileFile} 前）`);
 
-  const existing = await loadProfile(host, targetLayer.sotRoot);
-  const profile: ProfileInput = existing ?? { version: 1, targets: ['opencode'] };
-
-  const current: McpServerInput[] = profile.mcp?.servers ?? [];
-  const replaced = current.some((s) => s.name === server.name);
-  const servers = replaced
-    ? current.map((s) => (s.name === server.name ? server : s))
-    : [...current, server];
-
-  const modified: ProfileInput = { ...profile, mcp: { ...profile.mcp, servers } };
-  // 写入前全量校验（schema 层填充默认值，同时保证落盘形态合法）
-  const parsed = ProfileSchema.parse(modified);
-
-  const text = stringifyYaml(modified, { lineWidth: 0 });
-  await atomicWrite(host, targetLayer.profileFile, text.endsWith('\n') ? text : `${text}\n`);
+  let replaced = false;
+  const { parsed, profileFile } = await editProfile(host, targetLayer, (profile) => {
+    const current: McpServerInput[] = profile.mcp?.servers ?? [];
+    replaced = current.some((s) => s.name === server.name);
+    const servers = replaced
+      ? current.map((s) => (s.name === server.name ? server : s))
+      : [...current, server];
+    return { ...profile, mcp: { ...profile.mcp, servers } };
+  });
 
   const written = parsed.mcp.servers?.find((s) => s.name === server.name);
   if (written === undefined) {
@@ -90,7 +82,7 @@ export async function addMcpServer(
   return {
     servers: parsed.mcp.servers ?? [],
     server: written,
-    profileFile: targetLayer.profileFile,
+    profileFile,
     replaced,
   };
 }

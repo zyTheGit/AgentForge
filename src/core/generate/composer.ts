@@ -4,6 +4,8 @@
  *   → ③ profile.templates 已解析模板（列表序）→ ④ 内置 base/default（恒渲染一次）。
  *
  * 职责边界：只产正文（renderedRulesMd 的 body）；marker 包裹由投影层负责。
+ * 装配出口按 profile.projection.path_style 归一正文里的路径 token（§4.2，
+ * 见 applyPathStyle）。
  * 模板正文来自调用方先经 resolver 解析（fail-fast：缺失 id 在此抛 ConfigError(2)）；
  * 渲染前先 validateTemplate 再 renderTemplate（Spec §5.4：非法表达式 → 退出码 2）。
  *
@@ -12,8 +14,9 @@
  * 据此省略小节——禁止编造默认工具、禁止输出 "Not specified"（Spec §5.1）。
  */
 import { BASE_DEFAULT_TEMPLATE, BASE_DEFAULT_TEMPLATE_ID } from '../../assets/templates';
-import type { Habits, Profile } from '../../schema';
+import type { Habits, PathStyle, Profile } from '../../schema';
 import { ConfigError } from '../errors';
+import type { OsContext } from '../paths';
 import { renderTemplate, validateTemplate } from './renderer';
 
 /** 已解析模板正文（resolver 的输出形态；composer 只消费、不再做 IO 解析）。 */
@@ -32,6 +35,11 @@ export interface ComposeInput {
   readonly promotedLearnings: readonly string[];
   /** 已解析模板（按 profile.templates 顺序；可含 base/default，第 ④ 层恒用内置版）。 */
   readonly templateContents: readonly TemplateContent[];
+  /**
+   * 宿主平台（`projection.path_style: auto` 的判据，Spec §4.2）。
+   * 缺省按 posix 解释 auto——纯函数不去读 process，调用方（engine / doctor）注入。
+   */
+  readonly os?: OsContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -93,15 +101,23 @@ export interface TemplateView {
 }
 
 /** manager 未声明或为 'none' 的 runtime 条目视为"不使用"，整条省略（Spec §4.1 枚举含 none）。 */
-function visibleRuntime<T extends { readonly manager?: string }>(entry: T | undefined): T | undefined {
-  if (entry === undefined) return undefined;
-  if (entry.manager === undefined || entry.manager === 'none') return undefined;
+function visibleRuntime<T extends { readonly manager?: string }>(
+  entry: T | undefined,
+): T | undefined {
+  if (entry === undefined) {
+    return undefined;
+  }
+  if (entry.manager === undefined || entry.manager === 'none') {
+    return undefined;
+  }
   return entry;
 }
 
 /** 空数组 / 未声明归一化为 undefined（#if 空数组本为 falsy，显式省略保持视图形状一致）。 */
 function visibleArray<T>(items: readonly T[] | undefined): readonly T[] | undefined {
-  if (items === undefined || items.length === 0) return undefined;
+  if (items === undefined || items.length === 0) {
+    return undefined;
+  }
   return items;
 }
 
@@ -142,14 +158,67 @@ export function buildTemplateView(habits: Habits): TemplateView {
 }
 
 // ---------------------------------------------------------------------------
+// 路径风格归一化（Spec §4.2 projection.path_style）
+// ---------------------------------------------------------------------------
+
+/**
+ * 路径 token 匹配器：以「家目录变量 / `~` / 盘符」开头，后接至少一段分隔符 + 路径段。
+ *
+ * 为什么不全文替换分隔符：规则正文里绝大多数 `/` 与 `\` 属于散文与代码片段
+ * （`rm -rf /`、`and/or`、正则转义），无差别替换会破坏用户内容。只在能确认是
+ * 路径的 token 内部改写，才既满足 §4.2 又不误伤正文。
+ *
+ * 结束边界排除空白与常见标点（引号 / 反引号 / 逗号 / 分号 / 括号），使
+ * `见 %USERPROFILE%\.codex\AGENTS.md，` 这类中文语境也能正确收边。
+ *
+ * 盘符分支必须**左边界锚定**：裸 `[A-Za-z]:` 会在 `https://example.com/repo` 里
+ * 命中 `s://example.com/repo`，windows 风格下把 URL 改写成 `https:\\example.com\repo`
+ * （`auto` 在 Windows 宿主上即 windows，属默认路径）。因此盘符要求
+ * ①左侧不是字母数字（排除 `http` / `file` / `git+ssh` 等 scheme 的末字符）、
+ * ②左侧不是分隔符（排除 `file:///C:/...` 里 URL 内部的盘符）、
+ * ③右侧不是 `//`（排除单字母 scheme）。家目录变量分支无此风险，保持原样。
+ */
+const PATH_TOKEN_RE =
+  /(?:%USERPROFILE%|\$\{HOME\}|\$HOME|~|(?<![A-Za-z0-9\\/])[A-Za-z]:(?!\/\/))(?:[\\/][^\s"'`,;)\]}，、。]*)+/g;
+
+/** 有效路径风格：auto → 按宿主平台展开（win32 → windows，其余 → posix）。 */
+function effectivePathStyle(style: PathStyle, os: OsContext | undefined): 'windows' | 'posix' {
+  if (style === 'windows' || style === 'posix') {
+    return style;
+  }
+  return os?.platform === 'win32' ? 'windows' : 'posix';
+}
+
+/**
+ * 把投影正文里的路径 token 归一到目标风格（Spec §4.2 projection.path_style）：
+ * - `windows`：分隔符 `\`，家目录变量 `%USERPROFILE%`（`$HOME` / `${HOME}` / 前导 `~` 均转换）；
+ * - `posix`：分隔符 `/`，家目录变量 `$HOME`（`%USERPROFILE%` / `${HOME}` / 前导 `~` 均转换）；
+ * - `auto`：按注入的宿主平台选上面之一。
+ *
+ * 两分支的家目录前缀集合对称（含 `${HOME}`）：任一分支漏一种写法，同一段正文在
+ * 两种 path_style 下就会出现"一边归一、一边残留"的不一致。
+ *
+ * 只改写 PATH_TOKEN_RE 命中的 token 内部，其余正文（含散文里的斜杠与 URL）原样保留。
+ *
+ * @returns 归一后的正文（不改变换行；换行风格由投影落盘层统一，§2.5）。
+ */
+export function applyPathStyle(text: string, style: PathStyle, os?: OsContext): string {
+  const target = effectivePathStyle(style, os);
+  return text.replace(PATH_TOKEN_RE, (token) => {
+    if (target === 'windows') {
+      return token.replace(/^(?:\$\{HOME\}|\$HOME|~)/, '%USERPROFILE%').replace(/\//g, '\\');
+    }
+    return token.replace(/^(?:%USERPROFILE%|\$\{HOME\}|~)/, '$HOME').replace(/\\/g, '/');
+  });
+}
+
+// ---------------------------------------------------------------------------
 // 装配
 // ---------------------------------------------------------------------------
 
 /** 剥掉小节首部空行与尾部全部空白（返回裸正文，不含边缘换行）。 */
 function stripSection(section: string): string {
-  return section
-    .replace(/^(?:[ \t]*\r?\n)+/, '')
-    .replace(/\s+$/, '');
+  return section.replace(/^(?:[ \t]*\r?\n)+/, '').replace(/\s+$/, '');
 }
 
 /** 先校验后渲染一个模板，返回规范化正文（语法错误 → ConfigError(2)，message 带 id）。 */
@@ -167,7 +236,8 @@ async function renderValidated(id: string, source: string, view: TemplateView): 
  *   （调用方应先 resolve；此处 fail-fast 兜底，Spec §5.2 未解析 id → sync 失败）；
  * - 全空输入输出最小骨架（base/default 渲染出的 `# AgentForge Rules` 标题）。
  *
- * @returns 规则正文（LF、单换行结尾，无 marker——包裹由投影层负责）。
+ * @returns 规则正文（LF、单换行结尾，无 marker——包裹由投影层负责；
+ *   路径 token 已按 profile.projection.path_style 归一）。
  */
 export async function composeRules(input: ComposeInput): Promise<string> {
   const view = buildTemplateView(input.habits);
@@ -189,7 +259,9 @@ export async function composeRules(input: ComposeInput): Promise<string> {
   const declared = input.profile.templates ?? [];
   const available = new Set(input.templateContents.map((t) => t.id));
   for (const id of declared) {
-    if (id === BASE_DEFAULT_TEMPLATE_ID) continue;
+    if (id === BASE_DEFAULT_TEMPLATE_ID) {
+      continue;
+    }
     if (!available.has(id)) {
       throw new ConfigError(`未解析的模板 id: ${id}（profile.templates 已声明但未提供内容）`, {
         hint: '检查 profile.templates 或运行 aforge template list',
@@ -198,7 +270,9 @@ export async function composeRules(input: ComposeInput): Promise<string> {
     }
   }
   for (const template of input.templateContents) {
-    if (template.id === BASE_DEFAULT_TEMPLATE_ID) continue;
+    if (template.id === BASE_DEFAULT_TEMPLATE_ID) {
+      continue;
+    }
     sections.push(await renderValidated(template.id, template.content, view));
   }
 
@@ -206,7 +280,12 @@ export async function composeRules(input: ComposeInput): Promise<string> {
   sections.push(await renderValidated(BASE_DEFAULT_TEMPLATE_ID, BASE_DEFAULT_TEMPLATE, view));
 
   const parts = sections.filter((s) => s !== '');
-  return parts.length === 0 ? '' : `${parts.join('\n\n')}\n`;
+  if (parts.length === 0) {
+    return '';
+  }
+  // 出口统一做路径风格归一（§4.2 path_style）：四层素材（custom / learnings /
+  // 模板 / 内置）都可能写路径，放在装配出口是唯一不漏项的位置。
+  return applyPathStyle(`${parts.join('\n\n')}\n`, input.profile.projection.path_style, input.os);
 }
 
 /**

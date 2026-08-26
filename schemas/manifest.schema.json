@@ -38,11 +38,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "id",
-          "path",
-          "description"
-        ]
+        "required": ["id", "path", "description"]
       }
     },
     "skills": {
@@ -64,11 +60,7 @@
       }
     }
   },
-  "required": [
-    "name",
-    "version",
-    "min_agentforge"
-  ],
+  "required": ["name", "version", "min_agentforge"],
   "$id": "https://agentforge.dev/schema/manifest.json",
   "title": "AgentForge template package manifest.yaml"
 }

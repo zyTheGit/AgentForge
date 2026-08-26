@@ -4,6 +4,7 @@
  * `aforge learn [--scope project|user] [--file <path>|-] [--id <id>]`：
  * - 输入（§7.4-1）：--file <path> 读文件（相对 cwd）| --file - 读 stdin |
  *   无参数且 TTY → 交互粘贴；非 TTY 无输入 → ConfigError(2)；
+ * - 落层：`--scope` > 生效 profile 的 `learning.default_scope`（§4.2）；
  * - 元数据：TTY 时交互询问 trigger / category / confidence（非交互用默认值）；
  * - 结构化写入目标层 learnings/（§7.4-2/3，**不**自动进入投影）；
  * - 内容重复 → warning（§7.5：仍创建）；
@@ -12,26 +13,22 @@
  * 核心逻辑在 core/learning/store.createLearning；本层只做输入采集与输出。
  */
 import path from 'node:path';
-import type { Command } from 'commander';
 import { cancel, intro, isCancel, multiline, outro, select, text } from '@clack/prompts';
-import type { Scope } from '../core/env';
+import type { Command } from 'commander';
+import { resolveEffectiveConfig } from '../core/config/defaults';
+import { resolveWriteTargetLayer } from '../core/config/target-layer';
+import type { EnvSnapshot, Scope } from '../core/env';
 import { readEnv } from '../core/env';
 import { ConfigError } from '../core/errors';
-import type { OsContext } from '../core/paths';
-import { currentOs } from '../core/paths';
-import { resolveWriteTargetLayer } from '../core/config/target-layer';
-import { createLearning, type CreateLearningResult } from '../core/learning/store';
+import { type CreateLearningResult, createLearning } from '../core/learning/store';
+import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
 import type { LearningCategory } from '../schema';
-import type { Host } from '../infra/host';
-import { realHost } from '../infra/real-host';
+import { type CommandContext, defaultCommandContext, printJson } from './context';
+import { resolveJsonFlag } from './flags';
 import { isInteractiveStdin, readStdinText } from './stdin';
 
 /** 命令上下文（host/os/cwd 注入；测试用真实临时目录 + env 覆盖 host）。 */
-export interface LearnCommandContext {
-  readonly host: Host;
-  readonly cwd: string;
-  readonly os: OsContext;
-}
+export type LearnCommandContext = CommandContext;
 
 /** learn 选项（CLI 解析结果；content 类字段由 action 采集后传入）。 */
 export interface LearnOptions {
@@ -61,7 +58,10 @@ export interface LearnResult extends CreateLearningResult {
  * learn 核心逻辑（可注入、不打印）。内容优先级：content > file > stdinContent；
  * 三者皆空 → ConfigError(2)。
  *
- * @throws ConfigError(2) 目标层未初始化 / 内容为空 / id 非法 / CI 环境；
+ * scope 优先级：`--scope` > `profile.learning.default_scope`（Spec §4.2）——
+ * 之前硬编码 'project'，使该配置项完全失效。
+ *
+ * @throws ConfigError(2) 目标层未初始化 / 内容为空 / id 非法 / CI 环境 / 配置损坏；
  * @throws PermissionError(4) 写入失败。
  */
 export async function runLearn(
@@ -69,7 +69,7 @@ export async function runLearn(
   options: LearnOptions = {},
 ): Promise<LearnResult> {
   const env = readEnv(ctx.host);
-  const scope: Scope = options.scope ?? 'project';
+  const scope: Scope = options.scope ?? (await resolveDefaultLearningScope(ctx, env));
   const layer = await resolveWriteTargetLayer(ctx.host, env, ctx.os, ctx.cwd, scope);
 
   let content = options.content;
@@ -159,60 +159,92 @@ async function promptMetadata(): Promise<{
   };
 }
 
+/**
+ * `--scope` 缺省时的落层：生效 profile 的 `learning.default_scope`（Spec §4.2）。
+ *
+ * user 级 SoT 根不可解析（无 USERPROFILE/HOME）时以 project 根占位装配——与
+ * status / doctor 同口径，保证 learn 在缺用户目录的环境下仍可用（默认值仍是
+ * schema 的 'project'）。
+ */
+async function resolveDefaultLearningScope(
+  ctx: LearnCommandContext,
+  env: EnvSnapshot,
+): Promise<Scope> {
+  const projectSoTRoot = resolveProjectSoT(ctx.cwd, ctx.os);
+  let userSoTRoot = projectSoTRoot;
+  try {
+    userSoTRoot = resolveUserSoT(env, ctx.os);
+  } catch {
+    // 用户目录不可解析：仅影响 user 层配置的读取，诊断归 aforge doctor
+  }
+  const config = await resolveEffectiveConfig(env, userSoTRoot, projectSoTRoot, ctx.host);
+  return config.profile.learning.default_scope;
+}
+
 export function registerLearnCommand(program: Command): void {
   program
     .command('learn')
     .description('capture a learning entry into SoT learnings/ (not projected until promoted)')
-    .option('--scope <scope>', 'SoT scope to write: project or user (default: project)')
+    .option(
+      '--scope <scope>',
+      'SoT scope to write: project or user (default: profile learning.default_scope)',
+    )
     .option('--file <path>', 'read content from a file, or "-" for stdin')
     .option('--id <id>', 'custom learning id (default: auto-generated)')
-    .action(async (options: { scope?: string; file?: string; id?: string }) => {
-      if (options.scope !== undefined && options.scope !== 'project' && options.scope !== 'user') {
-        throw new ConfigError(`非法 scope: ${options.scope}`, {
-          hint: '有效值: project, user',
-        });
-      }
-      const scope = options.scope as Scope | undefined;
-
-      // ---- 内容采集（§7.4-1：粘贴 / 文件 / stdin）----
-      let stdinContent: string | undefined;
-      if (options.file === '-') {
-        stdinContent = await readStdinText();
-      } else if (options.file === undefined && isInteractiveStdin()) {
-        intro('aforge learn');
-        const pasted = await multiline({
-          message: '粘贴 learning 内容（多行）',
-        });
-        if (isCancel(pasted)) {
-          cancel('已取消');
-          return;
+    .action(
+      async (
+        options: { scope?: string; file?: string; id?: string; json?: boolean },
+        command: Command,
+      ) => {
+        const json = resolveJsonFlag(command, options.json);
+        if (
+          options.scope !== undefined &&
+          options.scope !== 'project' &&
+          options.scope !== 'user'
+        ) {
+          throw new ConfigError(`非法 scope: ${options.scope}`, {
+            hint: '有效值: project, user',
+          });
         }
-        stdinContent = pasted;
-        outro('内容已记录');
-      } else if (options.file === undefined) {
-        throw new ConfigError('非交互终端且未提供内容（需要 --file <path> 或 --file -）', {
-          hint: '示例: aforge learn --file - < notes.md，或在交互终端直接运行 aforge learn',
-        });
-      }
+        const scope = options.scope as Scope | undefined;
 
-      // ---- 元数据（TTY 交互；非交互走默认值）----
-      let trigger: string | undefined;
-      let category: LearningCategory | undefined;
-      let confidence: number | undefined;
-      if (options.file === undefined && isInteractiveStdin()) {
-        const meta = await promptMetadata();
-        if (meta === null) {
-          cancel('已取消');
-          return;
+        // ---- 内容采集（§7.4-1：粘贴 / 文件 / stdin）----
+        let stdinContent: string | undefined;
+        if (options.file === '-') {
+          stdinContent = await readStdinText();
+        } else if (options.file === undefined && isInteractiveStdin()) {
+          intro('aforge learn');
+          const pasted = await multiline({
+            message: '粘贴 learning 内容（多行）',
+          });
+          if (isCancel(pasted)) {
+            cancel('已取消');
+            return;
+          }
+          stdinContent = pasted;
+          outro('内容已记录');
+        } else if (options.file === undefined) {
+          throw new ConfigError('非交互终端且未提供内容（需要 --file <path> 或 --file -）', {
+            hint: '示例: aforge learn --file - < notes.md，或在交互终端直接运行 aforge learn',
+          });
         }
-        trigger = meta.trigger;
-        category = meta.category;
-        confidence = meta.confidence;
-      }
 
-      const result = await runLearn(
-        { host: realHost, cwd: process.cwd(), os: currentOs() },
-        {
+        // ---- 元数据（TTY 交互；非交互走默认值）----
+        let trigger: string | undefined;
+        let category: LearningCategory | undefined;
+        let confidence: number | undefined;
+        if (options.file === undefined && isInteractiveStdin()) {
+          const meta = await promptMetadata();
+          if (meta === null) {
+            cancel('已取消');
+            return;
+          }
+          trigger = meta.trigger;
+          category = meta.category;
+          confidence = meta.confidence;
+        }
+
+        const result = await runLearn(defaultCommandContext(), {
           scope,
           file: options.file,
           stdinContent,
@@ -220,19 +252,36 @@ export function registerLearnCommand(program: Command): void {
           category,
           confidence,
           id: options.id,
-        },
-      );
+        });
 
-      const lines: string[] = [
-        `learning created: ${result.learning.id}`,
-        `  scope     : ${result.learning.scope} (${result.sotRoot})`,
-        `  category  : ${result.learning.category}`,
-        `  file      : ${result.file}`,
-      ];
-      if (result.duplicateOf !== undefined) {
-        lines.push(`  WARNING   : content duplicates unpromoted entry ${result.duplicateOf} (still created, Spec 7.5)`);
-      }
-      lines.push('', `next: review then run \`aforge promote ${result.learning.id}\` to inject into projections`);
-      console.log(lines.join('\n'));
-    });
+        if (json) {
+          // §6.2 机器可读输出：与 doctor/status --json 同风格（绝对路径 + 结构化字段）
+          printJson({
+            learning: result.learning,
+            scope: result.scope,
+            sotRoot: result.sotRoot,
+            file: result.file,
+            duplicateOf: result.duplicateOf ?? null,
+          });
+          return;
+        }
+
+        const lines: string[] = [
+          `learning created: ${result.learning.id}`,
+          `  scope     : ${result.learning.scope} (${result.sotRoot})`,
+          `  category  : ${result.learning.category}`,
+          `  file      : ${result.file}`,
+        ];
+        if (result.duplicateOf !== undefined) {
+          lines.push(
+            `  WARNING   : content duplicates unpromoted entry ${result.duplicateOf} (still created, Spec 7.5)`,
+          );
+        }
+        lines.push(
+          '',
+          `next: review then run \`aforge promote ${result.learning.id}\` to inject into projections`,
+        );
+        console.log(lines.join('\n'));
+      },
+    );
 }

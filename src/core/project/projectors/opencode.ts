@@ -4,11 +4,15 @@
  * | 角色     | Project                     | User                              |
  * |----------|-----------------------------|-----------------------------------|
  * | 主规则   | `<root>\AGENTS.md`          | `%USERPROFILE%\.config\opencode\AGENTS.md` |
+ * | CLAUDE.md（§8.7 可选） | `<root>\CLAUDE.md` | `~\.config\opencode\CLAUDE.md` |
  * | Skills   | `.opencode\skills\<name>\SKILL.md` | `~\.config\opencode\skills\` |
  * | MCP      | `<root>\opencode.json`（merge_json） | `~\.config\opencode\opencode.json` |
  *
- * - 主规则 merge_marker：marker 外用户内容保留（Spec §8.2），
- *   区间内容为同一 SoT 渲染一次的 renderedRulesMd（Spec §8.2）；
+ * - 主规则动作按 profile.projection.marker_mode（§4.2）：merge_marker 时 marker 外
+ *   用户内容保留（§8.2），none 时整文件 write；区间内容为同一 SoT 渲染一次的
+ *   renderedRulesMd（Spec §8.2）；
+ * - `projection.write_agents_md: false` 关闭 AGENTS.md；`write_claude_md: true`
+ *   额外产出 §8.7 标记为「可选」的 CLAUDE.md（缺省不产出）；
  * - MCP 恒产出（含空 servers——写入空管理键声明"mcp 键归 AgentForge 管理"，
  *   深合并时未知键/未知 server 保留，Spec §8.2）；
  *   payload 采用 OpenCode 配置惯例：顶层 `mcp` 键，stdio →
@@ -18,12 +22,24 @@
  *   M8 skill add 接入后 skillsToMaterialize 才有内容；
  * - plan 为纯函数：不做任何 IO，路径按注入 os 选择分隔符（Spec §2.1）。
  */
-import path from 'node:path';
 import type { McpServer } from '../../../schema';
-import type { ProjectContext, Projector, ProjectionPlan, ProjectionPlanItem } from '../types';
+import { pathApiFor } from '../../paths';
+import {
+  mainRuleAction,
+  type ProjectContext,
+  type ProjectionPlan,
+  type ProjectionPlanItem,
+  type Projector,
+  shouldWriteAgentsMd,
+  shouldWriteOptionalClaudeMd,
+} from '../types';
+import { SKILLS_DIRNAME, skillDocPath } from './shared';
 
 /** Spec §2.3 / §8.3 主规则文件名（project / user 两个 scope 同名）。 */
 export const OPENCODE_MAIN_RULE_FILENAME = 'AGENTS.md';
+
+/** §8.7 中标记为「可选」的 CLAUDE.md 文件名（write_claude_md=true 时才产出）。 */
+export const OPENCODE_CLAUDE_RULE_FILENAME = 'CLAUDE.md';
 
 /** opencode 的项目级配置目录（skills 物化用，Spec §2.3）。 */
 export const OPENCODE_DIRNAME = '.opencode';
@@ -31,26 +47,15 @@ export const OPENCODE_DIRNAME = '.opencode';
 /** opencode 的用户级全局目录段（`<home>\.config\opencode`，Spec §2.2）。 */
 export const OPENCODE_USER_DIR_SEGMENTS = ['.config', 'opencode'] as const;
 
-/** Spec §2.3 skills 子目录名。 */
-export const SKILLS_DIRNAME = 'skills';
-
-/** skills 内的单 skill 说明文件名（各 target 统一约定）。 */
-export const SKILL_DOC_FILENAME = 'SKILL.md';
-
 /** Spec §2.3 / §8.3 MCP 配置文件（project 级项目根下；user 级全局目录下）。 */
 export const OPENCODE_MCP_FILENAME = 'opencode.json';
-
-/** 按注入 os 选择路径 api（win32 / posix）。 */
-function pathApi(ctx: ProjectContext): typeof path.win32 | typeof path.posix {
-  return ctx.os.platform === 'win32' ? path.win32 : path.posix;
-}
 
 /**
  * user scope 的 opencode 全局目录（`<home>\.config\opencode`，
  * 与 paths.resolveTargetUserDirs().opencode 同构——rootDir 即用户目录）。
  */
 function opencodeUserDir(ctx: ProjectContext): string {
-  return pathApi(ctx).join(ctx.rootDir, ...OPENCODE_USER_DIR_SEGMENTS);
+  return pathApiFor(ctx.os).join(ctx.rootDir, ...OPENCODE_USER_DIR_SEGMENTS);
 }
 
 /**
@@ -87,26 +92,37 @@ export function opencodeMcpPayload(servers: readonly McpServer[]): string {
 
 /** 主规则绝对路径（`status` / `init` 打印"实际将写入的路径"也用它，Spec §2.2）。 */
 export function opencodeMainRulePath(ctx: ProjectContext): string {
-  const api = pathApi(ctx);
+  const api = pathApiFor(ctx.os);
   const base = ctx.scope === 'project' ? ctx.rootDir : opencodeUserDir(ctx);
   return api.join(base, OPENCODE_MAIN_RULE_FILENAME);
 }
 
+/**
+ * §8.7「可选」CLAUDE.md 的绝对路径（与主规则同目录）。
+ * project scope 下与 claude target 的 `<root>\CLAUDE.md` 是同一路径——两者内容
+ * 同为 renderedRulesMd，引擎按路径去重备份、写入幂等，同时启用不会互相打架。
+ */
+export function opencodeClaudeRulePath(ctx: ProjectContext): string {
+  const api = pathApiFor(ctx.os);
+  const base = ctx.scope === 'project' ? ctx.rootDir : opencodeUserDir(ctx);
+  return api.join(base, OPENCODE_CLAUDE_RULE_FILENAME);
+}
+
 /** 单个 skill 的目标 SKILL.md 路径（project / user 两个 scope 的 skills 根不同）。 */
 export function opencodeSkillPath(ctx: ProjectContext, skillName: string): string {
-  const api = pathApi(ctx);
+  const api = pathApiFor(ctx.os);
   // §2.3：project = `<root>\.opencode\skills\<name>\SKILL.md`
   // §8.3：user = `~\.config\opencode\skills\<name>\SKILL.md`
   const skillsRoot =
     ctx.scope === 'project'
       ? api.join(ctx.rootDir, OPENCODE_DIRNAME, SKILLS_DIRNAME)
       : api.join(opencodeUserDir(ctx), SKILLS_DIRNAME);
-  return api.join(skillsRoot, skillName, SKILL_DOC_FILENAME);
+  return skillDocPath(api, skillsRoot, skillName);
 }
 
 /** MCP 配置绝对路径（project 级项目根下 opencode.json，Spec §2.3 二选一取项目根）。 */
 export function opencodeMcpPath(ctx: ProjectContext): string {
-  const api = pathApi(ctx);
+  const api = pathApiFor(ctx.os);
   const base = ctx.scope === 'project' ? ctx.rootDir : opencodeUserDir(ctx);
   return api.join(base, OPENCODE_MCP_FILENAME);
 }
@@ -116,14 +132,26 @@ export const opencodeProjector: Projector = {
   id: 'opencode',
 
   plan(ctx: ProjectContext): ProjectionPlan {
-    const items: ProjectionPlanItem[] = [
-      // 主规则：merge_marker——marker 外用户内容保留（Spec §8.2）
-      {
+    const items: ProjectionPlanItem[] = [];
+
+    // 主规则 AGENTS.md（§8.7 ✅）：动作与 marker 语义按 projection.marker_mode；
+    // projection.write_agents_md=false 时整项不产出
+    if (shouldWriteAgentsMd(ctx)) {
+      items.push({
         path: opencodeMainRulePath(ctx),
-        action: 'merge_marker',
+        action: mainRuleAction(ctx),
         content: ctx.renderedRulesMd,
-      },
-    ];
+      });
+    }
+
+    // CLAUDE.md（§8.7「可选」）：仅 projection.write_claude_md=true 时产出
+    if (shouldWriteOptionalClaudeMd(ctx)) {
+      items.push({
+        path: opencodeClaudeRulePath(ctx),
+        action: mainRuleAction(ctx),
+        content: ctx.renderedRulesMd,
+      });
+    }
 
     // skills：write 实体 copy（M8 skill add 接入后非空；事务内由引擎统一备份/回滚）
     for (const skill of ctx.skillsToMaterialize) {

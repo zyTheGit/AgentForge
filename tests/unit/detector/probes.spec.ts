@@ -6,8 +6,8 @@ import {
   detectShell,
   parseNodeVersionFile,
   parsePackageJsonManager,
-  parsePythonVersionFile,
   parsePyproject,
+  parsePythonVersionFile,
 } from '../../../src/core/detector/probes';
 import { createFakeHost } from '../test-utils';
 

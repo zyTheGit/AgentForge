@@ -8,16 +8,14 @@
  *   ProfileSchema 全量校验防写坏。
  */
 import path from 'node:path';
-import { stringify as stringifyYaml } from 'yaml';
-import type { Host } from '../../infra/host';
-import { atomicWrite } from '../../infra/fsutil';
-import type { EnvSnapshot } from '../env';
-import type { OsContext } from '../paths';
-import { loadProfile } from '../config/load';
-import { ProfileSchema, type ProfileInput } from '../../schema';
 import { BASE_DEFAULT_TEMPLATE_ID } from '../../assets/templates';
-import { listSources, loadSourceManifest, type SourceManagerContext } from './manager';
+import { listDirSafe } from '../../infra/fsutil';
+import type { Host } from '../../infra/host';
+import { editProfile } from '../config/edit-profile';
 import type { TargetLayer } from '../config/target-layer';
+import type { EnvSnapshot } from '../env';
+import { type OsContext, toPosixSeparators } from '../paths';
+import { listSources, loadSourceManifest, type SourceManagerContext } from './manager';
 
 /** 模板清单项。 */
 export interface TemplateListItem {
@@ -44,15 +42,6 @@ export interface TemplateContext {
   readonly effectiveTemplates: readonly string[];
 }
 
-/** 列出某目录的直接子项（不存在 → []）。 */
-async function listDirSafe(host: Host, dir: string): Promise<string[]> {
-  try {
-    return await host.listDir(dir);
-  } catch {
-    return [];
-  }
-}
-
 /** 递归扫描 <root>/templates 下的 .md 文件 → 模板 id 列表（相对路径去 .md，/ 分隔）。 */
 async function scanSoTTemplates(host: Host, sotRoot: string): Promise<string[]> {
   const ids: string[] = [];
@@ -66,7 +55,7 @@ async function scanSoTTemplates(host: Host, sotRoot: string): Promise<string[]> 
       if (stat?.isDirectory === true) {
         await walk(rel);
       } else if (entry.endsWith('.md')) {
-        ids.push(rel.replace(/\.md$/, '').replaceAll('\\', '/'));
+        ids.push(toPosixSeparators(rel.replace(/\.md$/, '')));
       }
     }
   }
@@ -150,31 +139,23 @@ export async function setTemplateEnabled(
   id: string,
   enabled: boolean,
 ): Promise<SetTemplateResult> {
-  const existing = await loadProfile(host, targetLayer.sotRoot);
-  const profile: ProfileInput = existing ?? { version: 1, targets: ['opencode'] };
-  const current = profile.templates ?? [];
-  const next = enabled
-    ? current.includes(id)
-      ? current
-      : [...current, id]
-    : current.filter((t) => t !== id);
-  const changed = next.length !== current.length;
-
-  const modified = { ...profile, templates: next };
-  // 写入前全量校验（防把 profile 写坏；z.input 形态合法即落盘形态合法）
-  ProfileSchema.parse(modified);
-
-  const text = stringifyYaml(modified, { lineWidth: 0 });
-  await atomicWrite(
-    host,
-    targetLayer.profileFile,
-    text.endsWith('\n') ? text : `${text}\n`,
-  );
+  let next: string[] = [];
+  let changed = false;
+  const { profileFile } = await editProfile(host, targetLayer, (profile) => {
+    const current = profile.templates ?? [];
+    next = enabled
+      ? current.includes(id)
+        ? current
+        : [...current, id]
+      : current.filter((t) => t !== id);
+    changed = next.length !== current.length;
+    return { ...profile, templates: next };
+  });
 
   return {
     id,
     enabled,
-    profileFile: targetLayer.profileFile,
+    profileFile,
     templates: next,
     changed,
   };

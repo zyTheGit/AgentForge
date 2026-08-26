@@ -20,14 +20,14 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import { runInit, runInitInteractive } from '../../src/commands/init';
 import { runSync } from '../../src/commands/sync';
 import { currentOs } from '../../src/core/paths';
-import { realHost } from '../../src/infra/real-host';
 import type { Host } from '../../src/infra/host';
+import { realHost } from '../../src/infra/real-host';
 import { createScriptedPrompt } from '../unit/test-utils';
 
 const OS = currentOs();
@@ -50,7 +50,10 @@ interface Workspace {
 }
 
 /** mkdtemp 前缀含中文与空格（§11.2.10 对本文件全部用例同样生效）。 */
-async function createWorkspace(label: string, envOverrides: Record<string, string | undefined> = {}): Promise<Workspace> {
+async function createWorkspace(
+  label: string,
+  envOverrides: Record<string, string | undefined> = {},
+): Promise<Workspace> {
   const base = await mkdtemp(path.join(tmpdir(), `aforge-验收 ${label}-`));
   const root = path.join(base, 'proj');
   const home = path.join(base, 'home');
@@ -108,7 +111,10 @@ function runCli(
 }
 
 /** 读 YAML → 改 → 写回（保留其余字段）。 */
-async function patchYaml(file: string, patch: (data: Record<string, unknown>) => void): Promise<void> {
+async function patchYaml(
+  file: string,
+  patch: (data: Record<string, unknown>) => void,
+): Promise<void> {
   const data = parseYaml(await readFile(file, 'utf8')) as Record<string, unknown>;
   patch(data);
   await writeFile(file, stringifyYaml(data, { lineWidth: 0 }), 'utf8');
@@ -224,8 +230,16 @@ describe('§11.2.8 两级合并端到端', () => {
   it('custom 同名 project 覆盖 user；user 独有保留；habits overlay：project 未设字段由 user 补', async () => {
     // user 层：全局 style + 两份 custom（global 将被 project 同名覆盖，user-only 独有）
     await runInit({ host: ws.host, cwd: ws.root, os: OS }, { scope: 'user' });
-    await writeFile(path.join(ws.userSoTRoot, 'custom', 'global.md'), 'USER-GLOBAL 规则内容\n', 'utf8');
-    await writeFile(path.join(ws.userSoTRoot, 'custom', 'user-only.md'), 'USER-ONLY 规则内容\n', 'utf8');
+    await writeFile(
+      path.join(ws.userSoTRoot, 'custom', 'global.md'),
+      'USER-GLOBAL 规则内容\n',
+      'utf8',
+    );
+    await writeFile(
+      path.join(ws.userSoTRoot, 'custom', 'user-only.md'),
+      'USER-ONLY 规则内容\n',
+      'utf8',
+    );
     await patchYaml(path.join(ws.userSoTRoot, 'habits.yaml'), (data) => {
       const ai = (data.ai ?? {}) as Record<string, unknown>;
       ai.style = 'user-style（来自 user 层）';
@@ -234,7 +248,11 @@ describe('§11.2.8 两级合并端到端', () => {
 
     // project 层：同名 global 覆盖（未声明 ai.style → 合并时由 user 层补缺）
     await runInit({ host: ws.host, cwd: ws.root, os: OS }, { scope: 'project' });
-    await writeFile(path.join(ws.sotRoot, 'custom', 'global.md'), 'PROJECT-GLOBAL 规则内容\n', 'utf8');
+    await writeFile(
+      path.join(ws.sotRoot, 'custom', 'global.md'),
+      'PROJECT-GLOBAL 规则内容\n',
+      'utf8',
+    );
 
     // 两层并存 → effectiveScope=project（§4.2），素材取两层合并
     const syncResult = await runSync(
@@ -351,7 +369,10 @@ describe('§11.2.13 import 导入映射闭环', () => {
 
     // 建议字段已写入 habits.detected.import（用户核对后确认的依据）
     const habits = parseYaml(await readFile(ws.habitsFile, 'utf8')) as Record<string, unknown>;
-    const detectedImport = (habits.detected as Record<string, unknown>).import as Record<string, unknown>;
+    const detectedImport = (habits.detected as Record<string, unknown>).import as Record<
+      string,
+      unknown
+    >;
     expect(detectedImport.node).toEqual({ manager: 'fnm', source: 'import' });
     expect(detectedImport.python).toEqual({ manager: 'uv', source: 'import' });
 
@@ -375,7 +396,10 @@ describe('§11.2.13 import 导入映射闭环', () => {
     const customEntries = await ws.host.listDir(path.join(ws.sotRoot, 'custom'));
     const importedFiles = customEntries.filter((name) => /^imported-\d{8}-\d{6}\.md$/.test(name));
     expect(importedFiles).toHaveLength(1);
-    const importedContent = await readFile(path.join(ws.sotRoot, 'custom', importedFiles[0] as string), 'utf8');
+    const importedContent = await readFile(
+      path.join(ws.sotRoot, 'custom', importedFiles[0] as string),
+      'utf8',
+    );
     expect(importedContent).toContain('## 代码风格');
     expect(claude).toContain('简洁，外科手术式修改。');
   });

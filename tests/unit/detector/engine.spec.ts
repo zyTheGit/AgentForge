@@ -4,14 +4,14 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { EnvSnapshot } from '../../../src/core/env';
 import {
+  type DetectedSnapshot,
   NODE_MANAGER_PRIORITY,
   PACKAGE_MANAGER_PRIORITY,
   PYTHON_MANAGER_PRIORITY,
   runDetection,
-  type DetectedSnapshot,
 } from '../../../src/core/detector/engine';
+import type { EnvSnapshot } from '../../../src/core/env';
 import { NodeManager, PackageManager, PythonManager } from '../../../src/schema/habits';
 import { makeDetectHost } from './helpers';
 
@@ -49,8 +49,7 @@ describe('runDetection：探测矩阵（fnm/nvm/volta/system × uv/poetry/pipenv
   );
 
   it.each(matrix)('$node × $python × $shell', async ({ node, python, shell }) => {
-    const binFiles =
-      node === 'system' ? ['node.exe'] : [`${node}.exe`];
+    const binFiles = node === 'system' ? ['node.exe'] : [`${node}.exe`];
     binFiles.push(python === 'system' ? 'python.exe' : `${python}.exe`);
 
     const env: Record<string, string> = { PATH: 'C:/bin' };
@@ -82,7 +81,11 @@ describe('runDetection：Node 探测', () => {
       [['n.exe'], 'n'],
     ];
     for (const [binFiles, expected] of cases) {
-      const snapshot = await detectWin32({ dirs: { 'C:/bin': binFiles }, files: {}, env: { PATH: 'C:/bin' } });
+      const snapshot = await detectWin32({
+        dirs: { 'C:/bin': binFiles },
+        files: {},
+        env: { PATH: 'C:/bin' },
+      });
       expect(snapshot.node.manager, `binFiles=${binFiles.join(',')}`).toBe(expected);
     }
   });
@@ -159,7 +162,11 @@ describe('runDetection：Python 探测', () => {
       [['mise.exe'], 'mise'],
     ];
     for (const [binFiles, expected] of cases) {
-      const snapshot = await detectWin32({ dirs: { 'C:/bin': binFiles }, files: {}, env: { PATH: 'C:/bin' } });
+      const snapshot = await detectWin32({
+        dirs: { 'C:/bin': binFiles },
+        files: {},
+        env: { PATH: 'C:/bin' },
+      });
       expect(snapshot.python.manager, `binFiles=${binFiles.join(',')}`).toBe(expected);
     }
   });
@@ -264,7 +271,11 @@ describe('runDetection：包管理器探测', () => {
       env: { PATH: 'C:/bin' },
     });
     expect(snapshot.package_managers).toEqual([
-      { name: 'yarn-berry', source: 'package.json', path: path.win32.resolve('C:/bin', 'yarn.cmd') },
+      {
+        name: 'yarn-berry',
+        source: 'package.json',
+        path: path.win32.resolve('C:/bin', 'yarn.cmd'),
+      },
     ]);
   });
 

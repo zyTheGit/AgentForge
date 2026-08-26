@@ -21,23 +21,19 @@ import {
   buildCustomContent,
   buildImportDetected,
   hasAnySuggestion,
+  type ImportFileKind,
+  type ImportSuggestions,
   identifyImportFile,
   importTimestamp,
   parseImportedFile,
-  type ImportFileKind,
-  type ImportSuggestions,
 } from '../core/importer/importer';
-import { currentOs, resolveProjectSoT, resolveUserSoT, type OsContext } from '../core/paths';
-import type { Host } from '../infra/host';
-import { atomicWrite } from '../infra/fsutil';
-import { realHost } from '../infra/real-host';
+import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
+import { atomicWrite, ensureTrailingNewline } from '../infra/fsutil';
+import { type CommandContext, defaultCommandContext, printJson } from './context';
+import { resolveJsonFlag } from './flags';
 
 /** 命令上下文（host/os/cwd 注入；测试用真实临时目录 + realHost）。 */
-export interface ImportCommandContext {
-  readonly host: Host;
-  readonly cwd: string;
-  readonly os: OsContext;
-}
+export type ImportCommandContext = CommandContext;
 
 /** import 结果（打印与测试断言共用）。 */
 export interface ImportResult {
@@ -52,20 +48,12 @@ export interface ImportResult {
   readonly suggestions: ImportSuggestions;
 }
 
-/** YAML 落盘统一以换行结尾。 */
-function ensureTrailingNewline(text: string): string {
-  return text.endsWith('\n') ? text : `${text}\n`;
-}
-
 /**
  * import 核心逻辑（可注入、不打印——CLI 输出与测试共用同一入口）。
  *
  * @throws ConfigError(2) 未初始化 / 文件不存在或不可读 / 文件名不受支持。
  */
-export async function runImport(
-  ctx: ImportCommandContext,
-  pathArg: string,
-): Promise<ImportResult> {
+export async function runImport(ctx: ImportCommandContext, pathArg: string): Promise<ImportResult> {
   const env = readEnv(ctx.host);
   const scope = env.agfScope ?? 'project';
   const sotRoot =
@@ -113,7 +101,7 @@ export async function runImport(
   // habits.yaml：detected.import 建议字段（不覆盖既有声明字段与探测快照）
   const habitsFile = path.join(sotRoot, HABITS_FILE);
   const habits = (await loadHabits(ctx.host, sotRoot)) ?? { version: 1 };
-  const detected: Record<string, unknown> = { ...(habits.detected as object | undefined ?? {}) };
+  const detected: Record<string, unknown> = { ...((habits.detected as object | undefined) ?? {}) };
   if (hasAnySuggestion(parsed.suggestions)) {
     detected.import = buildImportDetected(
       parsed.suggestions,
@@ -154,12 +142,17 @@ function suggestionSummary(s: ImportSuggestions): string[] {
 export function registerImportCommand(program: Command): void {
   program
     .command('import <path>')
-    .description('import toolchain declarations and rule blocks from an existing AGENTS.md / CLAUDE.md')
-    .action(async (pathArg: string) => {
-      const result = await runImport(
-        { host: realHost, cwd: process.cwd(), os: currentOs() },
-        pathArg,
-      );
+    .description(
+      'import toolchain declarations and rule blocks from an existing AGENTS.md / CLAUDE.md',
+    )
+    .action(async (pathArg: string, _options: unknown, command: Command) => {
+      const result = await runImport(defaultCommandContext(), pathArg);
+
+      if (resolveJsonFlag(command)) {
+        // §6.2 机器可读输出（路径一律绝对路径）
+        printJson(result);
+        return;
+      }
 
       const lines: string[] = [
         `aforge import - ${path.basename(result.importFile)} (${result.kind})`,

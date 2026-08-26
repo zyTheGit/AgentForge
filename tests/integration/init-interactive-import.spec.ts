@@ -16,16 +16,24 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { parse as parseYaml } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 
 import { runImport } from '../../src/commands/import';
-import { runInit, runInitInteractive, SOT_SUBDIRS } from '../../src/commands/init';
+import {
+  extractInitArtifacts,
+  formatCancelledInitArtifacts,
+  runInit,
+  runInitInteractive,
+  SOT_SUBDIRS,
+  targetMainRulePaths,
+} from '../../src/commands/init';
 import { runSync } from '../../src/commands/sync';
+import { readEnv } from '../../src/core/env';
 import { currentOs } from '../../src/core/paths';
-import { ConfigError } from '../../src/core/errors';
-import { realHost } from '../../src/infra/real-host';
 import type { Host } from '../../src/infra/host';
+import { CancelledError } from '../../src/infra/prompt';
+import { realHost } from '../../src/infra/real-host';
 import { createScriptedPrompt } from '../unit/test-utils';
 
 const OS = currentOs();
@@ -190,13 +198,7 @@ describe('init -i 交互五步（Spec §7.1.1）', () => {
         effect: async () => {
           await writeFile(
             ws.habitsFile,
-            [
-              'version: 1',
-              'runtime:',
-              '  node:',
-              '    manager: fnm',
-              '',
-            ].join('\n'),
+            ['version: 1', 'runtime:', '  node:', '    manager: fnm', ''].join('\n'),
             'utf8',
           );
         },
@@ -219,6 +221,131 @@ describe('init -i 交互五步（Spec §7.1.1）', () => {
     expect(habits.runtime?.node?.manager).toBe('fnm');
     // profile.yaml 未创建（因为取消了）
     expect(await ws.host.exists(ws.profileFile)).toBe(false);
+  });
+
+  it('第④步 Ctrl-C（edit 分支已落盘）→ CancelledError 带产物清单，退出码 130', async () => {
+    const scripted = createScriptedPrompt([
+      { kind: 'select', value: 'project' },
+      { kind: 'select', value: 'edit' },
+      { kind: 'confirm', value: true }, // 「已保存 habits.yaml，继续？」
+      {
+        // 第④个提问（目标 Agent 选择）处 Ctrl-C：prompt 层抛 CancelledError
+        kind: 'multiselect',
+        value: [],
+        effect: () => {
+          throw new CancelledError();
+        },
+      },
+    ]);
+
+    let caught: unknown;
+    try {
+      await runInitInteractive(
+        {
+          host: ws.host,
+          cwd: ws.root,
+          os: OS,
+          prompt: scripted.prompt,
+          agentforgeVersion: VERSION,
+        },
+        {},
+      );
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(CancelledError);
+    if (!(caught instanceof CancelledError)) {
+      throw new Error('取消应抛出 CancelledError');
+    }
+    expect(caught.exitCode).toBe(130);
+
+    // 清单包含 edit 分支已落盘的 habits.yaml 与全部子目录
+    const artifacts = extractInitArtifacts(caught);
+    expect(artifacts?.createdFiles).toEqual([ws.habitsFile]);
+    expect(artifacts?.createdDirs).toEqual(SOT_SUBDIRS.map((d) => path.join(ws.sotRoot, d)));
+    expect(await ws.host.exists(ws.habitsFile)).toBe(true);
+    expect(await ws.host.exists(ws.profileFile)).toBe(false);
+
+    // 命令层文案：逐条 created file/dir + 删除指引
+    const lines = formatCancelledInitArtifacts(artifacts);
+    expect(lines).toContain(`created file: ${ws.habitsFile}`);
+    expect(lines).toContain(`created dir: ${path.join(ws.sotRoot, 'custom')}`);
+    expect(lines.join('\n')).toContain('aforge init -i');
+  });
+
+  it('第①步（scope 询问）Ctrl-C → 清单为空，文案为 nothing was written', async () => {
+    const scripted = createScriptedPrompt([
+      {
+        kind: 'select',
+        value: 'project',
+        effect: () => {
+          throw new CancelledError();
+        },
+      },
+    ]);
+
+    let caught: unknown;
+    try {
+      await runInitInteractive(
+        {
+          host: ws.host,
+          cwd: ws.root,
+          os: OS,
+          prompt: scripted.prompt,
+          agentforgeVersion: VERSION,
+        },
+        {},
+      );
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(CancelledError);
+    const artifacts = extractInitArtifacts(caught);
+    expect(artifacts).toEqual({ createdFiles: [], createdDirs: [] });
+    expect(formatCancelledInitArtifacts(artifacts)).toEqual([
+      'aforge init - cancelled: nothing was written',
+    ]);
+    // 磁盘未留任何产物
+    expect(await ws.host.exists(ws.habitsFile)).toBe(false);
+    expect(await ws.host.exists(ws.sotRoot)).toBe(false);
+  });
+
+  it('确认写入后在「立即 sync？」处 Ctrl-C → 清单含 habits + profile + 子目录', async () => {
+    const scripted = createScriptedPrompt([
+      { kind: 'select', value: 'project' },
+      { kind: 'select', value: 'confirm' },
+      { kind: 'multiselect', value: ['opencode', 'codex', 'claude', 'pi'] },
+      { kind: 'confirm', value: true }, // 写入
+      {
+        kind: 'confirm',
+        value: false,
+        effect: () => {
+          throw new CancelledError();
+        },
+      },
+    ]);
+
+    let caught: unknown;
+    try {
+      await runInitInteractive(
+        {
+          host: ws.host,
+          cwd: ws.root,
+          os: OS,
+          prompt: scripted.prompt,
+          agentforgeVersion: VERSION,
+        },
+        {},
+      );
+    } catch (err) {
+      caught = err;
+    }
+
+    const artifacts = extractInitArtifacts(caught);
+    expect(artifacts?.createdFiles).toEqual([ws.habitsFile, ws.profileFile]);
+    expect(artifacts?.createdDirs).toEqual(SOT_SUBDIRS.map((d) => path.join(ws.sotRoot, d)));
   });
 
   it('n 重新探测 → 探测循环后再确认（交互步骤序列）', async () => {
@@ -322,7 +449,9 @@ describe('init -i 交互五步（Spec §7.1.1）', () => {
     expect(result.sotRoot).toBe(path.join(ws.home, '.agentforge'));
     expect(scripted.questionCount()).toBe(4);
     // 产物在用户级 SoT（而非项目级）
-    const profile = parseYaml(await readFile(path.join(ws.home, '.agentforge', 'profile.yaml'), 'utf8'));
+    const profile = parseYaml(
+      await readFile(path.join(ws.home, '.agentforge', 'profile.yaml'), 'utf8'),
+    );
     expect(profile.scope).toBe('user');
     expect(profile.targets).toEqual(['opencode', 'codex', 'claude', 'pi']);
     expect(await ws.host.exists(ws.profileFile)).toBe(false); // 项目级 SoT 未创建
@@ -334,7 +463,13 @@ describe('init -i 交互五步（Spec §7.1.1）', () => {
     const scripted = createScriptedPrompt(DEFAULT_SCRIPT);
     await expect(
       runInitInteractive(
-        { host: ws.host, cwd: ws.root, os: OS, prompt: scripted.prompt, agentforgeVersion: VERSION },
+        {
+          host: ws.host,
+          cwd: ws.root,
+          os: OS,
+          prompt: scripted.prompt,
+          agentforgeVersion: VERSION,
+        },
         {},
       ),
     ).rejects.toMatchObject({ code: 2 });
@@ -360,6 +495,37 @@ describe('init -i 交互五步（Spec §7.1.1）', () => {
       'pi',
     ]);
     expect(await ws.host.exists(path.join(ws.root, 'CLAUDE.md'))).toBe(true);
+  });
+
+  it('CODEX_HOME 生效时（user scope），第④步 codex hint 等于 sync 实际写入路径（planCtx 必须注入 env）', async () => {
+    // targetMainRulePaths 的 planCtx 曾漏传 env，codexMainRulePath 的
+    // ctx.env?.codexHome 分支拿到 undefined → hint 落在 ~/.codex 下，而 sync 实际
+    // 写到 CODEX_HOME 下，交互提示与结果不一致（engine / status / doctor 三处
+    // plan ctx 均已注入 env，此处对齐）。CODEX_HOME 只影响 user scope。
+    const codexHome = path.join(path.dirname(ws.root), 'codex-home');
+    await mkdir(codexHome, { recursive: true });
+    const host: Host = {
+      ...ws.host,
+      env(key) {
+        return key === 'CODEX_HOME' ? codexHome : ws.host.env(key);
+      },
+    };
+
+    const hint = targetMainRulePaths({ host, cwd: ws.root, os: OS }, readEnv(host), 'user').codex;
+    expect(hint.startsWith(codexHome)).toBe(true);
+
+    await runInit({ host, cwd: ws.root, os: OS }, { scope: 'user' });
+    const syncResult = await runSync(
+      { host, cwd: ws.root, os: OS, agentforgeVersion: VERSION },
+      {},
+    );
+
+    expect(syncResult.scope).toBe('user');
+    const codexPaths = syncResult.targets
+      .filter((t) => t.targetId === 'codex')
+      .flatMap((t) => t.items.map((i) => i.path));
+    expect(codexPaths).toContain(hint);
+    expect(await host.exists(hint)).toBe(true);
   });
 });
 
@@ -394,12 +560,12 @@ describe('import 命令（Spec §7.7）', () => {
   });
 
   it('未初始化 → ConfigError(2)', async () => {
-    await expect(runImport({ host: ws.host, cwd: ws.root, os: OS }, agentsMd)).rejects.toMatchObject(
-      {
-        code: 2,
-        name: 'ConfigError',
-      },
-    );
+    await expect(
+      runImport({ host: ws.host, cwd: ws.root, os: OS }, agentsMd),
+    ).rejects.toMatchObject({
+      code: 2,
+      name: 'ConfigError',
+    });
   });
 
   it('文件不存在 → ConfigError(2)', async () => {
@@ -521,11 +687,15 @@ describe('import 命令（Spec §7.7）', () => {
   it('子进程端到端：aforge import 输出摘要且退出码 0；不自动 sync', async () => {
     await runInit({ host: ws.host, cwd: ws.root, os: OS }, { scope: 'project' });
 
-    const result = spawnSync(process.execPath, ['--import', tsxImport, mainTs, 'import', 'AGENTS.md'], {
-      cwd: ws.root,
-      encoding: 'utf8',
-      env: { ...process.env, USERPROFILE: ws.home, HOME: ws.home, AGF_HOME: '', CI: '' },
-    });
+    const result = spawnSync(
+      process.execPath,
+      ['--import', tsxImport, mainTs, 'import', 'AGENTS.md'],
+      {
+        cwd: ws.root,
+        encoding: 'utf8',
+        env: { ...process.env, USERPROFILE: ws.home, HOME: ws.home, AGF_HOME: '', CI: '' },
+      },
+    );
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
@@ -538,11 +708,15 @@ describe('import 命令（Spec §7.7）', () => {
   });
 
   it('子进程端到端：未初始化 → 退出码 2，stderr 引导先 init', async () => {
-    const result = spawnSync(process.execPath, ['--import', tsxImport, mainTs, 'import', 'AGENTS.md'], {
-      cwd: ws.root,
-      encoding: 'utf8',
-      env: { ...process.env, USERPROFILE: ws.home, HOME: ws.home, AGF_HOME: '', CI: '' },
-    });
+    const result = spawnSync(
+      process.execPath,
+      ['--import', tsxImport, mainTs, 'import', 'AGENTS.md'],
+      {
+        cwd: ws.root,
+        encoding: 'utf8',
+        env: { ...process.env, USERPROFILE: ws.home, HOME: ws.home, AGF_HOME: '', CI: '' },
+      },
+    );
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('未初始化');
@@ -564,15 +738,11 @@ describe('init -i 非 TTY 防护', () => {
   });
 
   it('非 TTY 环境（CI / 管道）→ ConfigError(2)，hint 引导非交互参数', async () => {
-    const result = spawnSync(
-      process.execPath,
-      ['--import', tsxImport, mainTs, 'init', '-i'],
-      {
-        cwd: ws.root,
-        encoding: 'utf8',
-        env: { ...process.env, USERPROFILE: ws.home, HOME: ws.home, AGF_HOME: '', CI: '' },
-      },
-    );
+    const result = spawnSync(process.execPath, ['--import', tsxImport, mainTs, 'init', '-i'], {
+      cwd: ws.root,
+      encoding: 'utf8',
+      env: { ...process.env, USERPROFILE: ws.home, HOME: ws.home, AGF_HOME: '', CI: '' },
+    });
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('非 TTY');

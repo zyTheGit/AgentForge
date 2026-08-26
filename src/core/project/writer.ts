@@ -4,7 +4,9 @@
  * 所有 IO 经注入 Host + infra/fsutil（原子写 / mkdirp / 权限错误映射），writer 不直接
  * 触碰 node:fs。四种动作：
  * - write：mkdirp 目标目录 → 原子写（换行按 lineEnding，Spec §2.5）；
- * - merge_marker：读现有（不存在 → 新建）→ replaceBetween（marker 外保留，§8.2）→ 原子写；
+ * - merge_marker：读现有（不存在 → 新建）→ 按 profile.projection.marker_mode 分派
+ *   （replace_between_markers 整段替换 / append_below_marker 在 begin 后追加 /
+ *   none 整文件覆盖；marker 外内容一律保留，§8.2）→ 原子写；
  * - merge_json：读现有 JSON 深合并（未知键保留、AgentForge 管理键覆盖，§8.2）→ 原子写；
  * - merge_toml：按 `# BEGIN AGENTFORGE` / `# END AGENTFORGE` 文本标记段替换
  *   （复用 markers 逻辑换前缀，§8.4）→ 原子写。
@@ -14,12 +16,26 @@
 import path from 'node:path';
 import { atomicWrite, isPermissionErrno, mkdirp, normalizeLineEnding } from '../../infra/fsutil';
 import type { Host } from '../../infra/host';
+import type { MarkerMode } from '../../schema';
 import type { LineEnding } from '../env';
 import { ConflictError, GenericError, PermissionError } from '../errors';
-import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END, replaceBetween } from '../markers';
+import {
+  DEFAULT_MARKER_BEGIN,
+  DEFAULT_MARKER_END,
+  type MarkerContext,
+  replaceBetween,
+  splitByMarkers,
+  wrapWithMarkers,
+} from '../markers';
 import type { ProjectionAction, ProjectionPlanItem } from './types';
 
-/** Spec §8.4：TOML 标记段（M8 codex 用 `# BEGIN AGENTFORGE MCP` 变体，经参数覆盖）。 */
+/**
+ * Spec §8.4：TOML 标记段（M8 codex 用 `# BEGIN AGENTFORGE MCP` 变体，经参数覆盖）。
+ *
+ * 默认标记是 MCP 变体的字面量前缀，但不构成错配：markers 的定位是行锚定的
+ * （`^<marker>[ \t]*$`），`# BEGIN AGENTFORGE` 不会命中 `# BEGIN AGENTFORGE MCP`
+ * 那一行（见 markers.markerRegExp 与 writer.spec 的前缀不误命中用例）。
+ */
 export const TOML_MARKER_BEGIN = '# BEGIN AGENTFORGE';
 export const TOML_MARKER_END = '# END AGENTFORGE';
 
@@ -31,6 +47,13 @@ export interface ProjectionMarkers {
   /** merge_toml 用的文本标记段前缀。 */
   readonly tomlBegin: string;
   readonly tomlEnd: string;
+  /**
+   * Spec §4.2 projection.marker_mode（只作用于 merge_marker 动作）：
+   * `replace_between_markers` 替换整段、`append_below_marker` 在 begin 之后追加、
+   * `none` 不使用 marker（projector 侧已把主规则降级为 write，此处兜底同 write）。
+   * 缺省 = replace_between_markers（历史行为）。
+   */
+  readonly mode?: MarkerMode;
 }
 
 export const DEFAULT_PROJECTION_MARKERS: ProjectionMarkers = {
@@ -38,6 +61,7 @@ export const DEFAULT_PROJECTION_MARKERS: ProjectionMarkers = {
   end: DEFAULT_MARKER_END,
   tomlBegin: TOML_MARKER_BEGIN,
   tomlEnd: TOML_MARKER_END,
+  mode: 'replace_between_markers',
 };
 
 /** 读现有投影文件：不存在 → ''（新建语义）；权限失败 → PermissionError(4)。 */
@@ -171,7 +195,8 @@ export function mergeJsonContent(existing: string, managedJson: string, file: st
  * @param markers merge 系动作使用的标记对（默认 markdown marker + TOML 标记段）。
  * @returns 是否实际写入（false = 内容未变跳写）。
  * @throws PermissionError(4) 目标路径无写权限 / 读现有文件无权限（Spec §7.3）。
- * @throws ConflictError(3) merge_json 的现有文件损坏或无法合并。
+ * @throws ConflictError(3) merge_json 的现有文件损坏或无法合并；merge_marker /
+ *   merge_toml 的渲染正文含 marker 字面量（Spec §8.2，见 computeItemContent）。
  */
 export async function applyItem(
   host: Host,
@@ -193,6 +218,12 @@ export async function applyItem(
 /**
  * 计算单个投影项的最终内容（纯函数，LF 基准；换行由落盘层统一）。
  * 引擎的备份/跳写/回滚判断与 applyItem 共用同一计算（单一事实源）。
+ *
+ * merge_marker 的写入语义由 markers.mode（= profile.projection.marker_mode）决定，
+ * 见 markerModeContent。
+ *
+ * @throws ConflictError(3) merge_json 现有文件损坏；merge_marker / merge_toml 的
+ *   渲染正文含 marker 字面量（marker 上下文带上 item.path 便于用户定位）。
  */
 export function computeItemContent(
   item: ProjectionPlanItem,
@@ -204,14 +235,84 @@ export function computeItemContent(
       return item.content;
 
     case 'merge_marker':
-      return replaceBetween(existing, item.content, markers.begin, markers.end);
+      return markerModeContent(item, existing, markers);
 
     case 'merge_json':
       return mergeJsonContent(existing, item.content, item.path);
 
     case 'merge_toml':
-      return replaceBetween(existing, item.content, markers.tomlBegin, markers.tomlEnd);
+      return replaceBetween(existing, item.content, markers.tomlBegin, markers.tomlEnd, {
+        source: item.path,
+      });
   }
+}
+
+/**
+ * merge_marker 的三种 marker_mode 分派（Spec §4.2）：
+ * - `replace_between_markers`（缺省）：replaceBetween——区间整段替换，区间外保留；
+ * - `append_below_marker`：appendBelowMarker——begin 之后追加，原区间内容保留在后；
+ * - `none`：不使用 marker 包裹 → 正文即全文（projector 侧通常已降级为 write 动作，
+ *   此处兜底保证同一语义，避免两处行为分叉）。
+ */
+function markerModeContent(
+  item: ProjectionPlanItem,
+  existing: string,
+  markers: ProjectionMarkers,
+): string {
+  switch (markers.mode ?? 'replace_between_markers') {
+    case 'none':
+      return item.content;
+    case 'append_below_marker':
+      return appendBelowMarker(existing, item.content, markers.begin, markers.end, {
+        source: item.path,
+      });
+    default:
+      return replaceBetween(existing, item.content, markers.begin, markers.end, {
+        source: item.path,
+      });
+  }
+}
+
+/** 剥掉首尾全部换行（含空行与 CRLF），与 markers.wrapWithMarkers 的包裹规范一致。 */
+function stripEdgeNewlines(s: string): string {
+  return s.replace(/^(?:\r?\n)+/, '').replace(/(?:\r?\n)+$/, '');
+}
+
+/**
+ * `marker_mode: append_below_marker`（Spec §4.2）：把新正文追加到 marker_begin 之后，
+ * 原区间内容保留在其下方（marker 外用户内容一律原样保留，§8.2）。
+ *
+ * 幂等保证（sync 会被反复执行，追加语义天然有"无限膨胀"风险）：区间内已包含
+ * 同一段正文时不再追加，直接按包裹规范重建原区间。比较基准统一 LF 规范化，
+ * 避免 CRLF 文件每次 sync 都被判定为"不同"而重复追加。
+ *
+ * 无 marker 的现有文件（或新建）走 replaceBetween 的 EOF 追加路径——首次写入没有
+ * "已存在区间"可追加，两种模式此时行为一致。
+ *
+ * @throws ConflictError(3) 新正文含 marker 字面量（经 wrapWithMarkers 守卫）。
+ */
+export function appendBelowMarker(
+  content: string,
+  newInside: string,
+  begin: string = DEFAULT_MARKER_BEGIN,
+  end: string = DEFAULT_MARKER_END,
+  ctx: MarkerContext = {},
+): string {
+  const split = splitByMarkers(content, begin, end);
+  if (!split.hasMarkers) {
+    return replaceBetween(content, newInside, begin, end, ctx);
+  }
+
+  const body = stripEdgeNewlines(newInside).replace(/\r\n/g, '\n');
+  const existingInside = stripEdgeNewlines(split.inside).replace(/\r\n/g, '\n');
+  const merged =
+    body === '' || existingInside === body || existingInside.includes(`${body}\n`)
+      ? existingInside
+      : existingInside === ''
+        ? body
+        : `${body}\n\n${existingInside}`;
+
+  return split.before + wrapWithMarkers(merged, begin, end, ctx) + split.after;
 }
 
 /** dry-run 用的动作描述（纯函数，不落盘）。 */

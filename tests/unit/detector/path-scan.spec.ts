@@ -167,7 +167,11 @@ describe('scanPath 边界', () => {
   });
 
   it('execNames 为空 → 空 Map', async () => {
-    const host = makeDetectHost({ dirs: { 'C:/bin': ['fnm.exe'] }, files: {}, env: { PATH: 'C:/bin' } });
+    const host = makeDetectHost({
+      dirs: { 'C:/bin': ['fnm.exe'] },
+      files: {},
+      env: { PATH: 'C:/bin' },
+    });
     const result = await scanPath(host, [], { platform: 'win32' });
     expect(result.size).toBe(0);
   });

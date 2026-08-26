@@ -11,25 +11,21 @@
  * 核心逻辑在 core/sources/skill；本层只做目标层解析与输出。
  */
 import type { Command } from 'commander';
-import { readEnv } from '../core/env';
-import { currentOs, resolveProjectSoT, resolveUserSoT, type OsContext } from '../core/paths';
 import { resolveWriteTargetLayer } from '../core/config/target-layer';
+import { readEnv } from '../core/env';
+import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
 import {
+  type AddSkillResult,
   addSkill,
   listSkills,
-  type AddSkillResult,
   type SkillContext,
   type SkillListItem,
 } from '../core/sources/skill';
-import type { Host } from '../infra/host';
-import { realHost } from '../infra/real-host';
+import { type CommandContext, defaultCommandContext, printJson } from './context';
+import { resolveJsonFlag } from './flags';
 
 /** 命令上下文。 */
-export interface SkillCommandContext {
-  readonly host: Host;
-  readonly cwd: string;
-  readonly os: OsContext;
-}
+export type SkillCommandContext = CommandContext;
 
 /** 构造 skill 上下文；add 时解析安装目标层（要求该层已 init）。 */
 async function buildSkillContext(
@@ -81,9 +77,17 @@ export function registerSkillCommand(program: Command): void {
   cmd
     .command('add <name>')
     .description('install a skill from a source into the SoT skills/ directory (copy, not symlink)')
-    .option('--from <source>', 'source id or path containing skills/<name>/ (default: first source that has it)')
-    .action(async (name: string, options: { from?: string }) => {
-      const result = await runSkillAdd({ host: realHost, cwd: process.cwd(), os: currentOs() }, name, options.from);
+    .option(
+      '--from <source>',
+      'source id or path containing skills/<name>/ (default: first source that has it)',
+    )
+    .action(async (name: string, options: { from?: string }, command: Command) => {
+      const result = await runSkillAdd(defaultCommandContext(), name, options.from);
+      if (resolveJsonFlag(command)) {
+        // skipped 一并输出：symlink / 环路跳过项属于结果的一部分（§10 安全边界）
+        printJson(result);
+        return;
+      }
       const lines: string[] = [
         `skill installed: ${result.name}`,
         `  from     : ${result.fromSourceId ?? result.fromRoot}`,
@@ -92,6 +96,15 @@ export function registerSkillCommand(program: Command): void {
       ];
       for (const file of result.files) {
         lines.push(`    - ${file}`);
+      }
+      if (result.skipped.length > 0) {
+        // 不静默丢弃：symlink 不跟随（防私钥等越界读取）、环路项跳过（§10）
+        lines.push(`  skipped  : ${result.skipped.length} entry(ies) not copied`);
+        for (const entry of result.skipped) {
+          const reason =
+            entry.reason === 'symlink' ? 'symlink - not followed' : 'cycle - already visited';
+          lines.push(`    - ${entry.path} (${reason})`);
+        }
       }
       lines.push(
         '',
@@ -104,10 +117,10 @@ export function registerSkillCommand(program: Command): void {
     .command('list')
     .description('list installed (SoT) and available (source) skills')
     .option('--json', 'machine-readable output (Spec 6.2)')
-    .action(async (options: { json?: boolean }) => {
-      const items = await runSkillList({ host: realHost, cwd: process.cwd(), os: currentOs() });
-      if (options.json) {
-        console.log(JSON.stringify(items, null, 2));
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const items = await runSkillList(defaultCommandContext());
+      if (resolveJsonFlag(command, options.json)) {
+        printJson(items);
         return;
       }
       if (items.length === 0) {

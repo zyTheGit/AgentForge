@@ -21,11 +21,11 @@ import type { EnvSnapshot } from '../env';
 import { scanPath } from './path-scan';
 import {
   detectShell,
+  type PackageManagerField,
   parseNodeVersionFile,
   parsePackageJsonManager,
-  parsePythonVersionFile,
   parsePyproject,
-  type PackageManagerField,
+  parsePythonVersionFile,
   type ShellName,
 } from './probes';
 
@@ -33,7 +33,14 @@ import {
 export const NODE_MANAGER_PRIORITY = ['fnm', 'nvm', 'volta', 'mise', 'asdf', 'n'] as const;
 
 /** Python 工具链 PATH 命中优先级（mise 为通用 runtime manager，排最后）。 */
-export const PYTHON_MANAGER_PRIORITY = ['uv', 'poetry', 'pipenv', 'conda', 'pyenv', 'mise'] as const;
+export const PYTHON_MANAGER_PRIORITY = [
+  'uv',
+  'poetry',
+  'pipenv',
+  'conda',
+  'pyenv',
+  'mise',
+] as const;
 
 /** 包管理器 PATH 命中优先级（Spec §4.1 runtime.package_managers 惯例顺序）。 */
 export const PACKAGE_MANAGER_PRIORITY = ['pnpm', 'bun', 'npm', 'yarn'] as const;
@@ -101,7 +108,9 @@ const SCAN_NAMES: readonly string[] = [
 /** 读可选文件：不存在 / 读失败 → undefined（探测器对坏输入一律视为无线索）。 */
 async function readOptionalFile(host: Host, file: string): Promise<string | undefined> {
   try {
-    if (!(await host.exists(file))) return undefined;
+    if (!(await host.exists(file))) {
+      return undefined;
+    }
     return await host.readFile(file);
   } catch {
     return undefined;
@@ -121,7 +130,10 @@ async function safeExists(host: Host, file: string): Promise<boolean> {
  * Node 探测：PATH manager 命中（优先级序）→ path；否则版本文件交叉
  * （.node-version 给出 version，node 本体在 PATH 则推断 system）；再否则 node 本体 → system。
  */
-function detectNode(hits: ReadonlyMap<string, string>, versionFile: string | undefined): DetectedRuntime {
+function detectNode(
+  hits: ReadonlyMap<string, string>,
+  versionFile: string | undefined,
+): DetectedRuntime {
   const manager = NODE_MANAGER_PRIORITY.find((m) => hits.has(m));
   if (manager !== undefined) {
     return { manager, source: 'path', version: versionFile, path: hits.get(manager) };
@@ -174,7 +186,9 @@ function detectPython(
 
 /** yarn 主版本 ≥2 → berry（yarn-berry），否则原样。 */
 function yarnMajorIsBerry(version: string | undefined): boolean {
-  if (version === undefined) return false;
+  if (version === undefined) {
+    return false;
+  }
   const major = /^(\d+)/.exec(version.trim())?.[1];
   return major !== undefined && Number.parseInt(major, 10) >= 2;
 }
@@ -184,7 +198,9 @@ function declaredPackageManagerName(field: PackageManagerField): string | undefi
   if (field.manager === 'yarn') {
     return yarnMajorIsBerry(field.version) ? 'yarn-berry' : 'yarn';
   }
-  return (PACKAGE_MANAGER_PRIORITY as readonly string[]).includes(field.manager) ? field.manager : undefined;
+  return (PACKAGE_MANAGER_PRIORITY as readonly string[]).includes(field.manager)
+    ? field.manager
+    : undefined;
 }
 
 /**
@@ -195,13 +211,15 @@ function detectPackageManagers(
   hits: ReadonlyMap<string, string>,
   declaredField: PackageManagerField | undefined,
 ): DetectedPackageManager[] {
-  const fromPath: DetectedPackageManager[] = PACKAGE_MANAGER_PRIORITY.filter((m) => hits.has(m)).map(
-    (m) => ({ name: m, source: 'path' as const, path: hits.get(m) }),
-  );
+  const fromPath: DetectedPackageManager[] = PACKAGE_MANAGER_PRIORITY.filter((m) =>
+    hits.has(m),
+  ).map((m) => ({ name: m, source: 'path' as const, path: hits.get(m) }));
 
   const declaredName =
     declaredField === undefined ? undefined : declaredPackageManagerName(declaredField);
-  if (declaredName === undefined) return fromPath;
+  if (declaredName === undefined) {
+    return fromPath;
+  }
 
   const hitName = declaredName === 'yarn-berry' ? 'yarn' : declaredName;
   const rest = fromPath.filter((p) => p.name !== hitName);
@@ -248,15 +266,21 @@ export async function runDetection(ctx: DetectContext): Promise<DetectedSnapshot
   const hits = await scanPath(ctx.host, SCAN_NAMES, { platform: ctx.os, cwd: ctx.cwd });
 
   // 2. 版本文件并行读取（IO 全部容错）
-  const [nodeVersionContent, pythonVersionContent, packageJsonContent, pyprojectContent, agentsMd, claudeMd] =
-    await Promise.all([
-      readOptionalFile(ctx.host, api.join(ctx.cwd, '.node-version')),
-      readOptionalFile(ctx.host, api.join(ctx.cwd, '.python-version')),
-      readOptionalFile(ctx.host, api.join(ctx.cwd, 'package.json')),
-      readOptionalFile(ctx.host, api.join(ctx.cwd, 'pyproject.toml')),
-      safeExists(ctx.host, api.join(ctx.cwd, 'AGENTS.md')),
-      safeExists(ctx.host, api.join(ctx.cwd, 'CLAUDE.md')),
-    ]);
+  const [
+    nodeVersionContent,
+    pythonVersionContent,
+    packageJsonContent,
+    pyprojectContent,
+    agentsMd,
+    claudeMd,
+  ] = await Promise.all([
+    readOptionalFile(ctx.host, api.join(ctx.cwd, '.node-version')),
+    readOptionalFile(ctx.host, api.join(ctx.cwd, '.python-version')),
+    readOptionalFile(ctx.host, api.join(ctx.cwd, 'package.json')),
+    readOptionalFile(ctx.host, api.join(ctx.cwd, 'pyproject.toml')),
+    safeExists(ctx.host, api.join(ctx.cwd, 'AGENTS.md')),
+    safeExists(ctx.host, api.join(ctx.cwd, 'CLAUDE.md')),
+  ]);
 
   const nodeVersion =
     nodeVersionContent !== undefined ? parseNodeVersionFile(nodeVersionContent) : undefined;
@@ -264,7 +288,8 @@ export async function runDetection(ctx: DetectContext): Promise<DetectedSnapshot
     pythonVersionContent !== undefined ? parsePythonVersionFile(pythonVersionContent) : undefined;
   const declaredField =
     packageJsonContent !== undefined ? parsePackageJsonManager(packageJsonContent) : undefined;
-  const pyprojectClue = pyprojectContent !== undefined ? parsePyproject(pyprojectContent) : undefined;
+  const pyprojectClue =
+    pyprojectContent !== undefined ? parsePyproject(pyprojectContent) : undefined;
 
   // 3. 现有规则文件（固定顺序）
   const existingRules = [agentsMd ? 'AGENTS.md' : '', claudeMd ? 'CLAUDE.md' : ''].filter(

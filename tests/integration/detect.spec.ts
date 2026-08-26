@@ -61,11 +61,15 @@ interface DetectJsonOutput {
 
 describe('aforge detect --json（真实子进程 + 真实临时目录）', () => {
   it('探测注入的 fnm/uv 与 .node-version，输出合法 JSON 与绝对路径', () => {
-    const result = spawnSync(process.execPath, ['--import', tsxImport, mainTs, 'detect', '--json'], {
-      cwd: workspace,
-      env: envWithInjectedPath(),
-      encoding: 'utf8',
-    });
+    const result = spawnSync(
+      process.execPath,
+      ['--import', tsxImport, mainTs, 'detect', '--json'],
+      {
+        cwd: workspace,
+        env: envWithInjectedPath(),
+        encoding: 'utf8',
+      },
+    );
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);

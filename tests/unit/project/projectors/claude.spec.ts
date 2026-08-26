@@ -3,6 +3,7 @@
  * 与路径常量（skills / MCP 的 M8 契约位）。
  */
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
 import {
   CLAUDE_MAIN_RULE_FILENAME,
   claudeMainRulePath,
@@ -10,7 +11,6 @@ import {
   claudeProjector,
   claudeSkillPath,
 } from '../../../../src/core/project/projectors/claude';
-import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
 import type { ProjectContext } from '../../../../src/core/project/types';
 import { HabitsSchema, ProfileSchema } from '../../../../src/schema';
 
@@ -33,7 +33,7 @@ function buildCtx(overrides: Partial<ProjectContext> = {}): ProjectContext {
 }
 
 describe('claudeProjector.plan（Spec §8.5 主规则）', () => {
-  it('project scope：主规则 = <root>\CLAUDE.md，merge_marker，内容为统一渲染结果；MCP 项恒产出（空 servers → 空 mcpServers）', () => {
+  it('project scope：主规则 = <root>CLAUDE.md，merge_marker，内容为统一渲染结果；MCP 项恒产出（空 servers → 空 mcpServers）', () => {
     const ctx = buildCtx();
     const plan = claudeProjector.plan(ctx);
     expect(plan.targetId).toBe('claude');
@@ -68,6 +68,24 @@ describe('claudeProjector.plan（Spec §8.5 主规则）', () => {
     const first = claudeProjector.plan(ctx);
     expect(claudeProjector.plan(ctx)).toEqual(first);
     expect(ctx.renderedRulesMd).toBe('# AgentForge Rules\n- use fnm\n');
+  });
+});
+
+describe('claudeProjector.plan — profile.projection 开关（Spec §4.2 / §8.7）', () => {
+  it('write_claude_md=false → 不产出 CLAUDE.md 项（MCP 项不受影响）', () => {
+    const ctx = buildCtx({
+      profile: ProfileSchema.parse({
+        version: 1,
+        targets: ['claude'],
+        projection: { write_claude_md: false },
+      }),
+    });
+    expect(claudeProjector.plan(ctx).items.map((i) => i.path)).toEqual(['C:\\proj\\.mcp.json']);
+  });
+
+  it('marker_mode=none → CLAUDE.md 动作降级为 write', () => {
+    const plan = claudeProjector.plan(buildCtx({ markerMode: 'none' }));
+    expect(plan.items[0]?.action).toBe('write');
   });
 });
 

@@ -3,6 +3,7 @@
  * 动作 / soft 标记）、settings payload 序列化（mcpServers 键）、skills write 项。
  */
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
 import {
   piMainRulePath,
   piProjector,
@@ -10,9 +11,13 @@ import {
   piSettingsPayload,
   piSkillPath,
 } from '../../../../src/core/project/projectors/pi';
-import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
 import type { ProjectContext } from '../../../../src/core/project/types';
-import { HabitsSchema, McpServerSchema, ProfileSchema, type McpServer } from '../../../../src/schema';
+import {
+  HabitsSchema,
+  type McpServer,
+  McpServerSchema,
+  ProfileSchema,
+} from '../../../../src/schema';
 
 function buildCtx(overrides: Partial<ProjectContext> = {}): ProjectContext {
   return {

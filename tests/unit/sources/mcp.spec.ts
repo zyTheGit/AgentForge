@@ -5,12 +5,13 @@
  * url）、addMcpServer 新增与同名 upsert、profile 往返、命令层
  * parseMcpServerJson 的 JSON 与 schema 校验。
  */
-import { describe, expect, it } from 'vitest';
+
 import path from 'node:path';
-import { addMcpServer, validateMcpServer } from '../../../src/core/sources/mcp';
+import { describe, expect, it } from 'vitest';
 import { parseMcpServerJson } from '../../../src/commands/mcp';
 import { loadProfile } from '../../../src/core/config/load';
 import type { TargetLayer } from '../../../src/core/config/target-layer';
+import { addMcpServer, validateMcpServer } from '../../../src/core/sources/mcp';
 import type { McpServerInput } from '../../../src/schema';
 import { createDirAwareHost } from './helpers';
 
@@ -88,7 +89,13 @@ describe('addMcpServer', () => {
     expect(profile?.targets).toEqual(['claude']);
     expect(profile?.templates).toEqual(['base/default']);
     expect(profile?.mcp?.servers).toEqual([
-      { name: 'fs', transport: 'stdio', command: 'npx', args: ['-y', 'mcp-fs'], env: { FOO: 'bar' } },
+      {
+        name: 'fs',
+        transport: 'stdio',
+        command: 'npx',
+        args: ['-y', 'mcp-fs'],
+        env: { FOO: 'bar' },
+      },
     ]);
   });
 
@@ -154,7 +161,7 @@ describe('addMcpServer', () => {
   });
 });
 
-describe('parseMcpServerJson（命令层 --json stdin 入口）', () => {
+describe('parseMcpServerJson（命令层 --from-json stdin 入口）', () => {
   it('合法 JSON → McpServerInput（enabled 由 zod 默认值填充）', () => {
     const server = parseMcpServerJson('{"name":"fs","transport":"stdio","command":"npx"}');
     expect(server).toEqual({ name: 'fs', enabled: true, transport: 'stdio', command: 'npx' });
@@ -166,5 +173,12 @@ describe('parseMcpServerJson（命令层 --json stdin 入口）', () => {
 
   it('缺必填字段（transport）→ ConfigError(2)', () => {
     expect(() => parseMcpServerJson('{"name":"fs"}')).toThrow(expect.objectContaining({ code: 2 }));
+  });
+
+  // 0.1.0 改名：输入标志 --json → --from-json（`--json` 归还 Spec §6.2 输出契约）。
+  // 报错信息须指向新标志名，否则用户会照抄旧提示再次失败。
+  it('报错信息使用 --from-json 而非 --json（Spec §6.2 语义不冲突）', () => {
+    expect(() => parseMcpServerJson('{not json')).toThrow(/--from-json/);
+    expect(() => parseMcpServerJson('{"name":"fs"}')).toThrow(/--from-json/);
   });
 });

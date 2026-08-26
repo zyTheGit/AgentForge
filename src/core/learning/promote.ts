@@ -15,16 +15,33 @@
  * 目标层：默认写入 learning 所在层；--to user → user 层（显式确认语义在 CLI 层，
  * core 层直接执行）。目标文件已存在 → ConflictError(3)（§6.1 promote 目标
  * 文件名冲突）。已 promoted 的条目再次 promote → ConflictError(3)（幂等防重）。
+ *
+ * 写入顺序（可重试性保障）：全部前置校验（目标路径冲突 / 目录可创建）→ 写产物
+ * → **最后**写 promoted 标记。任一前置校验或产物写入失败时，条目仍为
+ * promoted:false，用户处理掉冲突/权限问题后可直接重跑 promote。
+ *
+ * 并发（round-2 修复）：整段「读条目 → 校验 → 写产物 → 写 promoted 标记」在
+ * **SoT 事务锁**内执行（project/engine.withSotLock，与 sync 同一把 `.sync.lock`）。
+ * 不持锁时有两个窗口：① 两个并发 promote 都读到 promoted:false → 产物写两遍、
+ * 标记互相覆盖；② 与 sync 并发时 sync 的备份基准已过期，回滚会覆盖 promote 的写入。
+ * 条目在锁内**重新读取**（锁外那次只用于确定要锁哪几个 SoT 根）。
  */
 import path from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
+import { atomicWrite, ensureTrailingNewline, mkdirp } from '../../infra/fsutil';
 import type { Host } from '../../infra/host';
-import { atomicWrite, mkdirp } from '../../infra/fsutil';
+import { type HabitsInput, type Learning, LearningSchema } from '../../schema';
+import { HABITS_FILE, loadHabits } from '../config/load';
 import type { EnvSnapshot } from '../env';
 import { ConfigError, ConflictError } from '../errors';
-import { resolveProjectSoT, resolveUserSoT, type OsContext } from '../paths';
-import { HABITS_FILE, loadHabits } from '../config/load';
-import { LearningSchema, type HabitsInput, type Learning } from '../../schema';
+import {
+  type OsContext,
+  resolveProjectSoT,
+  resolveUserSoT,
+  SKILL_DOC_FILENAME,
+  SKILLS_DIRNAME,
+} from '../paths';
+import { withSotLock } from '../project/engine';
 import { learningFilePath, readLearningFile } from './store';
 
 /** promote 上下文（host/env/os/cwd 注入；测试可换 fake host）。 */
@@ -75,13 +92,11 @@ async function findLearning(
 
 /**
  * habits_note 简单实现：追加到目标层 habits.yaml 的 detected.promote_notes 数组。
- * habits.yaml 不存在时创建最小骨架（version + detected）。
+ * habits.yaml 不存在时创建最小骨架（version + detected）；目标层 SoT 目录尚未
+ * init（如 `--to user` 但 user 层未初始化）时先 mkdirp，避免裸 ENOENT 绕过
+ * PermissionError(4) 的错误码映射（与 custom_rule / skill 两个分支一致）。
  */
-async function appendPromoteNote(
-  host: Host,
-  sotRoot: string,
-  learning: Learning,
-): Promise<string> {
+async function appendPromoteNote(host: Host, sotRoot: string, learning: Learning): Promise<string> {
   const habitsFile = path.join(sotRoot, HABITS_FILE);
   const existing = await loadHabits(host, sotRoot);
   const habits: HabitsInput = existing ?? { version: 1, detected: {} };
@@ -91,17 +106,75 @@ async function appendPromoteNote(
   detected.promote_notes = notes;
   habits.detected = detected;
 
-  const text = stringifyYaml(habits, { lineWidth: 0 });
-  await atomicWrite(host, habitsFile, text.endsWith('\n') ? text : `${text}\n`);
+  await mkdirp(host, sotRoot);
+  await atomicWrite(
+    host,
+    habitsFile,
+    ensureTrailingNewline(stringifyYaml(habits, { lineWidth: 0 })),
+  );
   return habitsFile;
+}
+
+/** 按 promote_target 计算产物路径（纯计算，供写入前的冲突预检使用）。 */
+function resolveTargetFile(targetSoTRoot: string, learning: Learning): string {
+  switch (learning.promote_target) {
+    case 'custom_rule':
+      return path.join(targetSoTRoot, 'custom', `${learning.id}.md`);
+    case 'skill':
+      return path.join(targetSoTRoot, SKILLS_DIRNAME, learning.id, SKILL_DOC_FILENAME);
+    case 'habits_note':
+      return path.join(targetSoTRoot, HABITS_FILE);
+  }
+}
+
+/**
+ * 产物写入前的冲突预检（§6.1 promote 目标文件名冲突 → 退出码 3）。
+ * habits_note 为**追加**语义，habits.yaml 已存在不算冲突。
+ * @throws ConflictError(3) 目标文件已存在。
+ */
+async function assertTargetWritable(
+  host: Host,
+  learning: Learning,
+  targetFile: string,
+): Promise<void> {
+  if (learning.promote_target === 'habits_note') {
+    return;
+  }
+  if (await host.exists(targetFile)) {
+    throw new ConflictError(`promote 目标文件已存在: ${targetFile}`, {
+      hint:
+        learning.promote_target === 'skill'
+          ? '手动确认内容后删除该目录，或修改 learning 的 promote_target 后重试'
+          : '手动确认内容后删除该文件，或修改 learning 的 promote_target 后重试',
+      details: { id: learning.id, targetFile },
+    });
+  }
+}
+
+/** 写入晋升产物（目录自动创建；habits_note 走追加实现）。 */
+async function writePromoteArtifact(
+  host: Host,
+  targetSoTRoot: string,
+  learning: Learning,
+  targetFile: string,
+): Promise<void> {
+  if (learning.promote_target === 'habits_note') {
+    await appendPromoteNote(host, targetSoTRoot, learning);
+    return;
+  }
+  await mkdirp(host, path.dirname(targetFile));
+  await atomicWrite(host, targetFile, learning.content);
 }
 
 /**
  * 晋升一条 learning（§7.5）。
  *
+ * 失败即可重试：任何异常抛出时条目仍为 promoted:false（标记是最后一步写入）。
+ * 校验与写入整段在 SoT 事务锁内（见文件头「并发」小节）。
+ *
  * @throws ConfigError(2) id 两层均不存在 / learning 文件损坏；
- * @throws ConflictError(3) 目标文件已存在 / 条目已 promoted；
- * @throws PermissionError(4) 写入失败（atomicWrite 映射）。
+ * @throws ConflictError(3) 目标文件已存在 / 条目已 promoted / 取不到 SoT 事务锁；
+ * @throws PermissionError(4) 目录创建或写入失败（mkdirp/atomicWrite 映射）。
  */
 export async function promoteLearning(
   ctx: PromoteContext,
@@ -112,6 +185,48 @@ export async function promoteLearning(
   const userSoTRoot = resolveUserSoT(env, os);
   const projectSoTRoot = resolveProjectSoT(cwd, os);
 
+  // 锁外先定位一次：只为确定"要锁哪几个 SoT 根"（条目内容在锁内重新读取）
+  const located = await findLearning(host, userSoTRoot, projectSoTRoot, id);
+  if (located === null) {
+    throw new ConfigError(`learning 不存在: ${id}`, {
+      hint: '运行 aforge learnings list 查看全部条目',
+      details: { id, userSoTRoot, projectSoTRoot },
+    });
+  }
+  const targetScope: 'user' | 'project' = opts.to === 'user' ? 'user' : located.scope;
+  const targetSoTRoot = targetScope === 'project' ? projectSoTRoot : userSoTRoot;
+
+  const run = (): Promise<PromoteResult> =>
+    promoteInLock(ctx, id, { userSoTRoot, projectSoTRoot, targetScope, targetSoTRoot });
+
+  // 条目所在层与产物目标层可能不同（--to user）：按字典序从外到内嵌套加锁，
+  // 与 engine.acquireSyncLocks 的顺序一致，避免与并发 sync 形成环形等待。
+  const roots = [...new Set([located.sotRoot, targetSoTRoot])].sort();
+  const [first, second] = roots;
+  if (first === undefined) {
+    return run();
+  }
+  if (second === undefined) {
+    return withSotLock(host, first, os, run);
+  }
+  return withSotLock(host, first, os, () => withSotLock(host, second, os, run));
+}
+
+/** 锁内的实际晋升流程（条目重新读取 → 校验 → 写产物 → 最后写 promoted 标记）。 */
+async function promoteInLock(
+  ctx: PromoteContext,
+  id: string,
+  layers: {
+    readonly userSoTRoot: string;
+    readonly projectSoTRoot: string;
+    readonly targetScope: 'user' | 'project';
+    readonly targetSoTRoot: string;
+  },
+): Promise<PromoteResult> {
+  const { host } = ctx;
+  const { userSoTRoot, projectSoTRoot, targetScope, targetSoTRoot } = layers;
+
+  // 锁内重新读取：锁外那次读取到取得锁之间，条目可能已被并发 promote 改写
   const found = await findLearning(host, userSoTRoot, projectSoTRoot, id);
   if (found === null) {
     throw new ConfigError(`learning 不存在: ${id}`, {
@@ -121,18 +236,21 @@ export async function promoteLearning(
   }
 
   if (found.learning.promoted) {
-    throw new ConflictError(`learning 已晋升: ${id}（promoted_at: ${found.learning.promoted_at}）`, {
-      hint: '条目已晋升过；如需重新生成产物，先删除目标文件（custom/ 或 skills/ 下同名项）',
-      details: { id, promotedAt: found.learning.promoted_at },
-    });
+    throw new ConflictError(
+      `learning 已晋升: ${id}（promoted_at: ${found.learning.promoted_at}）`,
+      {
+        hint: '条目已晋升过，产物已生成；如需重新生成，先删除目标文件（custom/ 或 skills/ 下同名项），并把该条目 YAML 的 promoted 改回 false',
+        details: { id, promotedAt: found.learning.promoted_at },
+      },
+    );
   }
 
-  // 目标层：--to user 显式指定；默认 = learning 所在层
-  const targetScope: 'user' | 'project' = opts.to === 'user' ? 'user' : found.scope;
-  const targetSoTRoot = targetScope === 'project' ? projectSoTRoot : userSoTRoot;
-  
-  // 原子性保障（Spec §7.5）：先标记 promoted，再写目标文件。
-  // 若写文件失败，learning 状态为 promoted 但无目标文件，用户可重试（幂等性由 promoted 标志保证）。
+  // 可重试性保障：前置校验（目标冲突）→ 写产物 → 最后写 promoted 标记。
+  // 任一步失败时条目仍为 promoted:false，用户处理掉冲突/权限问题后可直接重跑。
+  const targetFile = resolveTargetFile(targetSoTRoot, found.learning);
+  await assertTargetWritable(host, found.learning, targetFile);
+  await writePromoteArtifact(host, targetSoTRoot, found.learning, targetFile);
+
   const now = host.now().toISOString();
   const promoted: Learning = LearningSchema.parse({
     ...found.learning,
@@ -143,42 +261,8 @@ export async function promoteLearning(
   await atomicWrite(
     host,
     learningFilePath(found.sotRoot, id),
-    stringifyYaml(promoted, { lineWidth: 0 }).endsWith('\n')
-      ? stringifyYaml(promoted, { lineWidth: 0 })
-      : `${stringifyYaml(promoted, { lineWidth: 0 })}\n`,
+    ensureTrailingNewline(stringifyYaml(promoted, { lineWidth: 0 })),
   );
-  
-  let targetFile: string;
-  switch (found.learning.promote_target) {
-    case 'custom_rule': {
-      targetFile = path.join(targetSoTRoot, 'custom', `${id}.md`);
-      if (await host.exists(targetFile)) {
-        throw new ConflictError(`promote 目标文件已存在: ${targetFile}`, {
-          hint: '手动确认内容后删除该文件，或修改 learning 的 promote_target 后重试',
-          details: { id, targetFile },
-        });
-      }
-      await mkdirp(host, path.dirname(targetFile));
-      await atomicWrite(host, targetFile, found.learning.content);
-      break;
-    }
-    case 'skill': {
-      targetFile = path.join(targetSoTRoot, 'skills', id, 'SKILL.md');
-      if (await host.exists(targetFile)) {
-        throw new ConflictError(`promote 目标文件已存在: ${targetFile}`, {
-          hint: '手动确认内容后删除该目录，或修改 learning 的 promote_target 后重试',
-          details: { id, targetFile },
-        });
-      }
-      await mkdirp(host, path.dirname(targetFile));
-      await atomicWrite(host, targetFile, found.learning.content);
-      break;
-    }
-    case 'habits_note': {
-      targetFile = await appendPromoteNote(host, targetSoTRoot, found.learning);
-      break;
-    }
-  }
 
   return {
     learning: promoted,

@@ -31,7 +31,10 @@ export function buildProgram(): Command {
     .description(
       'AgentForge - manage AI coding CLI rule projections (SoT -> opencode/codex/claude/pi) from one source of truth',
     )
-    .version(VERSION, '-V, --version', 'print version and exit');
+    .version(VERSION, '-V, --version', 'print version and exit')
+    // Spec §6.2 全局标志：`aforge --json <cmd>` 与 `aforge <cmd> --json` 等价
+    // （子命令保留自身 --json 以兼容既有用法；统一经 commands/flags.resolveJsonFlag 判定）
+    .option('--json', 'machine-readable output (absolute paths) - global flag (Spec 6.2)');
 
   registerDetectCommand(program);
   registerInitCommand(program);

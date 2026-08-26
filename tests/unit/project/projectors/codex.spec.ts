@@ -4,6 +4,7 @@
  * inline table / 数组 / enabled 过滤）、skills write 项。
  */
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
 import {
   CODEX_MCP_TOML_BEGIN,
   CODEX_MCP_TOML_END,
@@ -14,9 +15,13 @@ import {
   serializeMcpServersToml,
   tomlBasicString,
 } from '../../../../src/core/project/projectors/codex';
-import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
 import type { ProjectContext } from '../../../../src/core/project/types';
-import { HabitsSchema, McpServerSchema, ProfileSchema, type McpServer } from '../../../../src/schema';
+import {
+  HabitsSchema,
+  type McpServer,
+  McpServerSchema,
+  ProfileSchema,
+} from '../../../../src/schema';
 
 function buildCtx(overrides: Partial<ProjectContext> = {}): ProjectContext {
   return {
@@ -169,9 +174,7 @@ describe('serializeMcpServersToml（[[mcp_servers.<name>]] 手写序列化）', 
   });
 
   it('http → url + headers（inline table）', () => {
-    const toml = serializeMcpServersToml([
-      httpServer({ headers: { Authorization: 'Bearer x' } }),
-    ]);
+    const toml = serializeMcpServersToml([httpServer({ headers: { Authorization: 'Bearer x' } })]);
     expect(toml).toBe(
       '[[mcp_servers.docs]]\nurl = "https://example.com/mcp"\nheaders = { Authorization = "Bearer x" }',
     );
@@ -239,9 +242,9 @@ describe('codex 路径函数（status/init 打印共用）', () => {
     expect(codexMainRulePath(buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u' }))).toBe(
       'C:\\Users\\u\\.codex\\AGENTS.md',
     );
-    expect(
-      codexMainRulePath(buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u', env })),
-    ).toBe('C:\\codexhome\\AGENTS.md');
+    expect(codexMainRulePath(buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u', env }))).toBe(
+      'C:\\codexhome\\AGENTS.md',
+    );
   });
 
   it('codexSkillPath：project / user 两态', () => {

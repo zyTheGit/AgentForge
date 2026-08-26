@@ -3,13 +3,13 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { readEnv } from '../../src/core/env';
-import { ConfigError } from '../../src/core/errors';
 import {
   defaultHabits,
   resolveEffectiveConfig,
   windowsDefaultProfile,
 } from '../../src/core/config/defaults';
+import { readEnv } from '../../src/core/env';
+import { ConfigError } from '../../src/core/errors';
 import { createFakeHost } from './test-utils';
 
 const USER_SOT = path.resolve('C:\\Users\\u\\.agentforge');
@@ -200,14 +200,9 @@ describe('resolveEffectiveConfig 三层装配（env > project > user > 内置默
     const host = createFakeHost();
     host.files.set(
       USER_HABITS,
-      [
-        'version: 1',
-        'runtime:',
-        '  node:',
-        '    manager: fnm',
-        'detected:',
-        '  editor: vim',
-      ].join('\n'),
+      ['version: 1', 'runtime:', '  node:', '    manager: fnm', 'detected:', '  editor: vim'].join(
+        '\n',
+      ),
     );
     host.files.set(
       PROJECT_HABITS,

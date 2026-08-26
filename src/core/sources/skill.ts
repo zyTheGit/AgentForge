@@ -11,22 +11,36 @@
  *
  * copy 经 Host 的 readFile/writeFile（UTF-8 文本域）；二进制文件不属于
  * M8 支持范围（skill 以 Markdown 说明为主，§10 投影只 copy 不执行）。
+ *
+ * 安全边界（§10，源可能来自不可信 git 仓库）：
+ * - 递归 copy 用 **lstat** 判类型，symlink 一律**跳过**并记入结果 `skipped`
+ *   （跟随链接会把 `~/.ssh/id_rsa` 之类目标读进 SoT，再被投影进规则文件）；
+ * - 深度上限 MAX_COPY_DEPTH，另以"已访问路径 Set"作环路基准（键为**词法**
+ *   规范化路径，见 pathKey——不做 realpath，故不解析链接目标；junction
+ *   在 Windows 上也报 symlink，双保险防无限递归 / 无限写盘）；
+ * - copy 中途失败时回滚本次写入的内容（冲突判据与回滚判据同源，见 addSkill），
+ *   避免残留让下次 `skill add` 被 ConflictError 永久挡死。
  */
 import path from 'node:path';
-import type { Host } from '../../infra/host';
-import { atomicWrite, mkdirp } from '../../infra/fsutil';
+import { atomicWrite, listDirSafe, mkdirp } from '../../infra/fsutil';
+import type { FileStat, Host } from '../../infra/host';
+import type { Profile } from '../../schema';
 import type { EnvSnapshot } from '../env';
 import { ConfigError, ConflictError } from '../errors';
-import { resolveProjectSoT, resolveUserSoT, type OsContext } from '../paths';
-import type { Profile } from '../../schema';
+import { type OsContext, SKILL_DOC_FILENAME, SKILLS_DIRNAME } from '../paths';
 import type { SkillArtifact } from '../project/types';
-import { listSources, loadSourceManifest, sourceRootDir, type SourceManagerContext } from './manager';
+import {
+  listSources,
+  loadSourceManifest,
+  type SourceManagerContext,
+  sourceRootDir,
+} from './manager';
 
 /** skill 名安全校验（目录名）：字母数字开头，可含字母数字/./_/-，总长 ≤64。 */
 const SKILL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
-/** skill 说明文件名（各 target 统一约定，projectors/claude.ts 同源）。 */
-export const SKILL_DOC_FILENAME = 'SKILL.md';
+/** 递归 copy 深度上限（超过 → ConfigError(2)；正常 skill 目录远不及此）。 */
+export const MAX_COPY_DEPTH = 32;
 
 /** skill 上下文。 */
 export interface SkillContext {
@@ -40,6 +54,14 @@ export interface SkillContext {
   readonly targetSoTRoot: string;
 }
 
+/** copy 过程中被跳过的项（不静默丢弃：作为结果的一部分返回给调用方）。 */
+export interface SkippedEntry {
+  /** 被跳过项的绝对源路径。 */
+  readonly path: string;
+  /** symlink：不跟随符号链接；cycle：真实路径已访问过（环路基准）。 */
+  readonly reason: 'symlink' | 'cycle';
+}
+
 /** addSkill 结果。 */
 export interface AddSkillResult {
   readonly name: string;
@@ -50,6 +72,8 @@ export interface AddSkillResult {
   readonly targetDir: string;
   /** 实际 copy 的文件（相对 targetDir 的相对路径，排序稳定）。 */
   readonly files: string[];
+  /** 跳过的项（symlink / 环路）；空数组表示无跳过。 */
+  readonly skipped: SkippedEntry[];
 }
 
 /** 清单项。 */
@@ -74,44 +98,108 @@ export function validateSkillName(name: string): void {
   }
 }
 
-/** 列出某目录的直接子项（目录不存在 → []）。 */
-async function listDirSafe(host: Host, dir: string): Promise<string[]> {
-  try {
-    return await host.listDir(dir);
-  } catch {
-    return [];
-  }
+/** copy 过程共享状态（累积文件清单 / 跳过项 / 环路基准）。 */
+interface CopyState {
+  readonly host: Host;
+  readonly os: OsContext;
+  readonly files: string[];
+  readonly skipped: SkippedEntry[];
+  /** 已进入过的目录规范化键（环路基准）。 */
+  readonly visited: Set<string>;
+}
+
+/** 目录去重键：按平台规范化（win32 大小写不敏感，同 paths.samePath 语义）。 */
+function pathKey(p: string, os: OsContext): string {
+  const api = os.platform === 'win32' ? path.win32 : path.posix;
+  const normalized = api.normalize(p);
+  return os.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
 /**
- * 递归 copy：from → to（from 不存在 → ConfigError；to 预先不存在）。
- * rel 为当前目录相对**顶层目标**的相对路径前缀（返回的 files 路径基准）。
+ * 递归 copy：from → to（from 不存在 → 空目录；to 由本函数创建）。
+ *
+ * rel 为当前目录相对**顶层目标**的相对路径前缀（state.files 路径基准）；
+ * depth 为当前层级（顶层 0）。
+ *
+ * 判类型用 lstat 而非 stat：symlink 一律跳过（不跟随，防越界读取与无限递归），
+ * 并把该项记入 state.skipped。**不要改回 stat**——与 listSkills 的 stat 判据
+ * 有意不同：那里是"报告 SoT 能提供什么"，这里是"从不可信源往 SoT 写盘"。
+ *
+ * @throws ConfigError(2) 目录层级超过 MAX_COPY_DEPTH。
  */
 async function copyDirDeep(
-  host: Host,
+  state: CopyState,
   from: string,
   to: string,
   rel: string,
-  acc: string[],
+  depth: number,
 ): Promise<void> {
+  if (depth > MAX_COPY_DEPTH) {
+    throw new ConfigError(`skill 源目录层级过深（超过 ${MAX_COPY_DEPTH} 层）: ${from}`, {
+      hint: '源目录疑似存在环路或异常深的嵌套；检查源仓库（symlink 已被跳过，此处为深度兜底）',
+      details: { from, depth, maxDepth: MAX_COPY_DEPTH },
+    });
+  }
+  state.visited.add(pathKey(from, state.os));
+
+  const host = state.host;
   await mkdirp(host, to);
   for (const entry of [...(await listDirSafe(host, from))].sort()) {
     const src = path.join(from, entry);
     const dst = path.join(to, entry);
     const relEntry = rel === '' ? entry : `${rel}${path.sep}${entry}`;
-    let stat;
+    let stat: FileStat | undefined;
     try {
-      stat = await host.stat(src);
+      stat = await host.lstat(src);
     } catch {
       stat = undefined;
     }
-    if (stat?.isDirectory === true) {
-      await copyDirDeep(host, src, dst, relEntry, acc);
-    } else {
-      // 文本 copy（实体文件，非 symlink：Host 无 symlink 语义，恒为独立副本）
-      await atomicWrite(host, dst, await host.readFile(src));
-      acc.push(relEntry);
+    if (stat?.isSymbolicLink === true) {
+      // 不跟随：指向祖先目录 → 无限递归；指向 ~/.ssh/id_rsa → 私钥进 SoT
+      state.skipped.push({ path: src, reason: 'symlink' });
+      continue;
     }
+    if (stat?.isDirectory === true) {
+      if (state.visited.has(pathKey(src, state.os))) {
+        state.skipped.push({ path: src, reason: 'cycle' });
+        continue;
+      }
+      await copyDirDeep(state, src, dst, relEntry, depth + 1);
+      continue;
+    }
+    // 文本 copy（实体文件，非 symlink：恒为独立副本）
+    await atomicWrite(host, dst, await host.readFile(src));
+    state.files.push(relEntry);
+  }
+}
+
+/**
+ * copy 失败回滚：清掉本次写入 targetDir 的全部内容。
+ *
+ * 判据必须与 addSkill 的冲突判据（`listDirSafe(targetDir).length > 0`）同源：
+ * 旧实现用 `host.exists(targetDir)` 决定是否回滚，于是「目标目录已存在但为空」
+ * 时冲突检查放行、失败却因 exists 为真而跳过回滚——半装内容留在原地，下次
+ * `skill add` 被 ConflictError 永久挡死。
+ *
+ * `preexisted=false`（本次新建）→ 连目录一并删除；`true`（原为空目录，是用户
+ * 创建的）→ 只删本次写入的子项，保留那个空目录本身（不删自己没创建的东西）。
+ * 两种情况回滚后目标都回到"无内容"状态，与冲突检查的前置条件一致。
+ */
+async function rollbackSkillCopy(
+  host: Host,
+  targetDir: string,
+  preexisted: boolean,
+): Promise<void> {
+  try {
+    if (!preexisted) {
+      await host.rm(targetDir);
+      return;
+    }
+    for (const entry of await listDirSafe(host, targetDir)) {
+      await host.rm(path.join(targetDir, entry));
+    }
+  } catch {
+    // 回滚失败不掩盖原始错误（调用方 rethrow 才是用户要看的原因）
   }
 }
 
@@ -121,7 +209,7 @@ async function copyDirDeep(
  * @param from 源标识：登记的源 id、或源根目录路径（其下 skills\<name\>\）、
  *        或直接指向 skill 目录本身（含 SKILL.md）的路径。缺省时按登记顺序
  *        在全部源中找首个含该 skill 的源。
- * @throws ConfigError(2) 名字非法 / 源或 skill 不存在；
+ * @throws ConfigError(2) 名字非法 / 源或 skill 不存在 / 源目录层级过深；
  * @throws ConflictError(3) 目标 skills\<name\> 已存在内容。
  */
 export async function addSkill(
@@ -135,7 +223,7 @@ export async function addSkill(
   const skillDir = await locateSourceSkillDir(ctx, name, from);
 
   // 2. 目标冲突检查（skills\<name\> 下已有任何内容 → Conflict，§6.1）
-  const targetDir = path.join(ctx.targetSoTRoot, 'skills', name);
+  const targetDir = path.join(ctx.targetSoTRoot, SKILLS_DIRNAME, name);
   const existing = await listDirSafe(ctx.host, targetDir);
   if (existing.length > 0) {
     throw new ConflictError(`skill 已存在: ${targetDir}（${existing.length} 个文件）`, {
@@ -144,16 +232,29 @@ export async function addSkill(
     });
   }
 
-  // 3. 实体 copy（递归）
-  const files: string[] = [];
-  await copyDirDeep(ctx.host, skillDir.dir, targetDir, '', files);
+  // 3. 实体 copy（递归）；失败一律回滚本次写入的内容（见 rollbackSkillCopy）
+  const targetPreexisted = await ctx.host.exists(targetDir);
+  const state: CopyState = {
+    host: ctx.host,
+    os: ctx.os,
+    files: [],
+    skipped: [],
+    visited: new Set<string>(),
+  };
+  try {
+    await copyDirDeep(state, skillDir.dir, targetDir, '', 0);
+  } catch (err) {
+    await rollbackSkillCopy(ctx.host, targetDir, targetPreexisted);
+    throw err;
+  }
 
   return {
     name,
     fromRoot: skillDir.root,
     fromSourceId: skillDir.sourceId,
     targetDir,
-    files: files.sort(),
+    files: state.files.sort(),
+    skipped: state.skipped,
   };
 }
 
@@ -187,7 +288,7 @@ async function locateSourceSkillDir(
     const matched = sources.find((s) => s.id === from);
     if (matched !== undefined) {
       const root = sourceRootDir(mgr, matched);
-      const dir = path.join(root, 'skills', name);
+      const dir = path.join(root, SKILLS_DIRNAME, name);
       if (!(await host.exists(dir))) {
         throw new ConfigError(`源 ${from} 中不存在 skill: ${name}（查找 ${dir}）`, {
           hint: '运行 aforge skill list 查看源中可用的 skill',
@@ -199,7 +300,7 @@ async function locateSourceSkillDir(
 
     // b. 直连路径：先按“源根（其下 skills/<name>/）”解释，再按“skill 目录本身”解释
     const root = path.resolve(ctx.cwd, from);
-    const asRoot = path.join(root, 'skills', name);
+    const asRoot = path.join(root, SKILLS_DIRNAME, name);
     if (await host.exists(asRoot)) {
       return { dir: asRoot, root, sourceId: undefined };
     }
@@ -208,7 +309,7 @@ async function locateSourceSkillDir(
       return { dir: root, root, sourceId: undefined };
     }
     throw new ConfigError(
-      `--from 既不是登记源 id，也不是含 skills/${name}/ 或 ${SKILL_DOC_FILENAME} 的目录: ${from}`,
+      `--from 既不是登记源 id，也不是含 ${SKILLS_DIRNAME}/${name}/ 或 ${SKILL_DOC_FILENAME} 的目录: ${from}`,
       {
         hint: '运行 aforge source list 查看登记源；--from 传源 id 或源根目录路径',
         details: { from, triedRoot: asRoot, triedSkillDir: skillDoc },
@@ -222,7 +323,7 @@ async function locateSourceSkillDir(
     if (source.enabled === false) {
       continue;
     }
-    const dir = path.join(sourceRootDir(mgr, source), 'skills', name);
+    const dir = path.join(sourceRootDir(mgr, source), SKILLS_DIRNAME, name);
     if (await host.exists(dir)) {
       return { dir, root: sourceRootDir(mgr, source), sourceId: source.id };
     }
@@ -231,6 +332,22 @@ async function locateSourceSkillDir(
     hint: '先用 aforge source add 登记含该 skill 的源，或用 --from 指定源 id / 路径',
     details: { name, sources: sources.map((s) => s.id) },
   });
+}
+
+/**
+ * manifest.skills 条目取 name（§4.5 loose 结构：字段可缺失 / 非字符串）。
+ *
+ * 提成命名函数而非内联三元箭头：条目形状是 unknown，取值要经两次类型收窄，
+ * 内联写法在 map 里挤成一个无花括号的条件体（可读性 + biome useBlockStatements）。
+ *
+ * @returns name 字段的字符串值；缺失或非字符串 → `''`（调用方过滤空名）。
+ */
+function manifestSkillName(entry: unknown): string {
+  const name = (entry as { name?: unknown } | null)?.name;
+  if (typeof name === 'string') {
+    return name;
+  }
+  return '';
 }
 
 /**
@@ -247,8 +364,16 @@ export async function listSkills(ctx: SkillContext): Promise<SkillListItem[]> {
     { origin: 'project', root: ctx.projectSoTRoot },
     { origin: 'user', root: ctx.userSoTRoot },
   ]) {
-    for (const name of (await listDirSafe(ctx.host, path.join(layer.root, 'skills'))).sort()) {
-      const stat = await ctx.host.stat(path.join(layer.root, 'skills', name)).catch(() => undefined);
+    for (const name of (
+      await listDirSafe(ctx.host, path.join(layer.root, SKILLS_DIRNAME))
+    ).sort()) {
+      // 判类型用 stat（跟随 symlink）而非 copyDirDeep 的 lstat：本函数报告的是
+      // "这一层 SoT 实际能提供什么"，而 readSkillsToMaterialize 取正文走
+      // host.exists（fsp.access，跟随链接）。若此处改 lstat，用户手工 symlink 进
+      // SoT 的 skill 会从 skill list 消失、却仍被 sync 物化——清单与投影脱节。
+      const stat = await ctx.host
+        .stat(path.join(layer.root, SKILLS_DIRNAME, name))
+        .catch(() => undefined);
       if (stat?.isDirectory !== true) {
         continue; // 只列目录（fake host 无目录概念时按文件名略过）
       }
@@ -271,10 +396,8 @@ export async function listSkills(ctx: SkillContext): Promise<SkillListItem[]> {
     const declared = manifest?.skills ?? [];
     const names =
       declared.length > 0
-        ? declared
-            .map((s) => (typeof (s as { name?: unknown }).name === 'string' ? (s as { name: string }).name : ''))
-            .filter((n) => n !== '')
-        : await listDirSafe(ctx.host, path.join(root, 'skills'));
+        ? declared.map(manifestSkillName).filter((n) => n !== '')
+        : await listDirSafe(ctx.host, path.join(root, SKILLS_DIRNAME));
     for (const name of [...new Set(names)].sort()) {
       items.push({ name, status: 'available', origin: source.id });
     }
@@ -301,8 +424,8 @@ export async function readSkillsToMaterialize(
 
   for (const name of names) {
     const candidates = [
-      path.join(projectSoTRoot, 'skills', name, SKILL_DOC_FILENAME),
-      path.join(userSoTRoot, 'skills', name, SKILL_DOC_FILENAME),
+      path.join(projectSoTRoot, SKILLS_DIRNAME, name, SKILL_DOC_FILENAME),
+      path.join(userSoTRoot, SKILLS_DIRNAME, name, SKILL_DOC_FILENAME),
     ];
     let content: string | undefined;
     for (const file of candidates) {

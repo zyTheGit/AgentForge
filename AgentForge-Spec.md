@@ -132,6 +132,8 @@ Detect/Declare Habits → Profile → Generate Rules (SoT)
   learnings\
   store\               # git 源缓存
   cache\
+  .sync.lock\          # 运行时：sync 排他锁目录（含 meta.json；§10）
+  .agf-backup\         # 运行时：sync 事务备份基准 + journal.json（§7.3）
 ```
 
 ### 3.2 项目级
@@ -148,7 +150,11 @@ Detect/Declare Habits → Profile → Generate Rules (SoT)
   learnings\
   rules\               # 可选中间渲染产物
   sync-meta.json
+  .sync.lock\          # 运行时：sync 排他锁目录（含 meta.json；§10）
+  .agf-backup\         # 运行时：sync 事务备份基准 + journal.json（§7.3）
 ```
+
+**运行时产物（`.sync.lock` / `.agf-backup`）：** 两者都只在 sync 期间存在，正常结束即删除；进程被强杀会留下残留。`.sync.lock` 是**目录**（非文件），锁语义与陈旧判定见 §10。`.agf-backup\journal.json` 是崩溃恢复日志：记录本次事务已备份/已写入的每个目标路径与来源（SoT / 机器 / 用户），下次 sync 启动时据此回滚被中断的写入；回滚未能全部完成时，备份基准另存为 SoT 根下的 `.agf-backup-failed-<时间戳>\` 并退出码 6（§6.1），不自动清理。**这三项属于本机运行时状态，不应提交版本库**——`projection.gitignore_generated=true` 且 effective scope 为 `project` 时，标记段除投影产物外还会写入 `.sync.lock/`、`.agf-backup/`、`.agf-backup-failed-*/` 三条根锚定目录模式（SoT 根落在项目根之外时不写，判据与投影产物共用）。`doctor` 的 `consistency` 段会诊断残留：锁被持有中报 `ok`（另一个 sync 正在写，不提示删除）；心跳停摆超过陈旧阈值报 `warn` 并给出清理提示；`committed != true` 的 journal 报 `warn` 并说明下次 sync 会崩溃恢复；`.agf-backup-failed-*` 报 `warn`，提示**先与当前投影逐一核对再自行删除**——doctor 只读，绝不销毁这份唯一副本。
 
 ### 3.3 sync-meta.json
 
@@ -285,7 +291,19 @@ extensions: object
 - `arrays: append` → 最终 `[test, lint, typecheck]`
 - `arrays: replace` → 最终 `[typecheck]`
 
-`projection.path_style` 控制投影文件中出现的路径格式：`auto` 根据当前 OS 自动选择；`windows` 强制使用 `\` 分隔符和 `%USERPROFILE%` 变量；`posix` 强制使用 `/` 分隔符和 `$HOME` 变量。
+`projection.path_style` 控制投影文件中出现的路径格式：`auto` 根据当前 OS 自动选择；`windows` 强制使用 `\` 分隔符和 `%USERPROFILE%` 变量；`posix` 强制使用 `/` 分隔符和 `$HOME` 变量。归一化只作用于被识别为路径 token 的片段（以 `%USERPROFILE%` / `$HOME` / `${HOME}` / `~` / 盘符开头且后接分隔符），散文中的斜杠（如 `pnpm/bun`）不受影响；`.gitignore` 的条目恒用 `/`，与本项无关。
+
+**`projection.marker_mode` 语义：**
+
+- `replace_between_markers`（默认）：替换 marker 区间内容，区间外的用户内容原样保留；区间被手工改动时 `sync` 报 ConflictError(3)（§8.2-4）。
+- `append_below_marker`：新正文插入在 `marker_begin` 之后，原区间内容保留在其下方；同一正文已存在时跳过追加，保证重复 `sync` 幂等（区间不会无界增长）。
+- `none`：不使用 marker 包裹，主规则项降级为整文件 `write`（marker 外的手写内容会被覆盖，冲突预检查与 `--force` 对该模式无意义）。
+
+**`projection.write_agents_md` / `write_claude_md`：** 控制主规则文件是否投影，与 §8.7 矩阵配合——`write_agents_md: false` 时 opencode / codex / pi 不再写根 `AGENTS.md`；`write_claude_md: false` 时 claude 不再写 `CLAUDE.md`；`write_claude_md: true` 额外启用 opencode 的可选 `CLAUDE.md`（矩阵中标注"可选"的那一项）。两项缺省时保持既有行为。
+
+**`projection.gitignore_generated`：** `true` 且 effective scope 为 `project` 时，`sync` 成功后把全部落在项目根内的投影产物写入项目 `.gitignore`，包在 `# BEGIN AGENTFORGE` / `# END AGENTFORGE` 标记段内（`.gitignore` 不支持 HTML 注释，故不复用 `marker_begin/end`）；段外用户条目原样保留，段内每次全量重算 → 幂等。项目根之外的产物（user scope 投影、`CODEX_HOME` 覆盖）不写入。该写入与投影产物同属一个事务（同一 `.sync.lock` + 备份/回滚），失败按硬项处理；不计入 `sync-meta.targets`。
+
+**`skills.on_demand`（MVP 决定）：** 只登记不物化——`sync` 仅投影 `skills.always`；`on_demand` 清单由 `aforge status` 展示并标注"declared only - not projected in MVP"。按需装载属 Phase 2。
 
 **Windows 安装默认值：**
 
@@ -415,7 +433,7 @@ mcp: []
 | `aforge source add\|list\|remove\|update` | 模板/skill 源 |
 | `aforge template list\|enable\|disable` | 模板 |
 | `aforge skill add\|list` | Skill |
-| `aforge mcp add` | MCP 描述加入 SoT |
+| `aforge mcp add` | MCP 描述加入 SoT（交互录入，或 `--from-json` 从 stdin 读 JSON 声明） |
 | `aforge status` | 状态与路径 |
 | `aforge doctor` | 诊断 |
 | `aforge import <path>` | 导入现有规则（MVP 基础版） |
@@ -430,10 +448,18 @@ mcp: []
 | 3 | 投影冲突需人工处理（含 marker 区间被手动修改、promote 目标文件名冲突） |
 | 4 | 目标路径无写权限（Windows 常见） |
 | 5 | 离线模式禁止操作（AGF_OFFLINE=1 时触发网络操作） |
+| 6 | 回滚不完整：sync 失败后回滚未能恢复全部已写文件，备份基准被保留到 `<sotRoot>\.agf-backup-failed-<时间戳>\` 并列入失败汇总（比 1 更严重：磁盘上仍有非预期内容） |
+| 130 | 被中断：交互提示被取消（Ctrl-C / Esc）或进程收到 SIGINT / SIGTERM；进行中的 sync 事务先同步回滚再退出（130 = 128 + SIGINT） |
+
+"init 目录非空"的判定：SoT 根（`<root>/.agentforge`）已存在且目录内有任何条目即触发——包含"已初始化"（存在 `profile.yaml`）与"半初始化"（只手工建了 `custom/` 等子目录）两种情形，两者错误措辞不同以便定位。
 
 ### 6.2 全局标志
 
-- `--json`：机器可读输出（路径为绝对路径字符串）
+- `--json`：机器可读输出（路径为绝对路径字符串）。注册在 program 级，`aforge --json <cmd>` 与 `aforge <cmd> --json` 等价（各子命令同时保留自己的 `--json` 以兼容既有用法）。
+  - 覆盖命令（当前实际）：`init`、`sync`、`status`、`doctor`、`detect`、`learn`、`learnings list|show|edit|rm`、`promote`、`import`、`source add|list|remove|update`、`template list|enable|disable`、`skill add|list`、`mcp add`。
+  - `learnings show|edit` 的 JSON 体在条目字段之外另带 `scope`、`file` 与 `content`（条目 YAML 原文）；`learnings rm` 为 `{ id, file, scope }`。
+  - `mcp add` 的**输入**标志为 `--from-json`（从 stdin 读 JSON 声明）；`--json` 在该命令下与全局契约一致，表示机器可读**输出**。
+
 
 ---
 
@@ -475,6 +501,7 @@ mcp: []
 5. 写入 `sync-meta.json`（时间、os、targets、content hash）。
 6. **全部回滚策略**：Sync 采用事务性写入。所有 target 先 plan 生成写入计划，逐一 apply 时若任一 target 失败，则回滚所有已写入的 target（恢复为 sync 前状态），输出失败汇总报告。退出码取失败 target 中最高严重度。
 7. **目录自动创建**：若目标目录不存在，自动创建（mkdir -p 语义）；创建失败（权限不足）→ 退出码 4。
+8. **可选 `.gitignore` 写入**：`projection.gitignore_generated: true` 且 scope=project 时，在全部 target 成功后（写 `sync-meta.json` 前）把项目内投影产物写入 `.gitignore` 标记段——同一事务、同一回滚（详见 §4.2）。
 
 ### 7.4 Learn
 
@@ -482,6 +509,8 @@ mcp: []
 2. 结构化为 learning 条目。
 3. 写入 `learnings/`，**不**自动进入投影。
 4. 提示可 `promote`。
+
+写入层由 scope 决定，优先级：`--scope` > `profile.learning.default_scope`（§4.2，缺省 `project`）。
 
 ### 7.5 Promote
 
@@ -614,6 +643,8 @@ interface Projector {
 | Skills copy | ✅ | ✅ | ✅ | ✅ |
 | MCP 配置 | ✅ | ✅ | ✅ | soft |
 
+开关对应（§4.2）：标 ✅ 的根 `AGENTS.md` 受 `projection.write_agents_md` 控制（`false` → 三个 target 均不写）；claude 的 `CLAUDE.md` 受 `projection.write_claude_md` 控制；opencode 的"可选" `CLAUDE.md` 仅在 `projection.write_claude_md: true` 时投影（缺省不写）。`marker_mode: none` 时上述主规则项由 `merge_marker` 降级为整文件 `write`。
+
 ---
 
 ## 9. Doctor（Windows 增强）
@@ -632,7 +663,7 @@ interface Projector {
 - Skill 中含可执行文件时文档警告；投影只 copy，不自动执行。
 - git URL 支持 https/ssh；默认不跟踪浮动 `main`（要求 ref/pin）。
 - 不在 CI 中写入 learnings。
-- 并发安全：MVP 不保证并发安全。多进程同时执行 `aforge sync` 或 `aforge source add` 的行为未定义。文档声明此限制。
+- 并发安全：非 dry-run 的 `sync` 在 SoT 根取进程级排他锁 `<sotRoot>\.sync.lock\`（**目录**，用非递归 `mkdir` 原子创建——Windows 与 POSIX 均原子，`EEXIST` 即败者，直接失败退出而不等待）。锁目录内 `meta.json` 记录持有者来源（pid / 机器 / 用户）与心跳时刻；心跳每 30 秒刷新，仅当心跳停摆超过 5 分钟**且**持有者进程已不存活时才判定陈旧并允许抢占（只看时间会误杀慢 sync）。投影产物落在 SoT 之外（user scope 投影、`CODEX_HOME` 覆盖）时额外取用户级 SoT 根的锁，按路径序加锁防死锁。`aforge source add` 等其他写命令暂未纳入锁保护。
 
 ---
 

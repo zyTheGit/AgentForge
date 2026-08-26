@@ -1,7 +1,8 @@
 /**
- * markers 单测（Spec §8.2）：切分 / 重组 / 区间 hash / 多次 marker / CRLF / 无换行包裹。
+ * markers 单测（Spec §8.2）：切分 / 重组 / 区间 hash / 多次 marker / CRLF / 行锚定 / 正文守卫。
  */
 import { describe, expect, it } from 'vitest';
+import { ConflictError } from '../../src/core/errors';
 import {
   DEFAULT_MARKER_BEGIN,
   DEFAULT_MARKER_END,
@@ -27,7 +28,12 @@ describe('splitByMarkers', () => {
 
   it('无 marker → hasMarkers=false，before 为全文', () => {
     const split = splitByMarkers('just a plain file\n');
-    expect(split).toEqual({ before: 'just a plain file\n', inside: '', after: '', hasMarkers: false });
+    expect(split).toEqual({
+      before: 'just a plain file\n',
+      inside: '',
+      after: '',
+      hasMarkers: false,
+    });
   });
 
   it('只有 begin 无 end → 视为无 marker', () => {
@@ -50,13 +56,70 @@ describe('splitByMarkers', () => {
     expect(split.after).toBe(`\nmiddle\n${B}\nsecond\n${E}`);
   });
 
-  it('边界：marker 无换行包裹（紧贴前后文字）', () => {
+  it('边界：marker 未独占行（紧贴前后文字）→ 不命中（行锚定）', () => {
+    // 行为变更（行锚定修复）：旧实现用 indexOf 定位，`abc<BEGIN>xyz<END>def` 会被当成
+    // 合法区间。行锚定后这类行内出现一律不命中——否则正文里引用 marker 字符串就会
+    // 让区间边界漂移，sync 逐次把用户正文啃进 after 并留下多余 END。
     const content = `abc${B}xyz${E}def`;
     const split = splitByMarkers(content);
+    expect(split.hasMarkers).toBe(false);
+    expect(split.before).toBe(content);
+  });
+
+  it('行锚定：marker 出现在行内 / 代码块内不被误命中，只认独占行的那一对', () => {
+    const content = [
+      '# doc',
+      `说明：请勿手写 ${B} 这个串`, // 行内出现
+      '```md',
+      `${B} 示例（同一行还有别的字符）`, // 代码块内、行内出现
+      '```',
+      B, // 真正的区间起点
+      'rules',
+      E,
+      'tail',
+    ].join('\n');
+    const split = splitByMarkers(content);
     expect(split.hasMarkers).toBe(true);
-    expect(split.before).toBe('abc');
-    expect(split.inside).toBe('xyz');
-    expect(split.after).toBe('def');
+    expect(split.inside).toBe('\nrules\n');
+    expect(split.after).toBe('\ntail');
+    expect(split.before.endsWith('```\n')).toBe(true);
+  });
+
+  it('行锚定：marker 行尾允许水平空白（空格 / Tab）', () => {
+    const split = splitByMarkers(`${B}  \nrules\n${E}\t\ntail`);
+    expect(split.hasMarkers).toBe(true);
+    expect(split.inside).toBe('\nrules\n');
+    expect(split.after).toBe('\ntail');
+  });
+
+  it('行锚定：marker 行有前置缩进 → 仍命中（缩进不该让区间失配）', () => {
+    // 行为变更（round-2）：旧实现只锚定行首，marker 嵌在缩进上下文（YAML 块 /
+    // Markdown 列表项）时匹配不上 → replace_between_markers 静默降级成 EOF 追加，
+    // 每次 sync 追加一份新区间，反复污染用户文件。故行首容忍水平空白。
+    const split = splitByMarkers(`  ${B}\nrules\n  ${E}\ntail`);
+    expect(split.hasMarkers).toBe(true);
+    expect(split.inside).toBe('\nrules\n');
+    expect(split.after).toBe('\ntail');
+  });
+
+  it('行锚定：缩进 marker 的区间被替换而非追加（不产生第二份区间）', () => {
+    const content = `- 配置:\n  ${B}\n  old\n  ${E}\ntail\n`;
+    const out = replaceBetween(content, 'new');
+    expect(out).toBe(`- 配置:\n${B}\nnew\n${E}\ntail\n`);
+    // 幂等：再替换一次输出不变（区间只有一份）
+    expect(replaceBetween(out, 'new')).toBe(out);
+  });
+
+  it('前缀不误命中：`# BEGIN AGENTFORGE` 不匹配 `# BEGIN AGENTFORGE MCP` 行（Spec §8.4）', () => {
+    const toml = ['user = 1', '# BEGIN AGENTFORGE MCP', 'x = 1', '# END AGENTFORGE MCP', ''].join(
+      '\n',
+    );
+    const split = splitByMarkers(toml, '# BEGIN AGENTFORGE', '# END AGENTFORGE');
+    expect(split.hasMarkers).toBe(false);
+    // 反向也成立：MCP 变体自己能命中自己的段
+    const mcp = splitByMarkers(toml, '# BEGIN AGENTFORGE MCP', '# END AGENTFORGE MCP');
+    expect(mcp.hasMarkers).toBe(true);
+    expect(mcp.inside).toBe('\nx = 1\n');
   });
 
   it('边界：CRLF 内容，inside 原样保留 CRLF', () => {
@@ -68,12 +131,16 @@ describe('splitByMarkers', () => {
     expect(split.after).toBe('\r\nb');
   });
 
-  it('自定义 marker 对', () => {
-    const split = splitByMarkers('x/*AF-S*/y/*AF-E*/z', '/*AF-S*/', '/*AF-E*/');
+  it('自定义 marker 对（含正则元字符，独占行）', () => {
+    const split = splitByMarkers('x\n/*AF-S*/\ny\n/*AF-E*/\nz', '/*AF-S*/', '/*AF-E*/');
     expect(split.hasMarkers).toBe(true);
-    expect(split.before).toBe('x');
-    expect(split.inside).toBe('y');
-    expect(split.after).toBe('z');
+    expect(split.before).toBe('x\n');
+    expect(split.inside).toBe('\ny\n');
+    expect(split.after).toBe('\nz');
+  });
+
+  it('自定义 marker 对：行内出现不命中（与默认 marker 同一规则）', () => {
+    expect(splitByMarkers('x/*AF-S*/y/*AF-E*/z', '/*AF-S*/', '/*AF-E*/').hasMarkers).toBe(false);
   });
 });
 
@@ -131,14 +198,69 @@ describe('replaceBetween', () => {
     expect(out).toBe(`a\r\n${B}\nnew\n${E}\r\nb`);
   });
 
-  it('marker 无换行包裹的边界内容也能替换', () => {
+  it('marker 未独占行的现有内容 → 视为无 marker，走 EOF 追加（行锚定后的行为）', () => {
+    // 行为变更（行锚定修复）：旧实现会就地替换 `abc<BEGIN>xyz<END>def` 的“区间”。
+    // 现在这类内容原样保留，新块追加到 EOF——用户正文不再被行内 marker 串牵连改写。
     const out = replaceBetween(`abc${B}xyz${E}def`, 'new');
-    expect(out).toBe(`abc${B}\nnew\n${E}def`);
+    expect(out).toBe(`abc${B}xyz${E}def\n${B}\nnew\n${E}\n`);
   });
 
-  it('自定义 marker 对', () => {
-    const out = replaceBetween('x/*AF-S*/y/*AF-E*/z', 'n', '/*AF-S*/', '/*AF-E*/');
-    expect(out).toBe('x/*AF-S*/\nn\n/*AF-E*/z');
+  it('自定义 marker 对（独占行）', () => {
+    const out = replaceBetween('x\n/*AF-S*/\ny\n/*AF-E*/\nz', 'n', '/*AF-S*/', '/*AF-E*/');
+    expect(out).toBe('x\n/*AF-S*/\nn\n/*AF-E*/\nz');
+  });
+
+  it('正文含 END marker → ConflictError(3)，不写出自我嵌套的区间', () => {
+    const body = `rules\n${E}\n伪造的尾部`;
+    expect(() => replaceBetween(`# doc\n${B}\nold\n${E}\n`, body)).toThrow(ConflictError);
+  });
+});
+
+describe('marker 正文守卫（Spec §8.2：写出前拦截，避免逐次累积损坏）', () => {
+  it('body 含 BEGIN marker → ConflictError(3)，错误信息点名 marker 与来源文件', () => {
+    try {
+      wrapWithMarkers(`前言\n${B}\n伪造`, B, E, {
+        source: 'C:\\Users\\u\\.agentforge\\custom\\x.md',
+      });
+      expect.unreachable('should throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConflictError);
+      const e = err as ConflictError;
+      expect(e.code).toBe(3);
+      expect(e.message).toContain(B);
+      expect(e.message).toContain('custom\\x.md');
+      expect(e.hint).toBeTruthy();
+    }
+  });
+
+  it('body 含 END marker → ConflictError(3)（无来源上下文时错误信息仍点名 marker）', () => {
+    try {
+      wrapWithMarkers(`rules\n${E}\n多余尾部`);
+      expect.unreachable('should throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConflictError);
+      expect((err as ConflictError).message).toContain(E);
+    }
+  });
+
+  it('行内出现也拦截（守卫按字面量判定，比 split 的行锚定更严）', () => {
+    expect(() => wrapWithMarkers(`见 ${E} 说明`)).toThrow(ConflictError);
+  });
+
+  it('自定义/TOML marker 同样受守卫保护', () => {
+    expect(() =>
+      wrapWithMarkers(
+        'x\n# END AGENTFORGE MCP\n',
+        '# BEGIN AGENTFORGE MCP',
+        '# END AGENTFORGE MCP',
+      ),
+    ).toThrow(ConflictError);
+  });
+
+  it('不含 marker 字面量的正文正常包裹（守卫不误伤）', () => {
+    expect(wrapWithMarkers('BEGIN AGENTFORGE 只是普通文字')).toBe(
+      `${B}\nBEGIN AGENTFORGE 只是普通文字\n${E}`,
+    );
   });
 });
 

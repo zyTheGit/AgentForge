@@ -2,23 +2,38 @@
  * 单测共享工具：内存版 fake Host（无任何真实 IO）与脚本化 fake Prompt。
  *
  * - files：内存文件表（path → content），测试可直接读写断言；
+ * - dirs：经 mkdirExclusive 原子创建的目录集合（互斥锁语义所需，见下）；
  * - chmodCalls：记录 chmod 调用的路径（断言"只读属性去除"路径用）；
  * - createScriptedPrompt：按序返回预设应答的 PromptApi（驱动 init -i 五步流程）。
  */
+import path from 'node:path';
 import type { Host } from '../../src/infra/host';
 import type { PromptApi, PromptOption } from '../../src/infra/prompt';
 
 export interface FakeHost extends Host {
   readonly files: Map<string, string>;
+  /** 已存在的「目录」集合（内存 fs 无目录概念，仅 mkdirExclusive 的互斥判据需要）。 */
+  readonly dirs: Set<string>;
   readonly chmodCalls: string[];
 }
 
 export function createFakeHost(envMap: Readonly<Record<string, string>> = {}): FakeHost {
   const files = new Map<string, string>();
+  const dirs = new Set<string>();
   const chmodCalls: string[] = [];
+
+  /** 目录是否"存在"：显式创建过，或其下有任意文件键（对齐真实 fs 的目录语义）。 */
+  const dirExists = (p: string): boolean => {
+    if (dirs.has(p)) {
+      return true;
+    }
+    const prefix = p.endsWith(path.sep) ? p : `${p}${path.sep}`;
+    return [...files.keys()].some((k) => k.startsWith(prefix));
+  };
 
   const host: FakeHost = {
     files,
+    dirs,
     chmodCalls,
     async readFile(p) {
       const content = files.get(p);
@@ -46,22 +61,55 @@ export function createFakeHost(envMap: Readonly<Record<string, string>> = {}): F
     async mkdirp(_p) {
       // 内存 fs 无目录概念，no-op
     },
+    async mkdirExclusive(p) {
+      // 原子创建语义：已存在 → false（互斥败者）；否则登记为已存在并返回 true
+      if (dirExists(p) || files.has(p)) {
+        return false;
+      }
+      dirs.add(p);
+      return true;
+    },
     async rm(p) {
+      // 对齐真实 host 的 recursive+force：删除同名文件 / 目录及其下全部键
       files.delete(p);
+      dirs.delete(p);
+      const prefix = p.endsWith(path.sep) ? p : `${p}${path.sep}`;
+      for (const key of [...files.keys()]) {
+        if (key.startsWith(prefix)) {
+          files.delete(key);
+        }
+      }
+      for (const dir of [...dirs]) {
+        if (dir.startsWith(prefix)) {
+          dirs.delete(dir);
+        }
+      }
     },
     async stat(p) {
       const content = files.get(p);
       if (content === undefined) {
         throw errnoError('ENOENT', `no such file: ${p}`);
       }
-      return { isFile: true, isDirectory: false, isSymbolicLink: false, size: content.length, mtimeMs: 0 };
+      return {
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        size: content.length,
+        mtimeMs: 0,
+      };
     },
     async lstat(p) {
       const content = files.get(p);
       if (content === undefined) {
         throw errnoError('ENOENT', `no such file: ${p}`);
       }
-      return { isFile: true, isDirectory: false, isSymbolicLink: false, size: content.length, mtimeMs: 0 };
+      return {
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        size: content.length,
+        mtimeMs: 0,
+      };
     },
     async readlink(p) {
       throw errnoError('EINVAL', `not a symlink: ${p}`);
@@ -147,13 +195,19 @@ export function createScriptedPrompt(answers: readonly ScriptedAnswer[]): Script
       _initialValue?: T,
     ): Promise<T> {
       calls.push({ kind: 'select', message: _message });
-      const answer = nextAnswer('select') as { value: unknown; effect?: () => void | Promise<void> };
+      const answer = nextAnswer('select') as {
+        value: unknown;
+        effect?: () => void | Promise<void>;
+      };
       await answer.effect?.();
       return answer.value as T;
     },
     async confirm(_message: string, _initialValue?: boolean): Promise<boolean> {
       calls.push({ kind: 'confirm', message: _message });
-      const answer = nextAnswer('confirm') as { value: unknown; effect?: () => void | Promise<void> };
+      const answer = nextAnswer('confirm') as {
+        value: unknown;
+        effect?: () => void | Promise<void>;
+      };
       await answer.effect?.();
       return answer.value as boolean;
     },
@@ -164,13 +218,14 @@ export function createScriptedPrompt(answers: readonly ScriptedAnswer[]): Script
       _required?: boolean,
     ): Promise<T[]> {
       calls.push({ kind: 'multiselect', message: _message });
-      const answer = nextAnswer('multiselect') as { value: unknown; effect?: () => void | Promise<void> };
+      const answer = nextAnswer('multiselect') as {
+        value: unknown;
+        effect?: () => void | Promise<void>;
+      };
       await answer.effect?.();
       const picked = new Set(answer.value as readonly string[]);
       // 与真实实现一致：按声明顺序稳定输出 value 数组（非选项对象）
-      return options
-        .filter((option) => picked.has(option.value))
-        .map((option) => option.value);
+      return options.filter((option) => picked.has(option.value)).map((option) => option.value);
     },
     note(_message: string, _title?: string): void {
       calls.push({ kind: 'note', message: _title ?? _message });

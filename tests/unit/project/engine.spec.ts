@@ -9,12 +9,17 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { type EnvSnapshot, readEnv } from '../../../src/core/env';
 import { ConfigError } from '../../../src/core/errors';
-import { readEnv, type EnvSnapshot } from '../../../src/core/env';
+import {
+  DEFAULT_MARKER_BEGIN,
+  DEFAULT_MARKER_END,
+  renderedSectionHash,
+  splitByMarkers,
+} from '../../../src/core/markers';
 import { currentOs } from '../../../src/core/paths';
-import { filterTargets, syncOnce } from '../../../src/core/project/engine';
+import { buildGitignoreItem, filterTargets, syncOnce } from '../../../src/core/project/engine';
 import { syncMetaPath } from '../../../src/core/project/sync-meta';
-import { splitByMarkers, DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END, renderedSectionHash } from '../../../src/core/markers';
 import { createFakeHost, type FakeHost } from '../test-utils';
 
 const OS = currentOs();
@@ -45,7 +50,9 @@ function createSyncHost(env: Record<string, string> = {}): FakeHost {
       for (const key of base.files.keys()) {
         if (key.startsWith(prefix)) {
           const rest = key.slice(prefix.length);
-          if (rest === '') continue;
+          if (rest === '') {
+            continue;
+          }
           const sep = rest.search(/[\\/]/);
           names.add(sep === -1 ? rest : rest.slice(0, sep));
         }
@@ -225,10 +232,7 @@ describe('syncOnce — 单 target 闭环（claude）', () => {
 
   it('仅 codex → 单 target 同步：根 AGENTS.md + .codex 下的 config.toml 标记段（M6 全注册）', async () => {
     const host = createSyncHost();
-    await host.writeFile(
-      path.join(PROJECT_SOT, 'profile.yaml'),
-      'version: 1\ntargets: [codex]\n',
-    );
+    await host.writeFile(path.join(PROJECT_SOT, 'profile.yaml'), 'version: 1\ntargets: [codex]\n');
     await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), HABITS_YAML);
     const result = await syncOnce(syncOptions(host));
     expect(result.targets.map((t) => t.targetId)).toEqual(['codex']);
@@ -260,9 +264,9 @@ describe('syncOnce — 单 target 闭环（claude）', () => {
   it('--targets 非法 id → ConfigError(2)', async () => {
     const host = createSyncHost();
     await seedProjectSoT(host);
-    await expect(
-      syncOnce(syncOptions(host, { targetsFilter: ['nope'] })),
-    ).rejects.toThrow(ConfigError);
+    await expect(syncOnce(syncOptions(host, { targetsFilter: ['nope'] }))).rejects.toThrow(
+      ConfigError,
+    );
   });
 });
 
@@ -276,6 +280,194 @@ describe('syncOnce — dry-run', () => {
     expect(result.targets[0]?.items[0]?.path).toBe(CLAUDE_MD);
     expect(host.files.has(CLAUDE_MD)).toBe(false);
     expect(host.files.has(syncMetaPath(PROJECT_SOT))).toBe(false);
+  });
+});
+
+describe('buildGitignoreItem（Spec §4.2 projection.gitignore_generated）', () => {
+  const plan = (items: readonly string[]) => ({
+    plan: {
+      targetId: 'claude' as const,
+      items: items.map((p) => ({ path: p, action: 'write' as const, content: '' })),
+    },
+  });
+
+  /**
+   * AgentForge 自身的运行时产物（§3.2）：锁 / 备份 / 回滚失败保留副本。
+   * 排序上 `.agf-backup-failed-` 系列在 `.agf-backup` 之前（`-` 小于 `/`）。
+   */
+  const RUNTIME_IGNORES = [
+    '/.agentforge/.agf-backup-failed-*/',
+    '/.agentforge/.agf-backup/',
+    '/.agentforge/.sync.lock/',
+  ];
+
+  it('项目内产物 → 根锚定 posix 模式，去重且排序', () => {
+    const item = buildGitignoreItem(
+      [
+        plan([CLAUDE_MD, path.join(CWD, '.mcp.json')]),
+        plan([path.join(CWD, '.claude', 'skills', 's', 'SKILL.md'), CLAUDE_MD]),
+      ],
+      CWD,
+      PROJECT_SOT,
+      OS,
+    );
+    expect(item?.path).toBe(path.join(CWD, '.gitignore'));
+    expect(item?.action).toBe('merge_marker');
+    expect(item?.content).toBe(
+      [...RUNTIME_IGNORES, '/.claude/skills/s/SKILL.md', '/.mcp.json', '/CLAUDE.md'].join('\n'),
+    );
+  });
+
+  it('项目根之外的产物（user scope / CODEX_HOME）被过滤', () => {
+    const item = buildGitignoreItem([plan([USER_CLAUDE_MD, CLAUDE_MD])], CWD, PROJECT_SOT, OS);
+    expect(item?.content).toBe([...RUNTIME_IGNORES, '/CLAUDE.md'].join('\n'));
+  });
+
+  it('SoT 根在项目根之外（AGF_HOME 指向别处）→ 运行时产物不写入 .gitignore', () => {
+    const item = buildGitignoreItem([plan([CLAUDE_MD])], CWD, USER_SOT, OS);
+    expect(item?.content).toBe('/CLAUDE.md');
+  });
+
+  it('无任何项目内产物（且 SoT 也在项目外）→ undefined（不写空标记段）', () => {
+    expect(buildGitignoreItem([plan([USER_CLAUDE_MD])], CWD, USER_SOT, OS)).toBeUndefined();
+  });
+});
+
+describe('syncOnce — .gitignore 投影（Spec §4.2 projection.gitignore_generated）', () => {
+  const GITIGNORE = path.join(CWD, '.gitignore');
+  const PROFILE_WITH_GITIGNORE = [
+    'version: 1',
+    'scope: project',
+    'targets: [claude]',
+    'projection:',
+    '  gitignore_generated: true',
+    '',
+  ].join('\n');
+
+  async function seedWithGitignore(host: FakeHost): Promise<void> {
+    await host.writeFile(path.join(PROJECT_SOT, 'profile.yaml'), PROFILE_WITH_GITIGNORE);
+    await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), HABITS_YAML);
+  }
+
+  it('默认（未开启）→ 不写 .gitignore，result.gitignore = null（既有行为不变）', async () => {
+    const host = createSyncHost();
+    await seedProjectSoT(host);
+    const result = await syncOnce(syncOptions(host));
+    expect(result.gitignore).toBeNull();
+    expect(host.files.has(GITIGNORE)).toBe(false);
+  });
+
+  it('开启 → 标记段内列出全部项目内产物，段外用户条目保留', async () => {
+    const host = createSyncHost();
+    await seedWithGitignore(host);
+    await host.writeFile(GITIGNORE, 'node_modules/\n');
+    const result = await syncOnce(syncOptions(host));
+
+    const content = host.files.get(GITIGNORE) as string;
+    expect(content).toContain('node_modules/');
+    expect(content).toContain('# BEGIN AGENTFORGE');
+    expect(content).toContain('/CLAUDE.md');
+    expect(content).toContain('/.mcp.json');
+    expect(content).toContain('# END AGENTFORGE');
+    expect(result.gitignore?.targetId).toBe('gitignore');
+    expect(result.gitignore?.statuses).toEqual(['written']);
+  });
+
+  it('开启 → 标记段内含 AgentForge 自身运行时产物（锁 / 备份 / 失败备份，§3.2）', async () => {
+    const host = createSyncHost();
+    await seedWithGitignore(host);
+    await syncOnce(syncOptions(host));
+
+    const content = host.files.get(GITIGNORE) as string;
+    const inside = splitByMarkers(content, '# BEGIN AGENTFORGE', '# END AGENTFORGE').inside;
+    expect(inside).toContain('/.agentforge/.sync.lock/');
+    expect(inside).toContain('/.agentforge/.agf-backup/');
+    expect(inside).toContain('/.agentforge/.agf-backup-failed-*/');
+  });
+
+  it('幂等：第二次 sync → unchanged 且内容逐字节一致', async () => {
+    const host = createSyncHost();
+    await seedWithGitignore(host);
+    await syncOnce(syncOptions(host));
+    const once = host.files.get(GITIGNORE);
+    const again = await syncOnce(syncOptions(host));
+    expect(host.files.get(GITIGNORE)).toBe(once);
+    expect(again.gitignore?.statuses).toEqual(['unchanged']);
+  });
+
+  it('dry-run → 计划里出现 .gitignore 项但不落盘', async () => {
+    const host = createSyncHost();
+    await seedWithGitignore(host);
+    const result = await syncOnce(syncOptions(host, { dryRun: true }));
+    expect(result.gitignore?.items[0]?.path).toBe(GITIGNORE);
+    expect(result.gitignore?.statuses).toEqual(['planned']);
+    expect(host.files.has(GITIGNORE)).toBe(false);
+  });
+
+  it('effective scope=user → 不写（项目根之外的投影不该进项目 .gitignore）', async () => {
+    const host = createSyncHost();
+    await host.writeFile(
+      path.join(USER_SOT, 'profile.yaml'),
+      [
+        'version: 1',
+        'scope: user',
+        'targets: [claude]',
+        'projection:',
+        '  gitignore_generated: true',
+        '',
+      ].join('\n'),
+    );
+    await host.writeFile(path.join(USER_SOT, 'habits.yaml'), HABITS_YAML);
+    const result = await syncOnce(syncOptions(host));
+    expect(result.scope).toBe('user');
+    expect(result.gitignore).toBeNull();
+    expect(host.files.has(GITIGNORE)).toBe(false);
+  });
+});
+
+describe('syncOnce — profile.projection.marker_mode 端到端（Spec §4.2）', () => {
+  it('marker_mode: none → CLAUDE.md 为裸正文（无 marker 包裹）', async () => {
+    const host = createSyncHost();
+    await host.writeFile(
+      path.join(PROJECT_SOT, 'profile.yaml'),
+      [
+        'version: 1',
+        'scope: project',
+        'targets: [claude]',
+        'projection:',
+        '  marker_mode: none',
+        '',
+      ].join('\n'),
+    );
+    await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), HABITS_YAML);
+    await syncOnce(syncOptions(host));
+    expect(host.files.get(CLAUDE_MD)).toBe(RENDERED_MINIMAL);
+    expect(host.files.get(CLAUDE_MD)).not.toContain(DEFAULT_MARKER_BEGIN);
+  });
+
+  it('marker_mode: append_below_marker → 旧区间内容保留在新正文之后', async () => {
+    const host = createSyncHost();
+    await host.writeFile(
+      path.join(PROJECT_SOT, 'profile.yaml'),
+      [
+        'version: 1',
+        'scope: project',
+        'targets: [claude]',
+        'projection:',
+        '  marker_mode: append_below_marker',
+        '',
+      ].join('\n'),
+    );
+    await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), HABITS_YAML);
+    await host.writeFile(CLAUDE_MD, `${DEFAULT_MARKER_BEGIN}\n# 历史正文\n${DEFAULT_MARKER_END}\n`);
+    await syncOnce(syncOptions(host, { force: true }));
+    const inside = splitByMarkers(
+      host.files.get(CLAUDE_MD) as string,
+      DEFAULT_MARKER_BEGIN,
+      DEFAULT_MARKER_END,
+    ).inside;
+    expect(inside).toContain('# AgentForge Rules');
+    expect(inside).toContain('# 历史正文');
   });
 });
 

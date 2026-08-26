@@ -16,16 +16,7 @@
           "properties": {
             "manager": {
               "type": "string",
-              "enum": [
-                "fnm",
-                "nvm",
-                "asdf",
-                "mise",
-                "n",
-                "volta",
-                "system",
-                "none"
-              ]
+              "enum": ["fnm", "nvm", "asdf", "mise", "n", "volta", "system", "none"]
             },
             "version": {
               "type": "string"
@@ -40,17 +31,7 @@
           "properties": {
             "manager": {
               "type": "string",
-              "enum": [
-                "uv",
-                "poetry",
-                "pipenv",
-                "conda",
-                "pyenv",
-                "asdf",
-                "mise",
-                "system",
-                "none"
-              ]
+              "enum": ["uv", "poetry", "pipenv", "conda", "pyenv", "asdf", "mise", "system", "none"]
             },
             "version": {
               "type": "string"
@@ -64,13 +45,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "pnpm",
-              "bun",
-              "npm",
-              "yarn",
-              "yarn-berry"
-            ]
+            "enum": ["pnpm", "bun", "npm", "yarn", "yarn-berry"]
           }
         },
         "rust": {
@@ -81,11 +56,7 @@
             },
             "manager": {
               "type": "string",
-              "enum": [
-                "rustup",
-                "system",
-                "none"
-              ]
+              "enum": ["rustup", "system", "none"]
             }
           }
         },
@@ -97,13 +68,7 @@
             },
             "manager": {
               "type": "string",
-              "enum": [
-                "goenv",
-                "asdf",
-                "mise",
-                "system",
-                "none"
-              ]
+              "enum": ["goenv", "asdf", "mise", "system", "none"]
             }
           }
         }
@@ -115,16 +80,7 @@
       "properties": {
         "shell": {
           "type": "string",
-          "enum": [
-            "powershell",
-            "pwsh",
-            "cmd",
-            "zsh",
-            "bash",
-            "fish",
-            "nushell",
-            "other"
-          ]
+          "enum": ["powershell", "pwsh", "cmd", "zsh", "bash", "fish", "nushell", "other"]
         },
         "editor": {
           "type": "string"
@@ -148,12 +104,7 @@
         },
         "container": {
           "type": "string",
-          "enum": [
-            "docker",
-            "podman",
-            "none",
-            "other"
-          ]
+          "enum": ["docker", "podman", "none", "other"]
         }
       }
     },
@@ -174,13 +125,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "test",
-              "lint",
-              "typecheck",
-              "build",
-              "format"
-            ]
+            "enum": ["test", "lint", "typecheck", "build", "format"]
           }
         },
         "forbid": {

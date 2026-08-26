@@ -80,20 +80,22 @@ aforge import AGENTS.md    # 或 CLAUDE.md：识别工具链关键词 → habits
 | 命令 | 作用 |
 |------|------|
 | `aforge init -i` | 交互式五步初始化（scope → 探测 → 确认 → 选 target → 写入） |
-| `aforge init [--scope project\|user]` | 非交互初始化（探测快照 + 骨架落盘） |
+| `aforge init [--scope project\|user] [--json]` | 非交互初始化（探测快照 + 骨架落盘） |
 | `aforge detect [--json]` | 探测本机工具链（node/python/包管理器/shell/已有规则文件），无副作用 |
-| `aforge sync [--targets a,b] [--dry-run] [--force]` | 渲染 SoT 并投影到目标 Agent |
+| `aforge sync [--targets a,b] [--dry-run] [--force] [--json]` | 渲染 SoT 并投影到目标 Agent |
 | `aforge learn [--scope s] [--file f\|'-'] [--id id]` | 记录一条 learning（不投影） |
 | `aforge promote <id> [--to user] [--yes]` | 将 learning 升级为 custom 规则或 skill |
-| `aforge learnings [--json]` | 列出两层 SoT 的全部 learning |
+| `aforge learnings list [--json]` / `show <id>` / `edit <id>` / `rm <id>` | 管理两层 SoT 的 learning 条目 |
 | `aforge source add <path\|git-url> [--ref r] [--id id]` | 登记规则/模板/技能来源（local 或 git） |
 | `aforge source list [--json]` / `remove <id>` / `update <id>` | 管理已登记来源（update 离线报错） |
 | `aforge template list [--json]` / `enable <id>` / `disable <id>` | 管理规则模板 |
 | `aforge skill add <name> [--from src]` / `list [--json]` | 安装（实体拷贝）/列出技能 |
-| `aforge mcp add [--scope s] [--json]` | 登记 MCP 服务器声明 |
+| `aforge mcp add [--scope s] [--from-json] [--json]` | 登记 MCP 服务器声明（`--from-json` 从 stdin 读 JSON 声明） |
 | `aforge status [--json]` | SoT 概览：scope、目标路径、最近 sync、内容计数 |
 | `aforge doctor [--json]` | 体检：配置合法性、投影一致性、环境问题 |
 | `aforge import <path>` | 从既有 AGENTS.md / CLAUDE.md 导入工具链声明与素材 |
+
+`--json` 同时是 program 级全局标志：任何子命令都可写成 `aforge --json <cmd>`，输出为机器可读 JSON（路径一律绝对路径）。注意 `mcp add` 的**输入**标志叫 `--from-json`，`--json` 只表示输出契约。
 
 ## 工作原理
 

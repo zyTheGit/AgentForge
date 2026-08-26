@@ -10,19 +10,18 @@
  *    promote / sync / source add / skill add / AGF_OFFLINE 退出码）。
  */
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import { runInit } from '../../src/commands/init';
 import { runLearn } from '../../src/commands/learn';
 import { runPromote } from '../../src/commands/promote';
-import { runSync } from '../../src/commands/sync';
 import { runSkillAdd } from '../../src/commands/skill';
 import {
   runSourceAdd,
@@ -30,11 +29,12 @@ import {
   runSourceRemove,
   runSourceUpdate,
 } from '../../src/commands/source';
-import { currentOs } from '../../src/core/paths';
+import { runSync } from '../../src/commands/sync';
 import { OfflineError, toExitCode } from '../../src/core/errors';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END, splitByMarkers } from '../../src/core/markers';
-import { realHost } from '../../src/infra/real-host';
+import { currentOs } from '../../src/core/paths';
 import type { Host } from '../../src/infra/host';
+import { realHost } from '../../src/infra/real-host';
 
 const OS = currentOs();
 const VERSION = 'test-0.1.0';
@@ -312,11 +312,10 @@ describe('真 git 仓库 fixture：add git（file:// pin）→ skill add → upd
     try {
       await runInit({ host: ws.host, cwd: ws.root, os: OS });
 
-      const added = await runSourceAdd(
-        { host: ws.host, cwd: ws.root, os: OS },
-        fixture.url,
-        { ref: 'main', id: 'fixture' },
-      );
+      const added = await runSourceAdd({ host: ws.host, cwd: ws.root, os: OS }, fixture.url, {
+        ref: 'main',
+        id: 'fixture',
+      });
       expect(added.source.type).toBe('git');
       expect(added.source.ref).toBe('main');
       expect(added.source.commit).toBe(fixture.commit);
@@ -327,11 +326,7 @@ describe('真 git 仓库 fixture：add git（file:// pin）→ skill add → upd
       expect(existsSync(path.join(storeDir, 'manifest.yaml'))).toBe(true);
 
       // 源清单读取（--from fixture 定位 store）；git autocrlf 可能转换换行，断言前归一化
-      const skills = await runSkillAdd(
-        { host: ws.host, cwd: ws.root, os: OS },
-        'pdf',
-        'fixture',
-      );
+      const skills = await runSkillAdd({ host: ws.host, cwd: ws.root, os: OS }, 'pdf', 'fixture');
       expect(skills.fromSourceId).toBe('fixture');
       expect(
         (await readFile(path.join(ws.sotRoot, 'skills', 'pdf', 'SKILL.md'), 'utf8')).replace(
@@ -380,6 +375,10 @@ describe('aforge learn/promote/source/skill（子进程端到端）', () => {
         delete env[key];
       }
     }
+    // CI 必须显式清除：store.ts 的 §10 守卫在 CI 为真时让 createLearning 抛
+    // ConfigError(2)，而本套件在 CI 上跑时会从 process.env 继承 CI=true，导致
+    // learn 用例整批失败。需要验证守卫本身的用例请通过 extraEnv 显式传 CI。
+    delete env.CI;
     env.USERPROFILE = tmpHome;
     env.HOME = tmpHome;
     return { ...env, ...extra };
@@ -404,11 +403,9 @@ describe('aforge learn/promote/source/skill（子进程端到端）', () => {
 
     expect(runCli(['init'], root).status).toBe(0);
 
-    const learn = runCli(
-      ['learn', '--file', '-', '--id', 'e2e-learn'],
-      root,
-      { input: `${LEARNING_CONTENT}\n` },
-    );
+    const learn = runCli(['learn', '--file', '-', '--id', 'e2e-learn'], root, {
+      input: `${LEARNING_CONTENT}\n`,
+    });
     expect(learn.status).toBe(0);
     expect(learn.stdout).toContain('learning created: e2e-learn');
     expect(existsSync(path.join(root, '.agentforge', 'learnings', 'e2e-learn.yaml'))).toBe(true);
@@ -456,11 +453,9 @@ describe('aforge learn/promote/source/skill（子进程端到端）', () => {
     const root = path.join(base, 'proj');
     mkdirSync(root);
 
-    const result = runCli(
-      ['source', 'add', 'https://example.com/x.git', '--ref', 'v1'],
-      root,
-      { extraEnv: { AGF_OFFLINE: '1' } },
-    );
+    const result = runCli(['source', 'add', 'https://example.com/x.git', '--ref', 'v1'], root, {
+      extraEnv: { AGF_OFFLINE: '1' },
+    });
     expect(result.status).toBe(5);
     expect(result.stderr).toContain('离线');
   }, 60_000);

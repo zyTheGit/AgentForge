@@ -8,10 +8,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { BASE_DEFAULT_TEMPLATE } from '../../../src/assets/templates';
 import { ConfigError, ExitCode } from '../../../src/core/errors';
-import { composeRules, renderRules } from '../../../src/core/generate/composer';
 import type { ComposeInput } from '../../../src/core/generate/composer';
-import { HabitsSchema, ProfileSchema } from '../../../src/schema';
+import { applyPathStyle, composeRules, renderRules } from '../../../src/core/generate/composer';
 import type { Habits } from '../../../src/schema';
+import { HabitsSchema, ProfileSchema } from '../../../src/schema';
 
 /** Spec §13.1 的 habits 数据。 */
 function habits131(): Habits {
@@ -132,7 +132,10 @@ describe('§5.2 四层优先级（输出自上而下）', () => {
     const rules = await composeRules(
       composeInput(habits, ['extra/one', 'extra/two'], {
         customContents: ['# Custom A\n\nfirst file', '# Custom B\n\nsecond file'],
-        promotedLearnings: ['Always run pnpm install after touching package.json.', 'Prefer vitest.'],
+        promotedLearnings: [
+          'Always run pnpm install after touching package.json.',
+          'Prefer vitest.',
+        ],
         templateContents: [
           { id: 'extra/one', content: '# Extra One\n\nfrom template' },
           { id: 'extra/two', content: '# Extra Two' },
@@ -223,9 +226,7 @@ describe('空变量省略小节（Spec §5.1，禁止编造 / "Not specified"）
 describe('fail-fast（Spec §5.2：未解析 id / 模板语法错误 → 退出码 2）', () => {
   it('profile.templates 声明但 templateContents 缺失 → ConfigError(2)，hint 指向 template list', async () => {
     const habits = HabitsSchema.parse({ version: 1 });
-    const err = await expectConfigError(
-      composeRules(composeInput(habits, ['extra/missing'])),
-    );
+    const err = await expectConfigError(composeRules(composeInput(habits, ['extra/missing'])));
     expect(err.message).toContain('extra/missing');
     expect(err.hint).toContain('aforge template list');
   });
@@ -275,6 +276,117 @@ describe('边界与幂等', () => {
       templateContents: [{ id: 'extra/one', content: '# Extra One\n{{ai.style}}' }],
     });
     expect(await composeRules(input)).toBe(await composeRules(input));
+  });
+});
+
+describe('projection.path_style 路径风格归一（Spec §4.2）', () => {
+  /** 带 path_style 的 profile（targets 必填）。 */
+  function profileWithPathStyle(style: 'auto' | 'windows' | 'posix') {
+    return ProfileSchema.parse({
+      version: 1,
+      targets: ['claude'],
+      projection: { path_style: style },
+    });
+  }
+
+  const CUSTOM = ['自定义规则：配置在 ~/.agentforge/profile.yaml，缓存在 $HOME/.cache/agf。'];
+
+  it('applyPathStyle(windows)：分隔符 \\ + 家目录 %USERPROFILE%', () => {
+    expect(applyPathStyle('~/.agentforge/profile.yaml', 'windows')).toBe(
+      '%USERPROFILE%\\.agentforge\\profile.yaml',
+    );
+    expect(applyPathStyle('$HOME/.cache/agf', 'windows')).toBe('%USERPROFILE%\\.cache\\agf');
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: ${HOME} 是被测的 shell 变量字面量，不是模板插值
+    expect(applyPathStyle('${HOME}/.config', 'windows')).toBe('%USERPROFILE%\\.config');
+  });
+
+  it('applyPathStyle(posix)：分隔符 / + 家目录 $HOME', () => {
+    expect(applyPathStyle('%USERPROFILE%\\.agentforge\\profile.yaml', 'posix')).toBe(
+      '$HOME/.agentforge/profile.yaml',
+    );
+    expect(applyPathStyle('C:\\proj\\AGENTS.md', 'posix')).toBe('C:/proj/AGENTS.md');
+  });
+
+  it('auto：按注入的宿主平台展开（win32 → windows；其余 → posix）', () => {
+    expect(applyPathStyle('~/.config/agf', 'auto', { platform: 'win32' })).toBe(
+      '%USERPROFILE%\\.config\\agf',
+    );
+    expect(applyPathStyle('%USERPROFILE%\\.config\\agf', 'auto', { platform: 'linux' })).toBe(
+      '$HOME/.config/agf',
+    );
+  });
+
+  it('散文里的斜杠不被误改（只改写路径 token）', () => {
+    const prose = '使用 pnpm/bun 之一；参见 and/or 说明。';
+    expect(applyPathStyle(prose, 'windows')).toBe(prose);
+  });
+
+  it('URL 不被盘符正则吞掉（windows / posix 两种 path_style 下都原样）', () => {
+    // 回归：盘符分支缺左边界时，windows 风格把 `https://example.com/repo`
+    // 误判成盘符路径并改写成 `https:\\example.com\repo`（auto 在 Windows 宿主即 windows）
+    const urls = [
+      'https://example.com/repo',
+      'http://example.com/a/b',
+      'file:///C:/Users/me/AGENTS.md',
+      'git+ssh://git@example.com/org/repo.git',
+      'ssh://git@example.com:22/org/repo.git',
+    ];
+    for (const url of urls) {
+      expect(applyPathStyle(url, 'windows')).toBe(url);
+      expect(applyPathStyle(url, 'posix')).toBe(url);
+      expect(applyPathStyle(`见 ${url} 说明`, 'windows')).toBe(`见 ${url} 说明`);
+    }
+  });
+
+  it('真实盘符路径仍被归一（URL 排除不误伤路径）', () => {
+    expect(applyPathStyle('C:\\proj\\AGENTS.md', 'posix')).toBe('C:/proj/AGENTS.md');
+    expect(applyPathStyle('见 D:/a/b 与 (E:/c)', 'windows')).toBe('见 D:\\a\\b 与 (E:\\c)');
+  });
+
+  it('posix 分支也归一花括号形式的 HOME 变量（与 windows 分支对称）', () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: ${HOME} 是被测的 shell 变量字面量，不是模板插值
+    expect(applyPathStyle('${HOME}/.config/agf', 'posix')).toBe('$HOME/.config/agf');
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: 同上
+    expect(applyPathStyle('${HOME}\\.config', 'posix')).toBe('$HOME/.config');
+  });
+
+  it('composeRules 出口应用 path_style=windows', async () => {
+    const rules = await composeRules({
+      habits: HabitsSchema.parse({ version: 1 }),
+      profile: profileWithPathStyle('windows'),
+      customContents: CUSTOM,
+      promotedLearnings: [],
+      templateContents: [],
+    });
+    expect(rules).toContain('%USERPROFILE%\\.agentforge\\profile.yaml');
+    expect(rules).toContain('%USERPROFILE%\\.cache\\agf');
+  });
+
+  it('composeRules 出口应用 path_style=posix', async () => {
+    const rules = await composeRules({
+      habits: HabitsSchema.parse({ version: 1 }),
+      profile: profileWithPathStyle('posix'),
+      customContents: ['规则见 %USERPROFILE%\\.agentforge\\custom\\a.md。'],
+      promotedLearnings: [],
+      templateContents: [],
+    });
+    expect(rules).toContain('$HOME/.agentforge/custom/a.md');
+  });
+
+  it('auto + os 注入：同一 SoT 在两平台产出各自风格（默认 auto）', async () => {
+    const base = {
+      habits: HabitsSchema.parse({ version: 1 }),
+      profile: profileWithPathStyle('auto'),
+      customContents: CUSTOM,
+      promotedLearnings: [],
+      templateContents: [],
+    };
+    expect(await composeRules({ ...base, os: { platform: 'win32' } })).toContain(
+      '%USERPROFILE%\\.cache\\agf',
+    );
+    expect(await composeRules({ ...base, os: { platform: 'linux' } })).toContain(
+      '$HOME/.cache/agf',
+    );
   });
 });
 

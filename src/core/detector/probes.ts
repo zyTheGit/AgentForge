@@ -10,7 +10,15 @@
 import type { Host } from '../../infra/host';
 
 /** habits.tools.shell 枚举值（Spec §4.1；与 schema/habits.ts Shell 对齐，单测做兼容校验）。 */
-export type ShellName = 'powershell' | 'pwsh' | 'cmd' | 'zsh' | 'bash' | 'fish' | 'nushell' | 'other';
+export type ShellName =
+  | 'powershell'
+  | 'pwsh'
+  | 'cmd'
+  | 'zsh'
+  | 'bash'
+  | 'fish'
+  | 'nushell'
+  | 'other';
 
 /** package.json#packageManager 解析结果（如 "pnpm@9.1.0"）。 */
 export interface PackageManagerField {
@@ -25,7 +33,9 @@ export type PythonManagerClue = 'uv' | 'poetry' | 'pipenv';
 function parseFirstVersionLine(content: string): string | undefined {
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (line === '' || line.startsWith('#')) continue;
+    if (line === '' || line.startsWith('#')) {
+      continue;
+    }
     const version = line.replace(/^v/i, '');
     return version === '' ? undefined : version;
   }
@@ -54,9 +64,13 @@ export function parsePackageJsonManager(content: string): PackageManagerField | 
   } catch {
     return undefined;
   }
-  if (typeof parsed !== 'object' || parsed === null) return undefined;
+  if (typeof parsed !== 'object' || parsed === null) {
+    return undefined;
+  }
   const field = (parsed as Record<string, unknown>).packageManager;
-  if (typeof field !== 'string' || field.trim() === '') return undefined;
+  if (typeof field !== 'string' || field.trim() === '') {
+    return undefined;
+  }
 
   const value = field.trim();
   const at = value.lastIndexOf('@');
@@ -98,8 +112,15 @@ function envPresent(host: Host, key: string): boolean {
 /** SHELL basename → 枚举映射（win32 上 Git Bash/MSYS 也会导出 SHELL，是强信号）。 */
 function shellFromShellEnv(host: Host): ShellName | undefined {
   const shell = host.env('SHELL');
-  if (shell === undefined || shell.trim() === '') return undefined;
-  const base = shell.trim().split(/[\\/]+/).filter((s) => s !== '').pop() ?? '';
+  if (shell === undefined || shell.trim() === '') {
+    return undefined;
+  }
+  const base =
+    shell
+      .trim()
+      .split(/[\\/]+/)
+      .filter((s) => s !== '')
+      .pop() ?? '';
   switch (base.toLowerCase()) {
     case 'zsh':
       return 'zsh';
@@ -124,13 +145,21 @@ function shellFromShellEnv(host: Host): ShellName | undefined {
  */
 export function detectShell(host: Host, os: string): ShellName {
   const fromShellEnv = shellFromShellEnv(host);
-  if (fromShellEnv !== undefined) return fromShellEnv;
+  if (fromShellEnv !== undefined) {
+    return fromShellEnv;
+  }
 
   if (os === 'win32') {
-    if (envPresent(host, 'POWERSHELL_DISTRIBUTION_CHANNEL')) return 'pwsh';
-    if (envPresent(host, 'PSModulePath')) return 'powershell';
+    if (envPresent(host, 'POWERSHELL_DISTRIBUTION_CHANNEL')) {
+      return 'pwsh';
+    }
+    if (envPresent(host, 'PSModulePath')) {
+      return 'powershell';
+    }
     const comSpec = host.env('ComSpec') ?? host.env('COMSPEC');
-    if (comSpec !== undefined && /cmd\.exe$/i.test(comSpec.trim())) return 'cmd';
+    if (comSpec !== undefined && /cmd\.exe$/i.test(comSpec.trim())) {
+      return 'cmd';
+    }
     return 'other';
   }
   return 'other';

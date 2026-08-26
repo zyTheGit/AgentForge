@@ -17,7 +17,23 @@
  *   参与继承与 append/replace 合并，缺省即"未设置"；
  * - scope：文件所属层级由加载上下文判定，缺省合法；
  * - write_agents_md / write_claude_md / gitignore_generated：Spec 未标默认，
- *   由装配层之后的消费端按 §8.7 投影矩阵决定。
+ *   由装配层之后的消费端按 §8.7 投影矩阵决定（见下方"字段消费点"）。
+ *
+ * 字段消费点（避免"声明了却无人读"）：
+ * - projection.marker_mode → core/project/types.ProjectContext.markerMode →
+ *   core/project/writer.computeItemContent（replace / append 分派）与各 projector
+ *   的主规则 action（none → 整文件 write，不使用 marker 包裹）；
+ * - projection.write_agents_md / write_claude_md → 各 projector 的 plan
+ *   （§8.7 投影矩阵：write_agents_md 控 opencode/codex/pi 的 AGENTS.md；
+ *   write_claude_md 控 claude 的 CLAUDE.md 与 opencode 的"可选"CLAUDE.md）；
+ * - projection.path_style → core/generate/composer.applyPathStyle（投影正文里的
+ *   路径 token 分隔符与家目录变量）；
+ * - projection.gitignore_generated → core/project/engine 的 .gitignore 标记段写入；
+ * - learning.default_scope → commands/learn 的默认落层；
+ * - skills.always → core/sources/skill.readSkillsToMaterialize（物化并投影）；
+ * - skills.on_demand → **MVP 决定：只登记不物化**，由 aforge status 展示清单
+ *   （Spec §4.2 注记）。按需装载属 Phase 2，MVP 不投影、不生成占位文件——
+ *   在此登记该决定，避免字段静默无效。
  */
 import { z } from 'zod';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../core/markers';
@@ -38,11 +54,17 @@ export const ArrayMergeMode = z.enum(['append', 'replace']);
 /** Spec §4.2 projection.marker_mode。 */
 export const MarkerMode = z.enum(['none', 'append_below_marker', 'replace_between_markers']);
 
+/** marker_mode 的类型形态（投影层 ProjectContext / writer 消费，见 core/project）。 */
+export type MarkerMode = z.output<typeof MarkerMode>;
+
 /** Spec §4.2 projection.line_ending。 */
 export const LineEndingEnum = z.enum(['lf', 'crlf']);
 
 /** Spec §4.2 projection.path_style。 */
 export const PathStyle = z.enum(['auto', 'windows', 'posix']);
+
+/** path_style 的类型形态（core/generate/composer 的路径风格归一化消费）。 */
+export type PathStyle = z.output<typeof PathStyle>;
 
 /** Spec §4.2 mcp.servers[].transport。 */
 export const Transport = z.enum(['stdio', 'http', 'sse']);
@@ -80,7 +102,12 @@ export const ProfileSchema = z.object({
   skills: z
     .object({
       always: z.array(z.string()).optional(),
-      on_demand: z.array(z.string()).optional(),
+      on_demand: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'MVP 只登记不物化：声明的 skill 名不会被 sync 物化或投影，仅由 aforge status / doctor 列出（Spec §4.2 注记）',
+        ),
       copy_mode: CopyMode.default('copy'),
     })
     // prefault：缺省时以 {} 作为输入再解析，内层 default 自然填充（单一事实源）

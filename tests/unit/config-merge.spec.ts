@@ -5,8 +5,8 @@
  * - habits 深合并 / detected 快照替换 / 输入不可变。
  */
 import { describe, expect, it } from 'vitest';
-import { mergeHabits, mergeProfiles } from '../../src/core/config/merge';
 import type { ArrayMergeMode, MergeStrategy } from '../../src/core/config/merge';
+import { mergeHabits, mergeProfiles } from '../../src/core/config/merge';
 import type { HabitsInput, ProfileInput } from '../../src/schema';
 
 describe('Spec §4.2 示例（逐字断言）', () => {
@@ -45,9 +45,9 @@ describe('strategy × arrays 全组合（表驱动）', () => {
   const arrayModes: ArrayMergeMode[] = ['append', 'replace'];
 
   /** profile 场景：内容型数组 templates + 继承字段 projection.marker_mode + 覆盖字段 skills.copy_mode */
-  it.each(strategies.flatMap((strategy) =>
-    arrayModes.map((arrays) => ({ strategy, arrays })),
-  ))('profile：strategy=$strategy arrays=$arrays', ({ strategy, arrays }) => {
+  it.each(
+    strategies.flatMap((strategy) => arrayModes.map((arrays) => ({ strategy, arrays }))),
+  )('profile：strategy=$strategy arrays=$arrays', ({ strategy, arrays }) => {
     const user: ProfileInput = {
       version: 1,
       targets: ['opencode'],
@@ -84,9 +84,9 @@ describe('strategy × arrays 全组合（表驱动）', () => {
   });
 
   /** habits 场景：package_managers（内容型数组） + tools.shell（标量覆盖） */
-  it.each(strategies.flatMap((strategy) =>
-    arrayModes.map((arrays) => ({ strategy, arrays })),
-  ))('habits：strategy=$strategy arrays=$arrays', ({ strategy, arrays }) => {
+  it.each(
+    strategies.flatMap((strategy) => arrayModes.map((arrays) => ({ strategy, arrays }))),
+  )('habits：strategy=$strategy arrays=$arrays', ({ strategy, arrays }) => {
     const user: HabitsInput = {
       version: 1,
       runtime: { package_managers: ['pnpm', 'npm'] },
@@ -263,17 +263,17 @@ describe('mergeHabits 行为细节', () => {
       version: 1,
       detected: { node: { manager: 'fnm' } },
     };
-    expect(
-      mergeHabits(user, project, { strategy: 'overlay', arrays: 'replace' }).detected,
-    ).toEqual({ node: { manager: 'fnm' } });
+    expect(mergeHabits(user, project, { strategy: 'overlay', arrays: 'replace' }).detected).toEqual(
+      { node: { manager: 'fnm' } },
+    );
   });
 
   it('detected：project 未声明 → 继承 user 快照', () => {
     const user: HabitsInput = { version: 1, detected: { node: { manager: 'nvm' } } };
     const project: HabitsInput = { version: 1, ai: { style: 'concise' } };
-    expect(
-      mergeHabits(user, project, { strategy: 'overlay', arrays: 'replace' }).detected,
-    ).toEqual({ node: { manager: 'nvm' } });
+    expect(mergeHabits(user, project, { strategy: 'overlay', arrays: 'replace' }).detected).toEqual(
+      { node: { manager: 'nvm' } },
+    );
   });
 
   it('ai.forbid / ai.language 内容型数组合并', () => {

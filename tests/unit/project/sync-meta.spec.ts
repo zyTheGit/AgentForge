@@ -5,8 +5,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ConfigError } from '../../../src/core/errors';
 import {
-  SYNC_META_FILE,
   readSyncMeta,
+  SYNC_META_FILE,
   syncMetaPath,
   writeSyncMeta,
 } from '../../../src/core/project/sync-meta';

@@ -4,11 +4,11 @@
  * 覆盖：id 生成与校验（正则 / Windows 非法字符）、createLearning 默认值与
  * CI 守卫、重复检测（§7.5 仍创建）、CRUD、YAML 往返（长行不折行）。
  */
-import { describe, expect, it } from 'vitest';
+
 import path from 'node:path';
+import { describe, expect, it } from 'vitest';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { ConfigError } from '../../../src/core/errors';
-import { LearningIdPattern, LearningSchema } from '../../../src/schema';
 import {
   createLearning,
   generateId,
@@ -19,8 +19,9 @@ import {
   updateLearning,
   validateLearningId,
 } from '../../../src/core/learning/store';
-import { createFakeHost } from '../test-utils';
+import { LearningIdPattern, LearningSchema } from '../../../src/schema';
 import type { FakeHost } from '../test-utils';
+import { createFakeHost } from '../test-utils';
 
 const SOT = 'C:\\sot';
 
@@ -38,7 +39,9 @@ function createDirAwareHost(envMap: Record<string, string> = {}): FakeHost {
       for (const key of base.files.keys()) {
         if (key.startsWith(prefix)) {
           const rest = key.slice(prefix.length);
-          if (rest === '') continue;
+          if (rest === '') {
+            continue;
+          }
           const sep = rest.search(/[\\/]/);
           names.add(sep === -1 ? rest : rest.slice(0, sep));
         }
@@ -132,16 +135,19 @@ describe('createLearning', () => {
 
   it('自定义字段全量生效（id/trigger/category/confidence/scope/source/promoteTarget）', async () => {
     const host = createDirAwareHost();
-    const { learning } = await createLearning({ host, sotRoot: SOT }, {
-      content: '内容',
-      id: 'my-custom-id',
-      trigger: 'when adding deps',
-      category: 'tooling',
-      confidence: 0.9,
-      scope: 'user',
-      source: 'file:notes.md',
-      promoteTarget: 'skill',
-    });
+    const { learning } = await createLearning(
+      { host, sotRoot: SOT },
+      {
+        content: '内容',
+        id: 'my-custom-id',
+        trigger: 'when adding deps',
+        category: 'tooling',
+        confidence: 0.9,
+        scope: 'user',
+        source: 'file:notes.md',
+        promoteTarget: 'skill',
+      },
+    );
     expect(learning.id).toBe('my-custom-id');
     expect(learning.trigger).toBe('when adding deps');
     expect(learning.category).toBe('tooling');
@@ -153,9 +159,10 @@ describe('createLearning', () => {
 
   it('CI=true（§10 守卫）→ ConfigError(2)，不落任何文件', async () => {
     const host = createDirAwareHost({ CI: 'true' });
-    await expect(
-      createLearning({ host, sotRoot: SOT }, { content: 'x' }),
-    ).rejects.toMatchObject({ code: 2, name: 'ConfigError' });
+    await expect(createLearning({ host, sotRoot: SOT }, { content: 'x' })).rejects.toMatchObject({
+      code: 2,
+      name: 'ConfigError',
+    });
     expect(host.files.size).toBe(0);
   });
 
@@ -176,10 +183,16 @@ describe('createLearning', () => {
 
   it('重复检测（§7.5）：同 content 的未晋升条目 → duplicateOf 指向旧条目，仍创建（两条都在）', async () => {
     const host = createDirAwareHost();
-    const first = await createLearning({ host, sotRoot: SOT }, { content: '同样的规则', id: 'first' });
+    const first = await createLearning(
+      { host, sotRoot: SOT },
+      { content: '同样的规则', id: 'first' },
+    );
     expect(first.duplicateOf).toBeUndefined();
 
-    const second = await createLearning({ host, sotRoot: SOT }, { content: '同样的规则', id: 'second' });
+    const second = await createLearning(
+      { host, sotRoot: SOT },
+      { content: '同样的规则', id: 'second' },
+    );
     expect(second.duplicateOf).toBe('first');
     expect(second.learning.id).toBe('second');
 
@@ -206,12 +219,17 @@ describe('createLearning', () => {
   it('长单行 content 不被 YAML 折行改写（lineWidth 0 往返一致）', async () => {
     const host = createDirAwareHost();
     const long = `规则：${'很长的内容'.repeat(60)}`; // 远超默认 80 列折行阈值
-    const { learning } = await createLearning({ host, sotRoot: SOT }, { content: long, id: 'long' });
+    const { learning } = await createLearning(
+      { host, sotRoot: SOT },
+      { content: long, id: 'long' },
+    );
     const again = await showLearning({ host, sotRoot: SOT }, 'long');
     expect(again.content).toBe(long);
     expect(again.id).toBe(learning.id);
     // 落盘文本里 content 行保持单行（无折行续行）
-    expect((host.files.get(learningFilePath(SOT, 'long')) ?? '').includes(long.slice(0, 20))).toBe(true);
+    expect((host.files.get(learningFilePath(SOT, 'long')) ?? '').includes(long.slice(0, 20))).toBe(
+      true,
+    );
   });
 });
 
@@ -221,7 +239,10 @@ describe('CRUD（list/show/update/remove）', () => {
     expect(await listLearnings({ host, sotRoot: SOT })).toEqual([]);
     await createLearning({ host, sotRoot: SOT }, { content: 'a', id: 'b-entry' });
     await createLearning({ host, sotRoot: SOT }, { content: 'b', id: 'a-entry' });
-    expect((await listLearnings({ host, sotRoot: SOT })).map((l) => l.id)).toEqual(['a-entry', 'b-entry']);
+    expect((await listLearnings({ host, sotRoot: SOT })).map((l) => l.id)).toEqual([
+      'a-entry',
+      'b-entry',
+    ]);
   });
 
   it('showLearning 不存在 → ConfigError(2)', async () => {
@@ -231,12 +252,15 @@ describe('CRUD（list/show/update/remove）', () => {
 
   it('updateLearning 修改可变字段并写回（可再读一致）', async () => {
     const host = createDirAwareHost();
-    await createLearning({ host, sotRoot: SOT }, {
-      content: '旧内容',
-      id: 'upd',
-      category: 'other',
-      confidence: 0.5,
-    });
+    await createLearning(
+      { host, sotRoot: SOT },
+      {
+        content: '旧内容',
+        id: 'upd',
+        category: 'other',
+        confidence: 0.5,
+      },
+    );
     const updated = await updateLearning({ host, sotRoot: SOT }, 'upd', {
       content: '新内容',
       category: 'security',

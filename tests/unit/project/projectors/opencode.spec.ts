@@ -3,16 +3,22 @@
  * 平台分隔符）、MCP payload 序列化、enabled 过滤、skills write 项。
  */
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
 import {
+  opencodeClaudeRulePath,
   opencodeMainRulePath,
   opencodeMcpPath,
   opencodeMcpPayload,
   opencodeProjector,
   opencodeSkillPath,
 } from '../../../../src/core/project/projectors/opencode';
-import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
 import type { ProjectContext } from '../../../../src/core/project/types';
-import { HabitsSchema, McpServerSchema, ProfileSchema, type McpServer } from '../../../../src/schema';
+import {
+  HabitsSchema,
+  type McpServer,
+  McpServerSchema,
+  ProfileSchema,
+} from '../../../../src/schema';
 
 function buildCtx(overrides: Partial<ProjectContext> = {}): ProjectContext {
   return {
@@ -156,6 +162,57 @@ describe('opencodeMcpPayload（OpenCode mcp 键惯例）', () => {
       opencodeMcpPayload([stdioServer({ enabled: false }), stdioServer()]),
     ) as { mcp: Record<string, unknown> };
     expect(Object.keys(payload.mcp)).toEqual(['fs']);
+  });
+});
+
+describe('opencodeProjector.plan — profile.projection 开关（Spec §4.2 / §8.7）', () => {
+  it('write_agents_md=false → 不再产出 AGENTS.md 项（其余项不变）', () => {
+    const ctx = buildCtx({
+      profile: ProfileSchema.parse({
+        version: 1,
+        targets: ['opencode'],
+        projection: { write_agents_md: false },
+      }),
+    });
+    const plan = opencodeProjector.plan(ctx);
+    expect(plan.items.map((i) => i.path)).toEqual(['C:\\proj\\opencode.json']);
+  });
+
+  it('write_claude_md=true → 追加 §8.7「可选」的 CLAUDE.md 项，与 AGENTS.md 同内容', () => {
+    const ctx = buildCtx({
+      profile: ProfileSchema.parse({
+        version: 1,
+        targets: ['opencode'],
+        projection: { write_claude_md: true },
+      }),
+    });
+    const plan = opencodeProjector.plan(ctx);
+    expect(plan.items.slice(0, 2)).toEqual([
+      { path: 'C:\\proj\\AGENTS.md', action: 'merge_marker', content: ctx.renderedRulesMd },
+      { path: 'C:\\proj\\CLAUDE.md', action: 'merge_marker', content: ctx.renderedRulesMd },
+    ]);
+    expect(opencodeClaudeRulePath(ctx)).toBe('C:\\proj\\CLAUDE.md');
+  });
+
+  it('默认（未显式配置）→ 只有 AGENTS.md，CLAUDE.md 不投影（保持既有行为）', () => {
+    const plan = opencodeProjector.plan(buildCtx());
+    expect(plan.items.some((i) => i.path.endsWith('CLAUDE.md'))).toBe(false);
+  });
+
+  it('marker_mode=none → 主规则项动作降级为 write（不做 marker 包裹）', () => {
+    const plan = opencodeProjector.plan(buildCtx({ markerMode: 'none' }));
+    expect(plan.items[0]).toEqual({
+      path: 'C:\\proj\\AGENTS.md',
+      action: 'write',
+      content: '# AgentForge Rules\n- use fnm\n',
+    });
+  });
+
+  it('marker_mode=append_below_marker / 缺省 → 仍为 merge_marker（语义差异在 writer 层）', () => {
+    expect(
+      opencodeProjector.plan(buildCtx({ markerMode: 'append_below_marker' })).items[0]?.action,
+    ).toBe('merge_marker');
+    expect(opencodeProjector.plan(buildCtx()).items[0]?.action).toBe('merge_marker');
   });
 });
 

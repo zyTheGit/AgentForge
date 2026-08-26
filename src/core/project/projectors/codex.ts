@@ -7,7 +7,8 @@
  * | Skills   | `.agents\skills\<name>\SKILL.md` | `CODEX_HOME\skills\` 或 `~\.codex\skills\` |
  * | MCP      | `.codex\config.toml` 中 `# BEGIN AGENTFORGE MCP` 标记段 | 全局 config.toml |
  *
- * - 主规则 merge_marker（marker 外保留，Spec §8.2）；
+ * - 主规则动作按 profile.projection.marker_mode（§4.2；merge_marker 时 marker 外
+ *   保留，Spec §8.2；none 时整文件 write）；`write_agents_md: false` 关闭该项；
  * - MCP 用 merge_toml：只替换 `# BEGIN AGENTFORGE MCP` / `# END AGENTFORGE MCP`
  *   标记段（标记段外用户 TOML 与注释原样保留，Spec §8.4 / §8.2）；
  *   片段为 `[[mcp_servers.<name>]]` 表 + stdio（command/args/env）或
@@ -17,9 +18,17 @@
  * - plan 为纯函数：不做任何 IO，路径按注入 os 选择分隔符（Spec §2.1）；
  *   CODEX_HOME 经 ctx.env（engine 注入，Spec §2.4）覆盖。
  */
-import path from 'node:path';
 import type { McpServer } from '../../../schema';
-import type { ProjectContext, Projector, ProjectionPlan, ProjectionPlanItem } from '../types';
+import { pathApiFor } from '../../paths';
+import {
+  mainRuleAction,
+  type ProjectContext,
+  type ProjectionPlan,
+  type ProjectionPlanItem,
+  type Projector,
+  shouldWriteAgentsMd,
+} from '../types';
+import { SKILLS_DIRNAME, skillDocPath } from './shared';
 
 /** Spec §2.3 / §8.4 主规则文件名（project / user 两个 scope 同名）。 */
 export const CODEX_MAIN_RULE_FILENAME = 'AGENTS.md';
@@ -30,12 +39,6 @@ export const CODEX_DIRNAME = '.codex';
 /** Spec §2.3：codex project 级 skills 目录（`.agents\skills\`）。 */
 export const CODEX_PROJECT_SKILLS_DIRNAME = '.agents';
 
-/** Spec §2.3 skills 子目录名。 */
-export const SKILLS_DIRNAME = 'skills';
-
-/** skills 内的单 skill 说明文件名（各 target 统一约定）。 */
-export const SKILL_DOC_FILENAME = 'SKILL.md';
-
 /** Spec §2.3 / §8.4 MCP 配置文件（config.toml）。 */
 export const CODEX_CONFIG_FILENAME = 'config.toml';
 
@@ -43,14 +46,9 @@ export const CODEX_CONFIG_FILENAME = 'config.toml';
 export const CODEX_MCP_TOML_BEGIN = '# BEGIN AGENTFORGE MCP';
 export const CODEX_MCP_TOML_END = '# END AGENTFORGE MCP';
 
-/** 按注入 os 选择路径 api（win32 / posix）。 */
-function pathApi(ctx: ProjectContext): typeof path.win32 | typeof path.posix {
-  return ctx.os.platform === 'win32' ? path.win32 : path.posix;
-}
-
 /** codex 全局根目录（user scope）：CODEX_HOME 覆盖，否则 `<home>\.codex`（Spec §2.2）。 */
 function codexUserDir(ctx: ProjectContext): string {
-  const api = pathApi(ctx);
+  const api = pathApiFor(ctx.os);
   return ctx.env?.codexHome !== undefined && ctx.env.codexHome !== ''
     ? api.resolve(ctx.env.codexHome)
     : api.join(ctx.rootDir, CODEX_DIRNAME);
@@ -167,26 +165,26 @@ export function serializeMcpServersToml(servers: readonly McpServer[]): string {
 
 /** 主规则绝对路径（`status` / `init` 打印"实际将写入的路径"也用它，Spec §2.2）。 */
 export function codexMainRulePath(ctx: ProjectContext): string {
-  const api = pathApi(ctx);
+  const api = pathApiFor(ctx.os);
   const base = ctx.scope === 'project' ? ctx.rootDir : codexUserDir(ctx);
   return api.join(base, CODEX_MAIN_RULE_FILENAME);
 }
 
 /** 单个 skill 的目标 SKILL.md 路径（project / user 两个 scope 的 skills 根不同）。 */
 export function codexSkillPath(ctx: ProjectContext, skillName: string): string {
-  const api = pathApi(ctx);
+  const api = pathApiFor(ctx.os);
   // §2.3：project = `<root>\.agents\skills\<name>\SKILL.md`
   // §8.4：user = `CODEX_HOME\skills\` 或 `~\.codex\skills\`
   const skillsRoot =
     ctx.scope === 'project'
       ? api.join(ctx.rootDir, CODEX_PROJECT_SKILLS_DIRNAME, SKILLS_DIRNAME)
       : api.join(codexUserDir(ctx), SKILLS_DIRNAME);
-  return api.join(skillsRoot, skillName, SKILL_DOC_FILENAME);
+  return skillDocPath(api, skillsRoot, skillName);
 }
 
 /** MCP 配置绝对路径（project 级 `<root>\.codex\config.toml`；user 级全局 config.toml）。 */
 export function codexConfigPath(ctx: ProjectContext): string {
-  const api = pathApi(ctx);
+  const api = pathApiFor(ctx.os);
   const base = ctx.scope === 'project' ? api.join(ctx.rootDir, CODEX_DIRNAME) : codexUserDir(ctx);
   return api.join(base, CODEX_CONFIG_FILENAME);
 }
@@ -196,14 +194,17 @@ export const codexProjector: Projector = {
   id: 'codex',
 
   plan(ctx: ProjectContext): ProjectionPlan {
-    const items: ProjectionPlanItem[] = [
-      // 主规则：merge_marker——marker 外用户内容保留（Spec §8.2）
-      {
+    const items: ProjectionPlanItem[] = [];
+
+    // 主规则（§8.7 ✅）：动作与 marker 语义按 projection.marker_mode（§4.2）；
+    // projection.write_agents_md=false 时整项不产出
+    if (shouldWriteAgentsMd(ctx)) {
+      items.push({
         path: codexMainRulePath(ctx),
-        action: 'merge_marker',
+        action: mainRuleAction(ctx),
         content: ctx.renderedRulesMd,
-      },
-    ];
+      });
+    }
 
     // skills：write 实体 copy（M8 skill add 接入后非空；事务内由引擎统一备份/回滚）
     for (const skill of ctx.skillsToMaterialize) {

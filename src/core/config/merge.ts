@@ -44,7 +44,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** 标量（含类型不匹配的兜底）：project 覆盖 user。 */
-function mergeScalar(userValue: unknown, projectValue: unknown): unknown {
+function mergeScalar(_userValue: unknown, projectValue: unknown): unknown {
   return projectValue;
 }
 

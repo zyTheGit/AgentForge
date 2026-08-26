@@ -60,21 +60,29 @@ export async function scanPath(
 ): Promise<Map<string, string>> {
   const resolved = new Map<string, string>();
   const pending = new Set(execNames.map((n) => n.trim()).filter((n) => n !== ''));
-  if (pending.size === 0) return resolved;
+  if (pending.size === 0) {
+    return resolved;
+  }
 
   const win32 = opts.platform === 'win32';
   const api = win32 ? path.win32 : path.posix;
 
   const pathValue = host.env('PATH');
-  if (pathValue === undefined || pathValue.trim() === '') return resolved;
+  if (pathValue === undefined || pathValue.trim() === '') {
+    return resolved;
+  }
 
   const pathExt = win32 ? parsePathExt(host.env('PATHEXT')) : [];
 
   for (const rawDir of pathValue.split(win32 ? ';' : ':')) {
-    if (pending.size === 0) break;
+    if (pending.size === 0) {
+      break;
+    }
 
     let dir = stripQuotes(rawDir.trim());
-    if (dir === '') continue;
+    if (dir === '') {
+      continue;
+    }
     // 相对 PATH 条目（罕见，如 shims 目录相对引用）按 cwd 绝对化
     if (opts.cwd !== undefined && !api.isAbsolute(dir)) {
       dir = api.resolve(opts.cwd, dir);

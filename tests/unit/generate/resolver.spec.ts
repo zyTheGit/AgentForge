@@ -6,8 +6,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BASE_DEFAULT_TEMPLATE } from '../../../src/assets/templates';
 import { ConfigError, ExitCode } from '../../../src/core/errors';
-import { resolveTemplate } from '../../../src/core/generate/resolver';
 import type { ResolveContext } from '../../../src/core/generate/resolver';
+import { resolveTemplate } from '../../../src/core/generate/resolver';
 import { createFakeHost, type FakeHost } from '../test-utils';
 
 const PROJECT_SOT = path.resolve('C:\\proj\\.agentforge');
@@ -29,7 +29,9 @@ function createDirAwareHost(): FakeHost {
       for (const key of base.files.keys()) {
         if (key.startsWith(prefix)) {
           const rest = key.slice(prefix.length);
-          if (rest === '') continue;
+          if (rest === '') {
+            continue;
+          }
           const sep = rest.search(/[\\/]/);
           names.add(sep === -1 ? rest : rest.slice(0, sep));
         }
@@ -112,10 +114,15 @@ describe('resolveTemplate 查找优先级', () => {
 });
 
 describe('resolveTemplate 非法 id（防路径逃逸）', () => {
-  it.each(['../escape', 'a/../../etc/passwd', 'back\\slash', '', '/absolute', 'a//b', '.'])(
-    'id "%s" → ConfigError(2)',
-    async (id) => {
-      await expectConfigError(resolveTemplate(id, ctxFor(createDirAwareHost())));
-    },
-  );
+  it.each([
+    '../escape',
+    'a/../../etc/passwd',
+    'back\\slash',
+    '',
+    '/absolute',
+    'a//b',
+    '.',
+  ])('id "%s" → ConfigError(2)', async (id) => {
+    await expectConfigError(resolveTemplate(id, ctxFor(createDirAwareHost())));
+  });
 });

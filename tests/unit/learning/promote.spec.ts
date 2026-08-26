@@ -1,18 +1,20 @@
 /**
  * promote 单测（Spec §7.5 / §6.1 / §11.2.3 前置）。
  *
- * 覆盖：id 不存在→2、custom_rule 产物与条目标记（保留不删除）、目标冲突→3、
- * 已 promoted→3、--to user 跨层、skill target、habits_note 简单实现。
+ * 覆盖：id 不存在→2、custom_rule 产物与条目标记（保留不删除）、目标冲突→3
+ * （且条目仍 promoted:false，可重试）、已 promoted→3、--to user 跨层、skill
+ * target、habits_note 简单实现（含目标层目录未 init 时自动 mkdirp）。
  */
-import { describe, expect, it } from 'vitest';
+
 import path from 'node:path';
+import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import type { EnvSnapshot } from '../../../src/core/env';
-import { createLearning, learningFilePath } from '../../../src/core/learning/store';
 import { promoteLearning } from '../../../src/core/learning/promote';
+import { createLearning, learningFilePath } from '../../../src/core/learning/store';
 import type { OsContext } from '../../../src/core/paths';
-import { createFakeHost } from '../test-utils';
 import type { FakeHost } from '../test-utils';
+import { createFakeHost, errnoError } from '../test-utils';
 
 const OS: OsContext = { platform: 'win32' };
 const USER_SOT = 'C:\\user-sot';
@@ -30,12 +32,65 @@ function createHost(envMap: Record<string, string> = {}): FakeHost {
       for (const key of base.files.keys()) {
         if (key.startsWith(prefix)) {
           const rest = key.slice(prefix.length);
-          if (rest === '') continue;
+          if (rest === '') {
+            continue;
+          }
           const sep = rest.search(/[\\/]/);
           names.add(sep === -1 ? rest : rest.slice(0, sep));
         }
       }
       return [...names].sort();
+    },
+  };
+}
+
+/**
+ * 目录感知**严格**版 fake host：writeFile 要求父目录已被 mkdirp（模拟真实 fs 的
+ * ENOENT），用于断言"写入前确实创建了目录"。preCreated 预置已 init 的目录。
+ */
+function createStrictDirHost(
+  preCreated: readonly string[] = [],
+): FakeHost & { mkdirpCalls: string[] } {
+  const base = createHost();
+  const mkdirpCalls: string[] = [];
+  const dirs = new Set<string>();
+
+  const addDir = (dir: string): void => {
+    let current = dir;
+    while (!dirs.has(current)) {
+      dirs.add(current);
+      const parent = path.win32.dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
+    }
+  };
+  for (const dir of preCreated) {
+    addDir(dir);
+  }
+
+  return {
+    ...base,
+    mkdirpCalls,
+    async mkdirp(p) {
+      mkdirpCalls.push(p);
+      addDir(p);
+    },
+    async mkdirExclusive(p) {
+      // 原子创建成功即目录存在（SoT 事务锁目录走这条路，其下要能写 meta.json）
+      const created = await base.mkdirExclusive(p);
+      if (created) {
+        addDir(p);
+      }
+      return created;
+    },
+    async writeFile(p, content) {
+      const dir = path.win32.dirname(p);
+      if (!dirs.has(dir)) {
+        throw errnoError('ENOENT', `no such directory: ${dir}`);
+      }
+      return base.writeFile(p, content);
     },
   };
 }
@@ -94,7 +149,7 @@ describe('promoteLearning', () => {
     expect(result.learning.promoted_at).not.toBeNull();
   });
 
-  it('目标文件已存在 → ConflictError(3)，但条目已被标记 promoted（先标记再写文件）', async () => {
+  it('目标文件已存在 → ConflictError(3)，且条目仍为 promoted:false（删除目标文件后可重试成功）', async () => {
     const host = createHost();
     await seed(host, { content: '内容', id: 'conflict-1' });
     const target = path.win32.join(PROJECT_SOT, 'custom', 'conflict-1.md');
@@ -104,12 +159,21 @@ describe('promoteLearning', () => {
       promoteLearning({ host, env: envFor(), os: OS, cwd: PROJECT_ROOT }, 'conflict-1'),
     ).rejects.toMatchObject({ code: 3, name: 'ConflictError' });
 
-    // 原子性保障：先标记 promoted，再写目标文件；若目标文件存在检查失败，条目仍被标记
+    // 可重试性：冲突在写 promoted 标记之前判定，条目状态未被污染
     const entry = parseYaml(host.files.get(learningFilePath(PROJECT_SOT, 'conflict-1')) ?? '');
-    expect(entry.promoted).toBe(true);
-    expect(entry.promoted_at).toBeTruthy();
+    expect(entry.promoted).toBe(false);
+    expect(entry.promoted_at).toBeNull();
     // 目标文件内容未被覆盖
     expect(host.files.get(target)).toBe('既有的手工文件');
+
+    // 按 hint 删除目标文件后重试 → 成功（不需要手工编辑 learning YAML）
+    host.files.delete(target);
+    const retried = await promoteLearning(
+      { host, env: envFor(), os: OS, cwd: PROJECT_ROOT },
+      'conflict-1',
+    );
+    expect(retried.learning.promoted).toBe(true);
+    expect(host.files.get(target)).toBe('内容');
   });
 
   it('已 promoted 的条目再次 promote → ConflictError(3)（幂等防重）', async () => {
@@ -144,7 +208,10 @@ describe('promoteLearning', () => {
     const host = createHost();
     await seed(host, { content: '# 技能说明', id: 'skill-1', promoteTarget: 'skill' });
 
-    const result = await promoteLearning({ host, env: envFor(), os: OS, cwd: PROJECT_ROOT }, 'skill-1');
+    const result = await promoteLearning(
+      { host, env: envFor(), os: OS, cwd: PROJECT_ROOT },
+      'skill-1',
+    );
     expect(result.targetFile).toBe(path.win32.join(PROJECT_SOT, 'skills', 'skill-1', 'SKILL.md'));
     expect(host.files.get(result.targetFile)).toBe('# 技能说明');
   });
@@ -153,7 +220,10 @@ describe('promoteLearning', () => {
     const host = createHost();
     await seed(host, { content: '习惯性规则', id: 'note-1', promoteTarget: 'habits_note' });
 
-    const result = await promoteLearning({ host, env: envFor(), os: OS, cwd: PROJECT_ROOT }, 'note-1');
+    const result = await promoteLearning(
+      { host, env: envFor(), os: OS, cwd: PROJECT_ROOT },
+      'note-1',
+    );
     expect(result.targetFile).toBe(path.win32.join(PROJECT_SOT, 'habits.yaml'));
 
     const habits = parseYaml(host.files.get(result.targetFile) ?? '');
@@ -177,49 +247,131 @@ describe('promoteLearning', () => {
     await createLearning({ host, sotRoot: PROJECT_SOT }, { content: '项目层的', id: 'both' });
     await createLearning({ host, sotRoot: USER_SOT }, { content: '用户层的', id: 'both' });
 
-    const result = await promoteLearning({ host, env: envFor(), os: OS, cwd: PROJECT_ROOT }, 'both');
+    const result = await promoteLearning(
+      { host, env: envFor(), os: OS, cwd: PROJECT_ROOT },
+      'both',
+    );
     expect(host.files.get(result.targetFile)).toBe('项目层的');
     // user 层条目未被标记
     const userEntry = parseYaml(host.files.get(learningFilePath(USER_SOT, 'both')) ?? '');
     expect(userEntry.promoted).toBe(false);
   });
 
-  it('原子性保障：先标记 promoted，再写目标文件；若写文件失败，条目仍为 promoted（可重试）', async () => {
+  it('产物写入失败 → 条目仍为 promoted:false，恢复后重试成功（写入顺序：先产物，最后 promoted 标记）', async () => {
     const host = createHost();
     await seed(host, { content: '内容', id: 'atomic-test' });
 
-    // 模拟写目标文件失败（custom_rule 分支）
+    // 写入顺序断言随本次修复调整：修复前第 1 次 writeFile 是 learning 文件、
+    // 第 2 次才是 custom/<id>.md；修复后前置校验与产物写入都在标记之前，
+    // 因此 custom/<id>.md 变成第 1 次写入（其 atomicWrite 临时文件同在 custom\ 下）。
+    // round-2：整段在 SoT 事务锁内执行，锁元数据（.sync.lock\meta.json）也走
+    // host.writeFile，故断言前先滤掉锁目录下的写入。
     const originalWriteFile = host.writeFile.bind(host);
-    let writeCallCount = 0;
+    const writtenPaths: string[] = [];
     host.writeFile = async (p: string, c: string) => {
-      writeCallCount++;
-      // 第一次调用是写 learning 文件（应该成功），第二次是写 custom/<id>.md（应该失败）
-      if (writeCallCount === 2 && p.includes('custom')) {
+      if (!p.includes('.sync.lock')) {
+        writtenPaths.push(p);
+      }
+      if (p.includes('custom')) {
         throw new Error('模拟写目标文件失败');
       }
       return originalWriteFile(p, c);
     };
 
-    // promote 会先标记 promoted（成功），然后写目标文件（失败）
     await expect(
       promoteLearning({ host, env: envFor(), os: OS, cwd: PROJECT_ROOT }, 'atomic-test'),
     ).rejects.toThrow('模拟写目标文件失败');
 
-    // 验证：条目已被标记为 promoted（即使目标文件写入失败）
-    const entry = parseYaml(host.files.get(learningFilePath(PROJECT_SOT, 'atomic-test')) ?? '');
-    expect(entry.promoted).toBe(true);
-    expect(entry.promoted_at).toBeTruthy();
+    // 首次写入即产物（learning 文件此时尚未被重写）
+    expect(writtenPaths.length).toBe(1);
+    expect(writtenPaths[0]).toContain('custom');
 
-    // 目标文件不存在（因为写失败了）
+    // 条目未被污染：仍是 promoted:false，也没有 promoted_at
+    const entry = parseYaml(host.files.get(learningFilePath(PROJECT_SOT, 'atomic-test')) ?? '');
+    expect(entry.promoted).toBe(false);
+    expect(entry.promoted_at).toBeNull();
+
     const targetFile = path.win32.join(PROJECT_SOT, 'custom', 'atomic-test.md');
     expect(host.files.has(targetFile)).toBe(false);
 
-    // 重试：恢复 writeFile，再次 promote 应成功（幂等性由 promoted 标志保证，但当前实现会抛 ConflictError）
+    // 恢复 writeFile 后直接重试即可成功（无需手工把 promoted 改回 false）
     host.writeFile = originalWriteFile;
-    // 注意：当前实现中，已 promoted 的条目再次 promote 会抛 ConflictError(3)
-    // 这是预期行为：用户需手动删除目标文件后重试，或接受当前状态
-    await expect(
-      promoteLearning({ host, env: envFor(), os: OS, cwd: PROJECT_ROOT }, 'atomic-test'),
-    ).rejects.toMatchObject({ code: 3 });
+    const retried = await promoteLearning(
+      { host, env: envFor(), os: OS, cwd: PROJECT_ROOT },
+      'atomic-test',
+    );
+    expect(retried.learning.promoted).toBe(true);
+    expect(host.files.get(targetFile)).toBe('内容');
+  });
+
+  it('habits_note + --to user：user 层 SoT 目录不存在时先 mkdirp（不抛裸 ENOENT）', async () => {
+    const host = createStrictDirHost([path.win32.join(PROJECT_SOT, 'learnings')]);
+    await seed(host, { content: '习惯规则', id: 'note-user', promoteTarget: 'habits_note' });
+
+    const result = await promoteLearning(
+      { host, env: envFor(), os: OS, cwd: PROJECT_ROOT },
+      'note-user',
+      { to: 'user' },
+    );
+
+    expect(result.targetScope).toBe('user');
+    expect(result.targetFile).toBe(path.win32.join(USER_SOT, 'habits.yaml'));
+    expect(host.mkdirpCalls).toContain(USER_SOT);
+    const habits = parseYaml(host.files.get(result.targetFile) ?? '');
+    expect(habits.detected.promote_notes).toEqual(['note-user: 习惯规则']);
+  });
+});
+
+describe('promoteLearning 并发（SoT 事务锁：校验-写入不重入）', () => {
+  it('两个并发 promote：后者拿不到锁（ConflictError(3)），重试后两条产物都在（不丢写）', async () => {
+    const host = createHost();
+    await seed(host, { content: '第一条', id: 'race-a' });
+    await seed(host, { content: '第二条', id: 'race-b' });
+    const ctx = { host, env: envFor(), os: OS, cwd: PROJECT_ROOT };
+
+    const settled = await Promise.allSettled([
+      promoteLearning(ctx, 'race-a'),
+      promoteLearning(ctx, 'race-b'),
+    ]);
+    expect(settled.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const rejected = settled.find((r) => r.status === 'rejected');
+    expect(rejected?.status === 'rejected' && rejected.reason).toMatchObject({
+      code: 3,
+      name: 'ConflictError',
+    });
+
+    // 失败者的条目未被污染（仍可重试），重试后两条产物齐备
+    const loser = settled[0]?.status === 'fulfilled' ? 'race-b' : 'race-a';
+    const loserEntry = parseYaml(host.files.get(learningFilePath(PROJECT_SOT, loser)) ?? '');
+    expect(loserEntry.promoted).toBe(false);
+    await promoteLearning(ctx, loser);
+    expect(host.files.get(path.win32.join(PROJECT_SOT, 'custom', 'race-a.md'))).toBe('第一条');
+    expect(host.files.get(path.win32.join(PROJECT_SOT, 'custom', 'race-b.md'))).toBe('第二条');
+  });
+
+  it('同一 id 并发 promote：产物只写一次，后者被锁或幂等守卫拦下（3）', async () => {
+    const host = createHost();
+    await seed(host, { content: '只应产出一次', id: 'race-same' });
+    const ctx = { host, env: envFor(), os: OS, cwd: PROJECT_ROOT };
+
+    const settled = await Promise.allSettled([
+      promoteLearning(ctx, 'race-same'),
+      promoteLearning(ctx, 'race-same'),
+    ]);
+    expect(settled.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const rejected = settled.find((r) => r.status === 'rejected');
+    expect(rejected?.status === 'rejected' && rejected.reason).toMatchObject({ code: 3 });
+    expect(host.files.get(path.win32.join(PROJECT_SOT, 'custom', 'race-same.md'))).toBe(
+      '只应产出一次',
+    );
+  });
+
+  it('锁在成功路径后被释放（连续 promote 不被自己的残留锁挡住）', async () => {
+    const host = createHost();
+    await seed(host, { content: 'A', id: 'seq-a' });
+    await seed(host, { content: 'B', id: 'seq-b' });
+    const ctx = { host, env: envFor(), os: OS, cwd: PROJECT_ROOT };
+    await promoteLearning(ctx, 'seq-a');
+    await expect(promoteLearning(ctx, 'seq-b')).resolves.toMatchObject({ targetScope: 'project' });
   });
 });

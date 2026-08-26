@@ -7,12 +7,36 @@
  * - clack 以动态 import 按需加载：非交互命令路径不付出加载开销；
  *   bundle 产物（bun --compile / esbuild bundle）对动态 import 均内联支持，
  *   由构建验证覆盖；
- * - 用户取消（Ctrl+C / Esc）：统一「提示已取消 + exit 0」，不上抛错误
- *   （半途退出不视为失败，Spec §7.1.1 无中途状态需要清理）；
+ * - 用户取消（Ctrl+C / Esc）：抛出 CancelledError（退出码 130），**不再**静默
+ *   exit 0——init -i 的 edit 分支会先落盘 habits.yaml 与全部子目录（见
+ *   commands/init.ts），此后取消确实留下半初始化的 SoT，需要由命令层打印
+ *   已创建的文件/目录清单后再退出（P2 修复；原注释「无中途状态需要清理」已过时）；
  * - assertTty：CI / 管道（stdin 或 stdout 非 TTY）→ ConfigError(2)，
  *   hint 引导非交互参数。
  */
 import { ConfigError } from '../core/errors';
+
+/**
+ * 用户主动取消交互（Ctrl+C / Esc）。
+ *
+ * 不属于 AgentForgeError 体系（Spec §6.1 的 0-5 是「失败」语义的退出码，取消不是
+ * 失败）：退出码固定 130 = 128 + SIGINT(2)，与 sync 被 Ctrl-C 中断的退出码一致。
+ * 命令层捕获后应打印「已创建的文件/目录清单」再退出，避免用户不知道留下了什么。
+ */
+export class CancelledError extends Error {
+  /** 进程退出码（130；main.ts 统一出口据此退出）。 */
+  readonly exitCode = 130;
+
+  constructor(message = '已取消（用户中断交互）') {
+    super(message);
+    this.name = 'CancelledError';
+  }
+}
+
+/** 是否为用户取消（跨 bundle 边界安全：不依赖 instanceof 单一实现）。 */
+export function isCancelledError(err: unknown): err is CancelledError {
+  return err instanceof CancelledError || (err instanceof Error && err.name === 'CancelledError');
+}
 
 /** 单个选项（select / multiselect 共用；value 限定 string 便于 YAML/日志序列化）。 */
 export interface PromptOption<T extends string> {
@@ -97,17 +121,17 @@ function toClackOptions<T extends string>(options: readonly PromptOption<T>[]): 
  * 构造基于 @clack/prompts 的真实 PromptApi。
  *
  * - 动态 import：仅交互路径加载 clack（bun/esbuild bundle 产物均内联）；
- * - isCancel → cancel 提示 + process.exit(0)（用户主动放弃，退出码 0）；
+ * - isCancel → cancel 提示 + 抛 CancelledError（退出码 130，交由命令层清理提示）；
  * - multiselect 返回值按 options 声明顺序重排（targets 顺序稳定性）。
  */
 export async function createClackPrompt(): Promise<PromptApi> {
   const clack = await import('@clack/prompts');
 
-  /** clack 返回值统一拆包：cancel 语义在此终结（exit 0）。 */
+  /** clack 返回值统一拆包：cancel 语义在此转为 CancelledError（不再静默 exit 0）。 */
   function unwrap<T>(value: T | symbol): T {
     if (clack.isCancel(value)) {
       clack.cancel('已取消');
-      process.exit(0);
+      throw new CancelledError();
     }
     return value as T;
   }

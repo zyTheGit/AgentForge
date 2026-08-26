@@ -12,22 +12,17 @@
  */
 import type { Command } from 'commander';
 import {
-  runDoctorChecks,
   type DoctorLevel,
   type DoctorReport,
   type DoctorSection,
+  runDoctorChecks,
 } from '../core/doctor/checks';
 import { readEnv } from '../core/env';
-import { currentOs, type OsContext } from '../core/paths';
-import type { Host } from '../infra/host';
-import { realHost } from '../infra/real-host';
+import { type CommandContext, defaultCommandContext, printJson } from './context';
+import { resolveJsonFlag } from './flags';
 
 /** 命令上下文（host/os/cwd 注入；测试可换 fake host 与任意平台）。 */
-export interface DoctorCommandContext {
-  readonly host: Host;
-  readonly cwd: string;
-  readonly os: OsContext;
-}
+export type DoctorCommandContext = CommandContext;
 
 /** doctor 核心逻辑（可注入、不打印）。@see runDoctorChecks 的检查清单与契约。 */
 export async function runDoctor(ctx: DoctorCommandContext): Promise<DoctorReport> {
@@ -55,12 +50,7 @@ const SECTION_TITLES: Readonly<Record<DoctorSection, string>> = {
 };
 
 /** 分节输出顺序（config → paths → consistency → environment）。 */
-const SECTION_ORDER: readonly DoctorSection[] = [
-  'config',
-  'paths',
-  'consistency',
-  'environment',
-];
+const SECTION_ORDER: readonly DoctorSection[] = ['config', 'paths', 'consistency', 'environment'];
 
 /** item 行前缀宽度（`  [WARN] ` = 9 列）；detail / hint 行缩进与之对齐。 */
 const DETAIL_INDENT = ' '.repeat(9);
@@ -102,10 +92,10 @@ export function registerDoctorCommand(program: Command): void {
     .command('doctor')
     .description('diagnose SoT config, projection consistency and environment issues')
     .option('--json', 'print machine-readable JSON (results + aggregated exit code)')
-    .action(async (options: { json?: boolean }) => {
-      const report = await runDoctor({ host: realHost, cwd: process.cwd(), os: currentOs() });
-      if (options.json === true) {
-        console.log(JSON.stringify(report, null, 2));
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const report = await runDoctor(defaultCommandContext());
+      if (resolveJsonFlag(command, options.json)) {
+        printJson(report);
       } else {
         console.log(formatDoctorReport(report));
       }

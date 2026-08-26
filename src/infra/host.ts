@@ -44,6 +44,24 @@ export interface Host {
   listDir(path: string): Promise<string[]>;
   /** mkdir -p 语义：已存在不报错，递归创建。 */
   mkdirp(path: string): Promise<void>;
+  /**
+   * **原子**创建单个目录（非递归 `mkdir`），用作跨进程互斥原语。
+   *
+   * 原子性契约：Windows 与 POSIX 的 `mkdir` 系统调用均保证「创建成功」与
+   * 「已存在（EEXIST）」二者不可分割地判定——并发调用者中至多一个得到 `true`。
+   * 因此调用方可用它实现进程级排他锁（`exists` 探测 + `writeFile` 的组合做不到：
+   * 两个进程可以都探测为不存在、都写入、都回读到自己的内容）。
+   *
+   * 失败语义：
+   * - 目录已存在 → 返回 `false`（**不抛错**，这是竞态的正常败者路径）；
+   * - 父目录不存在（ENOENT）/ 权限不足（EPERM/EACCES/EROFS）/ 其他错误 →
+   *   原样 reject，由调用方按 errno 映射为 PermissionError 等。**不得**把这些
+   *   错误折叠成 `false`：否则「锁写不进去」会被误解为「锁已被他人持有」。
+   *
+   * @param dir 要创建的目录绝对路径（父目录必须已存在）。
+   * @returns `true` = 本次调用创建了该目录（互斥胜者）；`false` = 目录已存在（败者）。
+   */
+  mkdirExclusive(dir: string): Promise<boolean>;
   /** 删除文件或目录（recursive + force：不存在也不报错）。 */
   rm(path: string): Promise<void>;
   /** stat（跟随 symlink）；不存在时 reject。 */

@@ -13,18 +13,18 @@
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from 'yaml';
+import { atomicWrite, ensureTrailingNewline } from '../../infra/fsutil';
 import type { Host } from '../../infra/host';
-import { atomicWrite } from '../../infra/fsutil';
-import { readEnv } from '../env';
-import { ConfigError } from '../errors';
 import {
-  LearningIdPattern,
-  LearningSchema,
   type Learning,
   type LearningCategory,
+  LearningIdPattern,
+  LearningSchema,
   type PromoteTarget,
 } from '../../schema';
 import type { Scope } from '../env';
+import { readEnv } from '../env';
+import { ConfigError } from '../errors';
 
 /** Spec §3.1/§3.2：learnings 子目录名。 */
 export const LEARNINGS_DIR = 'learnings';
@@ -106,8 +106,7 @@ export interface CreateLearningResult {
 
 /** learning 条目 YAML 序列化（lineWidth 0：长 content 不折行，保证往返一致）。 */
 function serializeLearning(learning: Learning): string {
-  const text = stringifyYaml(learning, { lineWidth: 0 });
-  return text.endsWith('\n') ? text : `${text}\n`;
+  return ensureTrailingNewline(stringifyYaml(learning, { lineWidth: 0 }));
 }
 
 /**
@@ -158,7 +157,8 @@ function validateLearningData(data: unknown, file: string): Learning {
   if (!result.success) {
     const issues = result.error.issues;
     const lines = issues.map(
-      (issue) => `  - ${issue.path.filter((s) => typeof s !== 'symbol').join('.') || '(根)'}: ${issue.message}`,
+      (issue) =>
+        `  - ${issue.path.filter((s) => typeof s !== 'symbol').join('.') || '(根)'}: ${issue.message}`,
     );
     throw new ConfigError(
       `learning 文件校验失败（${file}），共 ${issues.length} 处问题:\n${lines.join('\n')}`,
@@ -261,7 +261,12 @@ export async function showLearning(store: LearningStore, id: string): Promise<Le
 }
 
 /** updateLearning 的可修改字段（管理字段 id/created_at/promoted* 不可改）。 */
-export type LearningPatch = Partial<Pick<Learning, 'trigger' | 'content' | 'category' | 'confidence' | 'source' | 'scope' | 'promote_target'>>;
+export type LearningPatch = Partial<
+  Pick<
+    Learning,
+    'trigger' | 'content' | 'category' | 'confidence' | 'source' | 'scope' | 'promote_target'
+  >
+>;
 
 /**
  * 更新单条 learning（updated_at 刷新为 now）。

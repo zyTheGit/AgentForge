@@ -9,17 +9,21 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { formatDoctorReport, runDoctor } from '../../src/commands/doctor';
-import { formatStatus, runStatus } from '../../src/commands/status';
 import { runInit } from '../../src/commands/init';
-import { runSync } from '../../src/commands/sync';
-import type {
-  DoctorCheckResult,
-  DoctorReport,
-} from '../../src/core/doctor/checks';
+import { runLearn } from '../../src/commands/learn';
+import { formatStatus, runStatus } from '../../src/commands/status';
+import {
+  attachExitCodeOverride,
+  EXIT_CODE_ROLLBACK_INCOMPLETE,
+  formatFailureReport,
+  getExitCodeOverride,
+  runSync,
+} from '../../src/commands/sync';
+import type { DoctorReport } from '../../src/core/doctor/checks';
 import { readEnv } from '../../src/core/env';
-import { currentOs } from '../../src/core/paths';
 import { ConfigError } from '../../src/core/errors';
-import { syncOnce } from '../../src/core/project/engine';
+import { currentOs } from '../../src/core/paths';
+import { getSyncFailureReport, syncOnce } from '../../src/core/project/engine';
 import { createFakeHost, type FakeHost } from './test-utils';
 
 const OS = currentOs();
@@ -44,7 +48,9 @@ function createCommandHost(env: Record<string, string> = { USERPROFILE: HOME }):
       for (const key of base.files.keys()) {
         if (key.startsWith(prefix)) {
           const rest = key.slice(prefix.length);
-          if (rest === '') continue;
+          if (rest === '') {
+            continue;
+          }
           const sep = rest.search(/[\\/]/);
           names.add(sep === -1 ? rest : rest.slice(0, sep));
         }
@@ -106,6 +112,7 @@ describe('formatDoctorReport — 人类可读输出（纯 ASCII 分节）', () =
     expect(text).toContain('hint: check permissions');
     expect(text).toContain('summary: 2 ok, 1 warn, 1 error, exit code 4');
     // 纯 ASCII（Windows GBK 控制台安全）
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 断言输出仅含 ASCII，字符类必须显式覆盖控制字符区间（\x00-\x1F）
     expect(text).toMatch(/^[\x00-\x7F]*$/);
   });
 
@@ -135,6 +142,9 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       skippedTargets: ['future-target'],
       lastSyncAt: '2026-08-21T00:00:00.000Z',
       counts: { custom: 3, learnings: 5, templates: 2 },
+      // Spec §4.2 skills.always / skills.on_demand（新增展示字段）
+      alwaysSkills: ['code-review'],
+      onDemandSkills: ['deep-research'],
     });
     expect(text).toContain('aforge status');
     expect(text).toContain(USER_SOT);
@@ -146,6 +156,10 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
     expect(text).toContain('learnings : 5');
     expect(text).toContain('templates : 2');
     expect(text).toContain('future-target: (no projector in this version)');
+    // §4.2：always 由 sync 物化；on_demand 在 MVP 只登记不物化，status 需说明这点
+    expect(text).toContain('always    : code-review (materialized by sync)');
+    expect(text).toContain('on_demand : deep-research (declared only - not projected in MVP)');
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 断言输出仅含 ASCII，字符类必须显式覆盖控制字符区间（\x00-\x1F）
     expect(text).toMatch(/^[\x00-\x7F]*$/);
   });
 
@@ -160,9 +174,14 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       skippedTargets: [],
       lastSyncAt: null,
       counts: { custom: 0, learnings: 0, templates: 0 },
+      alwaysSkills: [],
+      onDemandSkills: [],
     });
     expect(text).toContain('(unresolvable - see aforge doctor)');
     expect(text).toContain('last sync: (never - run aforge sync)');
+    // 空清单 → (none)，不产生裸行
+    expect(text).toContain('always    : (none)');
+    expect(text).toContain('on_demand : (none)');
   });
 });
 
@@ -201,8 +220,8 @@ describe('runStatus — 状态装配', () => {
         "content: '# L1'",
         'category: other',
         'source: manual',
-        'created_at: \'2026-01-01T00:00:00.000Z\'',
-        'updated_at: \'2026-01-01T00:00:00.000Z\'',
+        "created_at: '2026-01-01T00:00:00.000Z'",
+        "updated_at: '2026-01-01T00:00:00.000Z'",
         'promoted: false',
         'promoted_at: null',
         'promote_target: custom_rule',
@@ -219,8 +238,8 @@ describe('runStatus — 状态装配', () => {
         "content: '# L2'",
         'category: other',
         'source: manual',
-        'created_at: \'2026-01-01T00:00:00.000Z\'',
-        'updated_at: \'2026-01-01T00:00:00.000Z\'',
+        "created_at: '2026-01-01T00:00:00.000Z'",
+        "updated_at: '2026-01-01T00:00:00.000Z'",
         'promoted: false',
         'promoted_at: null',
         'promote_target: custom_rule',
@@ -288,6 +307,165 @@ describe('runInit — --json 序列化形态', () => {
     expect(typeof json.detection).toBe('object');
     expect((json.createdFiles as string[]).length).toBeGreaterThan(0);
     expect((json.createdDirs as string[]).length).toBeGreaterThan(0);
+  });
+});
+
+describe('runInit — SoT 根非空（Spec §6.1「init 目录非空」→ 退出码 2）', () => {
+  it('已初始化（profile.yaml 存在）→ ConfigError(2)，措辞点名「已初始化」', async () => {
+    const host = createCommandHost();
+    await host.writeFile(path.join(PROJECT_SOT, 'profile.yaml'), PROFILE_YAML);
+    await expect(runInit({ host, cwd: CWD, os: OS }, { scope: 'project' })).rejects.toThrow(
+      /已初始化/,
+    );
+  });
+
+  it('SoT 根存在但只有无关文件 → 仍 ConfigError(2)，措辞点名「目录非空」', async () => {
+    // 之前只检查 profile.yaml，导致 §6.1 声明的「目录非空」触发条件形同虚设：
+    // 半初始化目录（例如手工建了 custom/）会被 init 继续写入。
+    const host = createCommandHost();
+    await host.writeFile(path.join(PROJECT_SOT, 'custom', 'a.md'), '# a\n');
+    const err = await runInit({ host, cwd: CWD, os: OS }, { scope: 'project' }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as ConfigError).code).toBe(2);
+    expect((err as ConfigError).message).toContain('目录非空');
+  });
+
+  it('SoT 根不存在 → 正常初始化（既有行为不变）', async () => {
+    const host = createCommandHost();
+    const result = await runInit({ host, cwd: CWD, os: OS }, { scope: 'project' });
+    expect(result.sotRoot).toBe(PROJECT_SOT);
+  });
+});
+
+describe('runLearn — learning.default_scope（Spec §4.2）', () => {
+  /** 两层都已初始化；project 层声明 default_scope: user。 */
+  async function seedBothLayers(host: FakeHost, defaultScope: string): Promise<void> {
+    await host.writeFile(
+      path.join(PROJECT_SOT, 'profile.yaml'),
+      `version: 1\nscope: project\ntargets: [claude]\nlearning:\n  default_scope: ${defaultScope}\n`,
+    );
+    await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), HABITS_YAML);
+    await host.writeFile(path.join(USER_SOT, 'profile.yaml'), PROFILE_YAML);
+    await host.writeFile(path.join(USER_SOT, 'habits.yaml'), HABITS_YAML);
+  }
+
+  it('缺省 --scope → 取 profile.learning.default_scope（此前硬编码 project，该配置项失效）', async () => {
+    const host = createCommandHost();
+    await seedBothLayers(host, 'user');
+    const result = await runLearn({ host, cwd: CWD, os: OS }, { content: '# 学到一条\n' });
+    expect(result.scope).toBe('user');
+    expect(result.sotRoot).toBe(USER_SOT);
+  });
+
+  it('显式 --scope 优先于 default_scope', async () => {
+    const host = createCommandHost();
+    await seedBothLayers(host, 'user');
+    const result = await runLearn(
+      { host, cwd: CWD, os: OS },
+      { content: '# 学到一条\n', scope: 'project' },
+    );
+    expect(result.scope).toBe('project');
+    expect(result.sotRoot).toBe(PROJECT_SOT);
+  });
+
+  it('default_scope 未声明 → 仍为 project（schema 默认值，行为不变）', async () => {
+    const host = createCommandHost();
+    await host.writeFile(path.join(PROJECT_SOT, 'profile.yaml'), PROFILE_YAML);
+    await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), HABITS_YAML);
+    const result = await runLearn({ host, cwd: CWD, os: OS }, { content: '# 学到一条\n' });
+    expect(result.scope).toBe('project');
+  });
+});
+
+describe('sync 失败汇总措辞与退出码（P2）', () => {
+  const targetStatuses = [
+    { targetId: 'opencode', status: 'ok-rolled-back' },
+    { targetId: 'codex', status: 'failed' },
+    { targetId: 'claude', status: 'not-started' },
+  ];
+
+  it('全部恢复 → 首行声明已完全回滚，无 incomplete 措辞与退出码提示', () => {
+    const text = formatFailureReport({
+      targetStatuses,
+      rolledBack: [
+        { path: '/proj/opencode.json', restored: true },
+        { path: '/proj/AGENTS.md', restored: true },
+      ],
+    });
+    expect(text.split('\n')[0]).toBe(
+      'aforge sync failed - all written files have been rolled back',
+    );
+    expect(text).toContain('rollback: 2 file(s) restored');
+    expect(text).not.toContain('rollback incomplete');
+    expect(text).not.toContain('exit code');
+  });
+
+  it('存在未恢复 → 首行 rollback incomplete + 未恢复清单前置 + 退出码 6 提示', () => {
+    const text = formatFailureReport({
+      targetStatuses,
+      rolledBack: [
+        { path: '/proj/opencode.json', restored: false, error: 'EPERM: rm failed' },
+        { path: '/proj/AGENTS.md', restored: true },
+      ],
+    });
+    const lines = text.split('\n');
+    expect(lines[0]).toBe(
+      'aforge sync failed - rollback incomplete - 1 file(s) could not be restored',
+    );
+    // 未恢复清单在 target summary 之前（用户先看到留在改动状态的文件）
+    const listIndex = lines.findIndex((l) => l.includes('/proj/opencode.json'));
+    const summaryIndex = lines.indexOf('target summary:');
+    expect(listIndex).toBeGreaterThan(0);
+    expect(listIndex).toBeLessThan(summaryIndex);
+    expect(text).toContain('EPERM: rm failed');
+    expect(text).toContain('rollback: 1 file(s) restored, 1 restore error(s)');
+    expect(text).toContain(`exit code: ${EXIT_CODE_ROLLBACK_INCOMPLETE} (rollback incomplete)`);
+  });
+
+  it('退出码覆盖：6 未被 Spec §6.1 占用，attach/get 往返且不污染枚举属性', () => {
+    expect(EXIT_CODE_ROLLBACK_INCOMPLETE).toBe(6);
+    const err = new Error('boom');
+    expect(getExitCodeOverride(err)).toBeUndefined();
+    attachExitCodeOverride(err, EXIT_CODE_ROLLBACK_INCOMPLETE);
+    expect(getExitCodeOverride(err)).toBe(6);
+    expect(Object.keys(err)).not.toContain('agentforgeExitCodeOverride');
+    expect(getExitCodeOverride(undefined)).toBeUndefined();
+  });
+
+  it('引擎真实失败报告 → 回滚失败条目落进 incomplete 措辞', async () => {
+    const base = createCommandHost();
+    await seedProjectSoT(base);
+    const denied: FakeHost = {
+      ...base,
+      async rm(p) {
+        if (p === CLAUDE_MD) {
+          const err = new Error(`EPERM: rm ${p}`) as NodeJS.ErrnoException;
+          err.code = 'EPERM';
+          throw err;
+        }
+        await base.rm(p);
+      },
+      async rename(from, to) {
+        if (to === CLAUDE_MCP) {
+          const err = new Error(`EPERM: rename ${to}`) as NodeJS.ErrnoException;
+          err.code = 'EPERM';
+          throw err;
+        }
+        await base.rename(from, to);
+      },
+    };
+
+    const err = await runSync({ host: denied, cwd: CWD, os: OS, agentforgeVersion: 't' }).catch(
+      (e: unknown) => e,
+    );
+    const report = getSyncFailureReport(err);
+    expect(report).toBeDefined();
+    expect(report?.rolledBack.some((r) => !r.restored)).toBe(true);
+    expect(formatFailureReport(report as NonNullable<typeof report>)).toContain(
+      'rollback incomplete',
+    );
   });
 });
 

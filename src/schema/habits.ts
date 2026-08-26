@@ -12,16 +12,7 @@ import { z } from 'zod';
 import { SchemaVersion } from './common';
 
 /** Spec §4.1 runtime.node.manager。 */
-export const NodeManager = z.enum([
-  'fnm',
-  'nvm',
-  'asdf',
-  'mise',
-  'n',
-  'volta',
-  'system',
-  'none',
-]);
+export const NodeManager = z.enum(['fnm', 'nvm', 'asdf', 'mise', 'n', 'volta', 'system', 'none']);
 
 /** Spec §4.1 runtime.python.manager。 */
 export const PythonManager = z.enum([

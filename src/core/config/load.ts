@@ -14,12 +14,12 @@
  * - schema 校验失败 → ConfigError，附字段路径与逐条 issue 摘要。
  */
 import path from 'node:path';
-import { YAMLParseError, parse as parseYaml } from 'yaml';
+import { parse as parseYaml, YAMLParseError } from 'yaml';
 import type { ZodIssue, ZodType, z } from 'zod';
 import type { Host } from '../../infra/host';
-import { ConfigError } from '../errors';
-import { HabitsSchema, ProfileSchema, SourcesFileSchema } from '../../schema';
 import type { HabitsInput, ProfileInput, SourcesFile } from '../../schema';
+import { HabitsSchema, ProfileSchema, SourcesFileSchema } from '../../schema';
+import { ConfigError } from '../errors';
 
 /** Spec §3.1/§3.2 SoT 目录内的配置文件名。 */
 export const HABITS_FILE = 'habits.yaml';

@@ -6,17 +6,17 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ConflictError, ConfigError } from '../../../src/core/errors';
 import { readEnv } from '../../../src/core/env';
-import { currentOs } from '../../../src/core/paths';
-import { syncOnce } from '../../../src/core/project/engine';
-import { syncMetaPath } from '../../../src/core/project/sync-meta';
+import { ConfigError, ConflictError } from '../../../src/core/errors';
 import {
   DEFAULT_MARKER_BEGIN,
   DEFAULT_MARKER_END,
   splitByMarkers,
   wrapWithMarkers,
 } from '../../../src/core/markers';
+import { currentOs } from '../../../src/core/paths';
+import { syncOnce } from '../../../src/core/project/engine';
+import { syncMetaPath } from '../../../src/core/project/sync-meta';
 import { sha256Hex } from '../../../src/infra/fsutil';
 import { createFakeHost, type FakeHost } from '../test-utils';
 
@@ -41,7 +41,9 @@ function createConflictHost(): FakeHost {
       for (const key of base.files.keys()) {
         if (key.startsWith(prefix)) {
           const rest = key.slice(prefix.length);
-          if (rest === '') continue;
+          if (rest === '') {
+            continue;
+          }
           const sep = rest.search(/[\\/]/);
           names.add(sep === -1 ? rest : rest.slice(0, sep));
         }
@@ -52,10 +54,7 @@ function createConflictHost(): FakeHost {
   return host;
 }
 
-async function seedProjectSoT(
-  host: FakeHost,
-  profile = PROFILE_YAML,
-): Promise<void> {
+async function seedProjectSoT(host: FakeHost, profile = PROFILE_YAML): Promise<void> {
   await host.writeFile(path.join(PROJECT_SOT, 'profile.yaml'), profile);
   await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), HABITS_YAML);
 }
@@ -173,9 +172,9 @@ describe('marker 冲突预检查（§8.2-4）', () => {
   it('contentHash 基准统一：sync-meta 记录值 === 投影区间实际读回 hash（M7 核心契约）', async () => {
     const host = createConflictHost();
     await seedSynced(host);
-    const meta = JSON.parse(
-      host.files.get(syncMetaPath(PROJECT_SOT)) as string,
-    ) as { targets: Record<string, { contentHash: string }> };
+    const meta = JSON.parse(host.files.get(syncMetaPath(PROJECT_SOT)) as string) as {
+      targets: Record<string, { contentHash: string }>;
+    };
     expect(meta.targets.claude?.contentHash).toBe(currentSectionHash(host));
   });
 

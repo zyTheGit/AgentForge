@@ -1,14 +1,20 @@
 /**
- * Projector 契约（Spec §8.1）：plan / apply 两段式投影。
+ * Projector 契约（Spec §8.1）：plan / apply 两段式投影 **＋ plan 侧的投影开关**。
  *
  * - plan(ctx)：纯函数，不做任何 IO——只根据上下文计算"写哪些路径、什么动作、什么内容"；
  * - M5 中 apply 由引擎统一执行（core/project/writer.applyItem），
  *   Projector 不自带 apply；M6 全事务化时如需 projector 定制再启用该入口。
  *
+ * 本模块不是纯类型模块：文件末尾还导出四个**运行时**纯函数
+ * （mainRuleAction / shouldWriteAgentsMd / shouldWriteClaudeMd /
+ * shouldWriteOptionalClaudeMd），它们把 `profile.projection` 的开关语义收在一处，
+ * 供四个 projector 共用——放在类型契约旁边是为了让"契约 + 契约的默认判据"同址可见，
+ * 避免四个 projector 各写一遍判断而漂移。
+ *
  * lineEnding 采用项目统一的 'lf' | 'crlf'（Spec §8.1 的 "\n" | "\r\n" 字面形态，
  * 经 infra/fsutil.normalizeLineEnding 映射，Spec §2.5）。
  */
-import type { Habits, McpServer, Profile } from '../../schema';
+import type { Habits, MarkerMode, McpServer, Profile } from '../../schema';
 import type { EnvSnapshot, LineEnding, Scope } from '../env';
 import type { OsContext } from '../paths';
 
@@ -81,6 +87,17 @@ export interface ProjectContext {
   readonly markerBegin: string;
   readonly markerEnd: string;
   /**
+   * Spec §4.2 projection.marker_mode（主规则写入语义）：
+   * - `replace_between_markers`（默认）：替换 marker 区间，区间外用户内容保留；
+   * - `append_below_marker`：在 marker_begin 之后追加新正文，原区间内容保留在其后
+   *   （已包含同一正文时跳过，保证 sync 幂等——见 writer.appendBelowMarker）；
+   * - `none`：不使用 marker 包裹，主规则项降级为整文件 `write`。
+   *
+   * 可选字段（同 env）：早期契约与只读诊断路径（core/doctor）未提供时，
+   * 消费端按 `replace_between_markers` 处理——即历史默认行为。
+   */
+  readonly markerMode?: MarkerMode;
+  /**
    * M6：投影可能需要的环境覆盖（CODEX_HOME 等，Spec §2.2/§2.4）。
    * 可选字段——早期契约（M5）无 env，plan 内以 ctx.env?.codexHome 消费。
    */
@@ -96,4 +113,45 @@ export interface Projector {
    * M6 全事务化（plan 全部 target → 逐一 apply → 失败回滚）时再评估是否下放。
    */
   apply?(plan: ProjectionPlan): Promise<never>;
+}
+
+// ---------------------------------------------------------------------------
+// plan 侧的 profile.projection 开关（四个 projector 共用，避免四处判断漂移）
+// ---------------------------------------------------------------------------
+
+/**
+ * 主规则项的写入动作（Spec §4.2 marker_mode / §8.2）：
+ * - `none` → 整文件 `write`：不使用 marker 包裹，全文归 AgentForge 管理
+ *   （因此也不参与 marker 区间冲突预检查与 doctor 的区间比对——文件里没有区间）；
+ * - `replace_between_markers` / `append_below_marker` → `merge_marker`
+ *   （区间内的替换/追加细节由 writer.computeItemContent 按 mode 分派）。
+ */
+export function mainRuleAction(ctx: ProjectContext): ProjectionAction {
+  return ctx.markerMode === 'none' ? 'write' : 'merge_marker';
+}
+
+/**
+ * 根 AGENTS.md 是否投影（Spec §4.2 projection.write_agents_md / §8.7 投影矩阵）。
+ * 缺省（未声明）= 投影，保持既有行为；显式 false 才关闭。
+ * 适用 target：opencode / codex / pi（claude 在 §8.7 中恒不产出 AGENTS.md）。
+ */
+export function shouldWriteAgentsMd(ctx: ProjectContext): boolean {
+  return ctx.profile.projection.write_agents_md !== false;
+}
+
+/**
+ * CLAUDE.md 是否投影（Spec §4.2 projection.write_claude_md / §8.7）。
+ * claude target 的主规则：缺省 = 投影，显式 false 才关闭。
+ */
+export function shouldWriteClaudeMd(ctx: ProjectContext): boolean {
+  return ctx.profile.projection.write_claude_md !== false;
+}
+
+/**
+ * §8.7 中标记为「可选」的 CLAUDE.md（opencode target）是否投影。
+ * 语义与上面相反：**必须显式** `write_claude_md: true` 才产出——缺省不产出，
+ * 否则默认配置会突然多写一个 CLAUDE.md（既有行为是不产出）。
+ */
+export function shouldWriteOptionalClaudeMd(ctx: ProjectContext): boolean {
+  return ctx.profile.projection.write_claude_md === true;
 }

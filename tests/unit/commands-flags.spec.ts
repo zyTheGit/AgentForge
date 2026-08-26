@@ -1,0 +1,57 @@
+/**
+ * commands/flags 单测（Spec §6.2 全局 `--json`）：
+ * `aforge --json <cmd>` 与 `aforge <cmd> --json` 必须等价——resolveJsonFlag
+ * 沿 commander 的 parent 链向上查找，任一层出现 --json 即为机器可读输出。
+ */
+import { Command } from 'commander';
+import { describe, expect, it } from 'vitest';
+import { resolveJsonFlag } from '../../src/commands/flags';
+
+/** 构造 program（带全局 --json）+ 子命令 + 孙命令，返回三层引用。 */
+function buildProgram(): { program: Command; sub: Command; grandchild: Command } {
+  const program = new Command();
+  program.exitOverride().option('--json', 'machine-readable output');
+  const sub = program.command('sub').option('--json', 'machine-readable output');
+  const grandchild = sub.command('child').option('--json', 'machine-readable output');
+  // action 必须存在，否则 commander 对无 action 的叶子命令报错
+  sub.action(() => {});
+  grandchild.action(() => {});
+  return { program, sub, grandchild };
+}
+
+describe('resolveJsonFlag', () => {
+  it('子命令自身 --json → true', () => {
+    const { program, sub } = buildProgram();
+    program.parse(['sub', '--json'], { from: 'user' });
+    expect(resolveJsonFlag(sub)).toBe(true);
+  });
+
+  it('program 级 --json（前置全局标志）→ true（此前完全未注册，Spec §6.2）', () => {
+    const { program, sub } = buildProgram();
+    program.parse(['--json', 'sub'], { from: 'user' });
+    expect(resolveJsonFlag(sub)).toBe(true);
+  });
+
+  it('祖父层 --json 也生效（沿 parent 链向上）', () => {
+    const { program, grandchild } = buildProgram();
+    program.parse(['--json', 'sub', 'child'], { from: 'user' });
+    expect(resolveJsonFlag(grandchild)).toBe(true);
+  });
+
+  it('无任何 --json → false', () => {
+    const { program, sub } = buildProgram();
+    program.parse(['sub'], { from: 'user' });
+    expect(resolveJsonFlag(sub)).toBe(false);
+  });
+
+  it('localJson 参数为 true 时短路（子命令已自行解析出 options.json 的场景）', () => {
+    const { program, sub } = buildProgram();
+    program.parse(['sub'], { from: 'user' });
+    expect(resolveJsonFlag(sub, true)).toBe(true);
+  });
+
+  it('command 为 undefined → 退化为 localJson（不抛异常）', () => {
+    expect(resolveJsonFlag(undefined)).toBe(false);
+    expect(resolveJsonFlag(undefined, true)).toBe(true);
+  });
+});

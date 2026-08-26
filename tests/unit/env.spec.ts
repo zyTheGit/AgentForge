@@ -76,7 +76,9 @@ describe('readEnv（Spec §2.4）', () => {
   });
 
   it('USERPROFILE 优先于 HOME（Windows 语义，Spec §2.4）', () => {
-    expect(envOf({ USERPROFILE: 'C:\\Users\\u', HOME: '/home/u' }).userProfile).toBe('C:\\Users\\u');
+    expect(envOf({ USERPROFILE: 'C:\\Users\\u', HOME: '/home/u' }).userProfile).toBe(
+      'C:\\Users\\u',
+    );
     expect(envOf({ HOME: '/home/u' }).userProfile).toBe('/home/u');
     expect(envOf({ USERPROFILE: '', HOME: '/home/u' }).userProfile).toBe('/home/u');
   });

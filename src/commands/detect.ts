@@ -10,6 +10,8 @@ import type { DetectedRuntime, DetectedSnapshot, DetectedTool } from '../core/de
 import { runDetection } from '../core/detector/engine';
 import { readEnv } from '../core/env';
 import { realHost } from '../infra/real-host';
+import { printJson } from './context';
+import { resolveJsonFlag } from './flags';
 
 /** 注册 detect 命令（由 cli.ts 装配调用）。 */
 export function registerDetectCommand(program: Command): void {
@@ -17,15 +19,15 @@ export function registerDetectCommand(program: Command): void {
     .command('detect')
     .description('probe local toolchain (node/python/package managers/shell) without side effects')
     .option('--json', 'print machine-readable JSON (absolute paths)')
-    .action(async (options: { json?: boolean }) => {
+    .action(async (options: { json?: boolean }, command: Command) => {
       const snapshot = await runDetection({
         host: realHost,
         os: process.platform,
         cwd: process.cwd(),
         env: readEnv(realHost),
       });
-      if (options.json === true) {
-        console.log(JSON.stringify(snapshot, null, 2));
+      if (resolveJsonFlag(command, options.json)) {
+        printJson(snapshot);
         return;
       }
       printHuman(snapshot);
@@ -40,14 +42,20 @@ function fieldLine(label: string, value: string | undefined): string {
 function printRuntime(lines: string[], runtime: DetectedRuntime): void {
   lines.push(fieldLine('manager', runtime.manager));
   lines.push(fieldLine('source', runtime.source));
-  if (runtime.version !== undefined) lines.push(fieldLine('version', runtime.version));
-  if (runtime.path !== undefined) lines.push(fieldLine('path', runtime.path));
+  if (runtime.version !== undefined) {
+    lines.push(fieldLine('version', runtime.version));
+  }
+  if (runtime.path !== undefined) {
+    lines.push(fieldLine('path', runtime.path));
+  }
 }
 
 function printTool(lines: string[], tool: DetectedTool): void {
   lines.push(fieldLine('manager', tool.manager));
   lines.push(fieldLine('source', tool.source));
-  if (tool.path !== undefined) lines.push(fieldLine('path', tool.path));
+  if (tool.path !== undefined) {
+    lines.push(fieldLine('path', tool.path));
+  }
 }
 
 /** 人类可读输出：分节列表（工具 / 命中 / 来源 / 路径）。 */
@@ -67,7 +75,9 @@ function printHuman(snapshot: DetectedSnapshot): void {
   for (const [index, pm] of snapshot.package_managers.entries()) {
     lines.push(`  ${index + 1}. ${pm.name.padEnd(12)} [${pm.source}]`);
     // 缩进对齐编号前缀（"  1. " 占 5 列）
-    if (pm.path !== undefined) lines.push(`     ${'path'.padEnd(12)}: ${pm.path}`);
+    if (pm.path !== undefined) {
+      lines.push(`     ${'path'.padEnd(12)}: ${pm.path}`);
+    }
   }
 
   lines.push('', 'Shell');

@@ -10,6 +10,8 @@
  *   无记录 → never）；
  * - custom / learnings / templates 计数（两层合并、同名 / 同 id 去重——
  *   与渲染素材口径一致：project 覆盖 user）；
+ * - profile.skills 的 always / on_demand 清单——on_demand 在 MVP 中**只登记不物化**
+ *   （Spec §4.2 注记），在此如实标注，避免该字段静默无效；
  * - --json 输出机器可读 JSON（路径一律绝对路径）。
  *
  * 只读命令：不做渲染（profile.templates 未解析不影响路径展示，环境探测
@@ -21,19 +23,17 @@ import { resolveEffectiveConfig } from '../core/config/defaults';
 import { HABITS_FILE, PROFILE_FILE } from '../core/config/load';
 import { readEnv, type Scope } from '../core/env';
 import { ConfigError } from '../core/errors';
-import { currentOs, resolveProjectSoT, resolveUserSoT, type OsContext } from '../core/paths';
+import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
 import { projectorRegistry } from '../core/project/projectors/registry';
 import { readSyncMeta } from '../core/project/sync-meta';
 import type { ProjectContext } from '../core/project/types';
+import { listDirSafe } from '../infra/fsutil';
 import type { FileStat, Host } from '../infra/host';
-import { realHost } from '../infra/real-host';
+import { type CommandContext, defaultCommandContext, printJson } from './context';
+import { resolveJsonFlag } from './flags';
 
 /** 命令上下文（host/os/cwd 注入；测试可换 fake host 与任意平台）。 */
-export interface StatusCommandContext {
-  readonly host: Host;
-  readonly cwd: string;
-  readonly os: OsContext;
-}
+export type StatusCommandContext = CommandContext;
 
 /** 单个启用 target 的写入路径（plan items 全量）。 */
 export interface StatusTargetInfo {
@@ -65,15 +65,13 @@ export interface StatusResult {
   /** 最近一次成功 sync（effective scope 层 sync-meta.lastSyncAt；无 → null）。 */
   readonly lastSyncAt: string | null;
   readonly counts: StatusCounts;
-}
-
-/** 目录不存在 / 不可读 → []（对应目录未创建是正常态）。 */
-async function listDirSafe(host: Host, dir: string): Promise<readonly string[]> {
-  try {
-    return await host.listDir(dir);
-  } catch {
-    return [];
-  }
+  /** profile.skills.always：会被 sync 物化并投影的 skill 名。 */
+  readonly alwaysSkills: readonly string[];
+  /**
+   * profile.skills.on_demand：**MVP 只登记不物化**（Spec §4.2 注记）。
+   * 在此展示，是为了让「声明了但不会被投影」这件事可见——否则该字段静默无效。
+   */
+  readonly onDemandSkills: readonly string[];
 }
 
 /** stat 失败（不存在 / 不可访问）→ 非文件。 */
@@ -208,6 +206,7 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     lineEnding: config.profile.projection.line_ending,
     markerBegin: config.profile.projection.marker_begin,
     markerEnd: config.profile.projection.marker_end,
+    markerMode: config.profile.projection.marker_mode,
     env,
   };
 
@@ -243,7 +242,14 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     skippedTargets: skipped,
     lastSyncAt: syncMeta?.lastSyncAt ?? null,
     counts,
+    alwaysSkills: config.profile.skills.always ?? [],
+    onDemandSkills: config.profile.skills.on_demand ?? [],
   };
+}
+
+/** skill 名清单摘要（空清单 → `(none)`）。 */
+function skillListSummary(names: readonly string[]): string {
+  return names.length === 0 ? '(none)' : names.join(', ');
 }
 
 /** SoT 根描述行：`<绝对路径> (initialized|not initialized)`。 */
@@ -284,6 +290,15 @@ export function formatStatus(result: StatusResult): string {
   lines.push(`  learnings : ${result.counts.learnings} entry(ies)`);
   lines.push(`  templates : ${result.counts.templates} template(s)`);
 
+  lines.push('');
+  lines.push('skills (profile.skills):');
+  const always = skillListSummary(result.alwaysSkills);
+  const onDemand = skillListSummary(result.onDemandSkills);
+  lines.push(`  always    : ${always} (materialized by sync)`);
+  // MVP 决定：on_demand 只登记不物化（Spec §4.2 注记）——如实说明，避免用户
+  // 以为声明后就会被投影
+  lines.push(`  on_demand : ${onDemand} (declared only - not projected in MVP)`);
+
   return lines.join('\n');
 }
 
@@ -293,10 +308,10 @@ export function registerStatusCommand(program: Command): void {
     .command('status')
     .description('show SoT scope, target paths, last sync time and content counts')
     .option('--json', 'print machine-readable JSON (absolute paths)')
-    .action(async (options: { json?: boolean }) => {
-      const result = await runStatus({ host: realHost, cwd: process.cwd(), os: currentOs() });
-      if (options.json === true) {
-        console.log(JSON.stringify(result, null, 2));
+    .action(async (options: { json?: boolean }, command: Command) => {
+      const result = await runStatus(defaultCommandContext());
+      if (resolveJsonFlag(command, options.json)) {
+        printJson(result);
       } else {
         console.log(formatStatus(result));
       }
