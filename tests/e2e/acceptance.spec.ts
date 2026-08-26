@@ -53,6 +53,7 @@ interface Workspace {
 async function createWorkspace(
   label: string,
   envOverrides: Record<string, string | undefined> = {},
+  stubExecutables: readonly string[] = [],
 ): Promise<Workspace> {
   const base = await mkdtemp(path.join(tmpdir(), `aforge-验收 ${label}-`));
   const root = path.join(base, 'proj');
@@ -71,6 +72,20 @@ async function createWorkspace(
     CODEX_HOME: undefined,
     ...envOverrides,
   };
+
+  // 探测器对 PATH 只做文件名匹配（core/detector/path-scan.ts：零子进程、不校验可执行位），
+  // 所以空文件桩足以让"真实探测"在任意机器上确定命中。宿主是否装了 fnm/uv 不是被测属性，
+  // 断言依赖它会让用例在 CI runner 上假失败。桩目录前置，真实 PATH 保留在后。
+  if (stubExecutables.length > 0) {
+    const win32 = process.platform === 'win32';
+    const stubBin = path.join(base, 'stub-bin');
+    await mkdir(stubBin, { recursive: true });
+    for (const name of stubExecutables) {
+      await writeFile(path.join(stubBin, `${name}${win32 ? '.exe' : ''}`), '', 'utf8');
+    }
+    overrides.PATH = [stubBin, realHost.env('PATH') ?? ''].join(win32 ? ';' : ':');
+  }
+
   const host: Host = {
     ...realHost,
     env(key) {
@@ -127,7 +142,7 @@ async function patchYaml(
 describe('§11.2.1 init -i 探测 fnm/uv + 投影变量渲染', () => {
   let ws: Workspace;
   beforeEach(async () => {
-    ws = await createWorkspace('init-i-fnm-uv');
+    ws = await createWorkspace('init-i-fnm-uv', {}, ['fnm', 'uv']);
   });
   afterEach(async () => {
     await disposeWorkspace(ws);
@@ -160,7 +175,7 @@ describe('§11.2.1 init -i 探测 fnm/uv + 投影变量渲染', () => {
       {},
     );
 
-    // habits 正确：真实探测快照含 fnm / uv（本机环境存在两者）
+    // habits 正确：真实探测走完 PATH 扫描，命中桩目录中的 fnm / uv
     expect(result.cancelled).toBe(false);
     expect(result.synced).toBe(true);
     expect(result.detection.node.manager).toBe('fnm');
