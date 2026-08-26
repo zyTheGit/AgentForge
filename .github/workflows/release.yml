@@ -1,0 +1,94 @@
+name: Release
+
+# v* tag 是版本唯一来源：tag v1.2.3 → npm 包 1.2.3 + Release 资产 aforge.exe。
+# 不要手改 package.json 的 version 再发布，两处版本必然漂移。
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance 需要
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Check NPM_TOKEN
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::缺少 NPM_TOKEN secret，无法发布。在仓库 Settings -> Secrets 添加 npm Automation token。"
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - run: npm run typecheck
+      - run: npm run test
+
+      # tag → package.json → src/version.ts（gen:version 由 build:node/prepack 触发）
+      - name: Sync package version with tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: npm version "${TAG#v}" --no-git-tag-version --allow-same-version
+
+      - name: Build and verify bin
+        run: |
+          npm run build:node
+          node dist/aforge.js --version
+
+      # prepack 会再跑一次 build:node，产物与上面一致
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # 带连字符的 tag（v1.0.0-rc.1 等）发到 next 频道，不抢占 latest
+          DIST_TAG: ${{ contains(github.ref_name, '-') && 'next' || 'latest' }}
+        run: npm publish --provenance --tag "$DIST_TAG"
+
+  # 无 Node 环境的兜底分发：Windows 单文件 exe 挂到 GitHub Release
+  release-exe:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Sync package version with tag
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: npm version "${TAG#v}" --no-git-tag-version --allow-same-version
+
+      - run: npm run build:bun
+      - run: ./dist/aforge.exe --version
+
+      - name: Collect assets
+        shell: bash
+        run: |
+          mkdir -p release
+          cp dist/aforge.exe "release/aforge-win-x64.exe"
+          (cd release && sha256sum * > checksums.txt)
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

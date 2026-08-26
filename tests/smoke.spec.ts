@@ -4,6 +4,7 @@
  * 2) aforge --version/-V 行为：tsx 开发轨道下输出版本号、退出码 0；无参数输出帮助、退出码 0。
  */
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -55,11 +56,15 @@ describe('aforge --version 冒烟（tsx 开发轨道）', () => {
       encoding: 'utf8',
     });
 
-  it.each(['--version', '-V'])('%s 输出 0.1.0 且退出码 0', (flag) => {
+  // 版本号以 package.json 为准（src/version.ts 由 scripts/gen-version.mjs 生成），
+  // 断言写死会在每次发版时假失败。
+  const pkgVersion = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version;
+
+  it.each(['--version', '-V'])('%s 输出 package.json 版本号且退出码 0', (flag) => {
     const result = runAforge(flag);
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe('0.1.0');
+    expect(result.stdout.trim()).toBe(pkgVersion);
   });
 
   it('无参数输出简短帮助且退出码 0', () => {

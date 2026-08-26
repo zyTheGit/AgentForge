@@ -15,7 +15,27 @@
 
 ## 安装
 
-### 方式一：bun 全局安装（推荐）
+### 方式一：npx 直接用（推荐，无需克隆）
+
+前置：Node ≥ 20.19。
+
+```powershell
+# 免安装试跑（每次拉最新版；@latest 用于绕开 npx 的本地缓存）
+npx -y @zythegit/agentforge@latest --version
+npx -y @zythegit/agentforge@latest init -i
+
+# 常用则全局装，之后直接 aforge
+npm i -g @zythegit/agentforge
+aforge --version
+```
+
+包名是 `@zythegit/agentforge`，命令名是 `aforge`。发布产物是 esbuild 打出的单文件 bundle（依赖已内联），因此 `npx` 冷启动只下载一个文件，不再安装任何运行时依赖。
+
+### 方式二：下载独立 exe（免 Node）
+
+从 [Releases](https://github.com/zyTheGit/AgentForge/releases) 下载 `aforge-win-x64.exe`（附 `checksums.txt` 可校验 sha256），重命名为 `aforge.exe` 放进 PATH 即可。
+
+### 方式三：从源码构建
 
 前置：安装 [bun](https://bun.sh/) 与 [fnm](https://github.com/Schniz/fnm)（或任意 Node 版本管理器）。
 
@@ -24,30 +44,17 @@
 fnm env --shell power-shell | Out-String -Stream | Invoke-Expression
 fnm use 22
 
-# 从源码全局安装（克隆后）
-git clone <repo-url> AgentForge
+git clone https://github.com/zyTheGit/AgentForge.git
 cd AgentForge
 npm install
-bun link   # 之后任意目录可用 aforge 命令
-```
 
-### 方式二：源码构建独立 exe（免运行时依赖）
-
-```powershell
-fnm env --shell power-shell | Out-String -Stream | Invoke-Expression
-fnm use 22
-npm install
+npm run build:node   # 产出 dist\aforge.js（esbuild 打包，需 Node ≥ 20.19）
 npm run build:bun    # 产出 dist\aforge.exe（Windows 独立可执行）
-```
-
-或构建 Node 版产物（需目标机器有 Node ≥ 20.19）：
-
-```powershell
-npm run build:node   # 产出 dist\aforge.js（esbuild 打包）
-node dist\aforge.js --version
+bun link             # 之后任意目录可用 aforge 命令
 ```
 
 两条构建轨道产物等价：`aforge.exe` 零依赖可直接分发；`aforge.js` 适合已有 Node 环境的机器。
+
 
 ## 快速开始（Windows PowerShell）
 
@@ -172,6 +179,15 @@ npm test           # 全量测试（vitest）
 npm run typecheck  # tsc --noEmit
 npm run build      # 双轨构建（node + bun）
 ```
+
+## 发布
+
+版本号唯一来源是 git tag：推送 `v1.2.3` 触发 `.github/workflows/release.yml`，它把版本写进 `package.json` → `src/version.ts`（`scripts/gen-version.mjs`），发布 npm 包并把 exe 挂到 Release。
+
+- 不要手改 `package.json` 的 `version` 后发布，两处版本会漂移；`npm run gen:version:check` 在 CI 里拦这类漂移。
+- 带连字符的 tag（`v1.2.3-rc.1`）发到 npm 的 `next` 频道，不抢占 `latest`。
+- 需要仓库 secret `NPM_TOKEN`（npm Automation token）。
+- 本地预演：`npm pack` 后 `npx ./zythegit-agentforge-<ver>.tgz --version`。
 
 验收清单见 [tests/e2e/ACCEPTANCE.md](tests/e2e/ACCEPTANCE.md)。
 

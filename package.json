@@ -1,11 +1,25 @@
 {
-  "name": "agentforge",
+  "name": "@zythegit/agentforge",
   "version": "0.1.0",
   "description": "AgentForge — manage AI coding CLI rule projections (SoT → opencode/codex/claude/pi) from one source of truth",
   "type": "module",
-  "private": true,
   "bin": {
     "aforge": "dist/aforge.js"
+  },
+  "files": [
+    "dist/aforge.js",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zyTheGit/AgentForge.git"
+  },
+  "homepage": "https://github.com/zyTheGit/AgentForge#readme",
+  "bugs": {
+    "url": "https://github.com/zyTheGit/AgentForge/issues"
   },
   "engines": {
     "node": ">=20.19"
@@ -17,9 +31,12 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "emit-schema": "tsx src/schema/emit.ts",
+    "gen:version": "node scripts/gen-version.mjs",
+    "gen:version:check": "node scripts/gen-version.mjs --check",
     "build": "npm run build:node && npm run build:bun",
-    "build:bun": "bun build --compile --target=bun-windows-x64 --minify --outfile dist/aforge.exe src/main.ts",
-    "build:node": "node scripts/build-node.mjs"
+    "build:bun": "npm run gen:version && bun build --compile --target=bun-windows-x64 --minify --outfile dist/aforge.exe src/main.ts",
+    "build:node": "npm run gen:version && node scripts/build-node.mjs",
+    "prepack": "npm run build:node"
   },
   "keywords": [
     "ai",
@@ -30,20 +47,18 @@
     "codex",
     "claude"
   ],
-  "license": "UNLICENSED",
-  "dependencies": {
-    "@clack/prompts": "^1",
-    "commander": "^14",
-    "handlebars": "^4.7",
-    "yaml": "^2",
-    "zod": "^4.1"
-  },
+  "license": "MIT",
   "devDependencies": {
     "@biomejs/biome": "2.3.14",
+    "@clack/prompts": "^1",
     "@types/node": "^24",
+    "commander": "^14",
     "esbuild": "^0.28.2",
+    "handlebars": "^4.7",
     "tsx": "^4.23.12",
     "typescript": "~5.9",
-    "vitest": "^4"
+    "vitest": "^4",
+    "yaml": "^2",
+    "zod": "^4.1"
   }
 }

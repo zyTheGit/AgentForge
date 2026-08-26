@@ -42,6 +42,7 @@ Storage
 | 模板变量 | Handlebars（Mustache 超集，支持 #if/#each 条件渲染） |
 | 存储 | 本地文件；无强制 DB |
 | 网络 | 默认不需要；仅 source add/update git 时需要 |
+| 分发 | npm 包 `@zythegit/agentforge`（命令名 `aforge`，`npx` 主通道，产物为 esbuild 单文件 bundle、依赖已内联）；GitHub Release 的 Windows 单文件 exe 作为免 Node 兜底。版本唯一来源是 git tag |
 
 ### 1.2 主闭环
 
