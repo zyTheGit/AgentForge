@@ -2,7 +2,7 @@
  * real-host 单测：node:fs / node:child_process 真实实现（UTF-8 剥 BOM / exec 超时 /
  * 长路径归一化经 longPathAware 等）。
  */
-import { promises as fsp, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { promises as fsp, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
@@ -135,7 +135,9 @@ describe('exec（真实子进程）', () => {
       cwd: tmpRoot,
     });
     expect(result.code).toBe(0);
-    expect(result.stdout.trim().toLowerCase()).toBe(path.resolve(tmpRoot).toLowerCase());
+    // 子进程报的是 realpath：macOS 的 tmpdir 是 /var → /private/var 的 symlink，
+    // Windows 的 tmpdir 可能是 8.3 短名，两侧都取 realpath 才可比。
+    expect(result.stdout.trim().toLowerCase()).toBe(realpathSync(tmpRoot).toLowerCase());
   });
 
   it('命令不存在 → 127（约定：无法启动）', async () => {
