@@ -123,6 +123,99 @@ aforge import AGENTS.md    # 或 CLAUDE.md：识别工具链关键词 → habits
 
 `--json` 同时是 program 级全局标志：任何子命令都可写成 `aforge --json <cmd>`，输出为机器可读 JSON（路径一律绝对路径）。注意 `mcp add` 的**输入**标志叫 `--from-json`，`--json` 只表示输出契约。
 
+## 安装 skill
+
+`aforge skill add` 接的是**技能名**，不是 URL——URL 要先 `aforge source add` 登记成「源」，再按名安装。以装 vercel-labs/skills 里的 `find-skills` 为例：
+
+```powershell
+# ① 登记 git 源（必须显式 --ref，Spec 不跟踪浮动分支）
+aforge source add https://github.com/vercel-labs/skills --ref main
+#   clone 到 %USERPROFILE%\.agentforge\store\skills；id 由 basename 派生为 "skills"
+#   想自定义 id 加 --id vercel-skills
+
+# ② 看源里有哪些技能可装（status=available 的条目）
+aforge skill list
+
+# ③ 按名安装：实体拷贝到 SoT 的 skills\find-skills\
+aforge skill add find-skills --from skills
+```
+
+`--from` 可省略（按登记顺序在所有启用的源中找首个含该技能的源），也可直接传路径而完全跳过 `source add`——传源根目录（其下有 `skills\<name>\`）或直接传含 `SKILL.md` 的技能目录本身：
+
+```powershell
+aforge skill add find-skills --from D:\clones\vercel-labs-skills   # 源根
+aforge skill add my-skill --from .\drafts\my-skill                 # 技能目录本身
+```
+
+**装完还不会生效**：`skill add` 只把文件拷进 `.agentforge\skills\`，要投影给各 Agent 还得在 `profile.yaml` 的 `skills.always` 里点名，然后 `sync`：
+
+```yaml
+# .agentforge\profile.yaml
+skills:
+  copy_mode: copy
+  always:
+    - find-skills
+```
+
+```powershell
+aforge sync
+```
+
+投影落点（project scope，`SKILL.md` 正文）：
+
+- opencode → `.opencode\skills\<name>\SKILL.md`
+- codex → `.agents\skills\<name>\SKILL.md`
+- claude → `.claude\skills\<name>\SKILL.md`
+- pi → `.pi\skills\<name>\SKILL.md`
+
+要点：
+
+- 源仓库布局须为 `<源根>\skills\<name>\SKILL.md`；
+- 目标 `skills\<name>` 已有内容 → 退出码 3，先手删该目录再装；
+- 源里的 symlink 一律跳过不跟随（防私钥等被读进 SoT），跳过项在输出的 `skipped` 里列出；
+- `skills.always` 点了名却没装 → `sync` 直接报错退出码 2；
+- 附属文件（脚本、参考资料）会拷进 SoT，但当前只有 `SKILL.md` 正文参与投影。
+
+## 登记 MCP 服务器
+
+`aforge mcp add` 把声明写进目标层 `profile.yaml` 的 `mcp.servers`（同名 upsert，重复 add 即更新），`sync` 时再翻译成各 Agent 的原生 MCP 配置。
+
+交互录入（需要真实终端）：
+
+```powershell
+aforge mcp add
+# name → transport（stdio/http/sse）→ command/args/env 或 url/headers
+```
+
+脚本化：从 stdin 读一个 JSON 声明（注意标志是 `--from-json`）：
+
+```powershell
+# stdio：命令行启动的本地 server
+'{"name":"fs","transport":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","C:\\work"]}' |
+  aforge mcp add --from-json
+
+# http：远端端点（带鉴权头）
+'{"name":"ctx7","transport":"http","url":"https://mcp.example.com/mcp","headers":{"Authorization":"Bearer <token>"}}' |
+  aforge mcp add --from-json
+
+# 写到用户层，让所有项目共享
+'{"name":"fs","transport":"stdio","command":"npx","args":["-y","mcp-fs"]}' |
+  aforge mcp add --from-json --scope user
+
+aforge sync
+```
+
+必填字段：`name` + `transport`；`stdio` 必须给 `command`，`http` / `sse` 必须给 `url`，否则退出码 2。声明里带 `"enabled": false` 的 server 不投影，但保留在 `profile.yaml` 里。
+
+投影落点（project scope）：
+
+- opencode → `opencode.json` 的 `mcp` 键（merge_json，未知键保留）
+- codex → `.codex\config.toml` 的 `# BEGIN AGENTFORGE MCP` 标记段（merge_toml，段外 TOML 与注释原样保留）
+- claude → `.mcp.json` 的 `mcpServers` 键（merge_json）
+- pi → `.pi\settings.json` 的 `mcpServers` 键（merge_json，**soft 项**：写失败只报 warning，不算 sync 失败、不触发回滚）
+
+`headers` / `env` 里的 token 会明文落在 `profile.yaml` 和投影出的配置文件里——项目层 SoT 通常进 git，敏感凭据建议放用户层（`--scope user`）或改用环境变量间接引用。
+
 ## 工作原理
 
 ```
@@ -200,15 +293,6 @@ npm test           # 全量测试（vitest）
 npm run typecheck  # tsc --noEmit
 npm run build      # 双轨构建（node + bun）
 ```
-
-## 发布
-
-版本号唯一来源是 git tag：推送 `v1.2.3` 触发 `.github/workflows/release.yml`，它把版本写进 `package.json` → `src/version.ts`（`scripts/gen-version.mjs`），发布 npm 包，并把五平台二进制压缩包挂到 Release。
-
-- 不要手改 `package.json` 的 `version` 后发布，两处版本会漂移；`npm run gen:version:check` 在 CI 里拦这类漂移。
-- 带连字符的 tag（`v1.2.3-rc.1`）发到 npm 的 `next` 频道，不抢占 `latest`。
-- 需要仓库 secret `NPM_TOKEN`（npm Automation token）。
-- 本地预演：`npm pack` 后 `npx ./zythegit-agentforge-<ver>.tgz --version`。
 
 验收清单见 [tests/e2e/ACCEPTANCE.md](tests/e2e/ACCEPTANCE.md)。
 
