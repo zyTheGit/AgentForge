@@ -31,9 +31,27 @@ aforge --version
 
 包名是 `@zythegit/agentforge`，命令名是 `aforge`。发布产物是 esbuild 打出的单文件 bundle（依赖已内联），因此 `npx` 冷启动只下载一个文件，不再安装任何运行时依赖。
 
-### 方式二：下载独立 exe（免 Node）
+### 方式二：下载独立二进制（免 Node，兜底）
 
-从 [Releases](https://github.com/zyTheGit/AgentForge/releases) 下载 `aforge-win-x64.exe`（附 `checksums.txt` 可校验 sha256），重命名为 `aforge.exe` 放进 PATH 即可。
+只有在目标机器装不了 Node 时才需要这条路：二进制内嵌了 bun 运行时，压缩包 36~39 MB（解包后 64~86 MB），比 npm 包大两个数量级。
+
+从 [Releases](https://github.com/zyTheGit/AgentForge/releases) 下载对应平台的压缩包（附 `checksums.txt`，内容是**压缩包**的 sha256）：
+
+| 平台 | 资产 |
+| --- | --- |
+| Windows x64 | `aforge-win32-x64.zip` |
+| Linux x64 / arm64 | `aforge-linux-x64.tar.gz` / `aforge-linux-arm64.tar.gz` |
+| macOS Apple Silicon / Intel | `aforge-darwin-arm64.tar.gz` / `aforge-darwin-x64.tar.gz` |
+
+解包后重命名为 `aforge`（Windows 为 `aforge.exe`）放进 PATH 即可。
+
+macOS 上二进制未做签名与公证，首次运行会被 Gatekeeper 拦下，需手动去掉隔离属性：
+
+```bash
+xattr -d com.apple.quarantine ./aforge
+```
+
+`aforge-linux-arm64` 与 `aforge-darwin-x64` 没有免费 runner 可跑冒烟，属于「已交叉编译但未在真机验证」。
 
 ### 方式三：从源码构建
 
@@ -48,12 +66,13 @@ git clone https://github.com/zyTheGit/AgentForge.git
 cd AgentForge
 npm install
 
-npm run build:node   # 产出 dist\aforge.js（esbuild 打包，需 Node ≥ 20.19）
-npm run build:bun    # 产出 dist\aforge.exe（Windows 独立可执行）
+npm run build:node   # 产出 dist\aforge.js（esbuild 打包压缩，需 Node ≥ 20.19）
+npm run build:bun    # 产出当前平台的单文件二进制（dist\aforge-win32-x64.exe 等）
+npm run build:bun:all # 交叉编译五平台（win32-x64 / linux-x64 / linux-arm64 / darwin-x64 / darwin-arm64）
 bun link             # 之后任意目录可用 aforge 命令
 ```
 
-两条构建轨道产物等价：`aforge.exe` 零依赖可直接分发；`aforge.js` 适合已有 Node 环境的机器。
+两条构建轨道产物等价：二进制零依赖可直接分发（代价是体积）；`aforge.js` 适合已有 Node 环境的机器，也是 npm 包实际发布的东西。
 
 
 ## 快速开始（Windows PowerShell）
@@ -165,9 +184,11 @@ aforge import AGENTS.md    # 或 CLAUDE.md：识别工具链关键词 → habits
 
 ## macOS / Linux 旁注
 
-- 安装与用法一致：`fnm env --shell bash | source -`（或 zsh）后 `npm install` + `npm run build:node`；
+- 首选装法与 Windows 一致：`npx -y @zythegit/agentforge@latest`（或 `npm i -g`）；
+- 从源码构建：`fnm env --shell bash | source -`（或 zsh）后 `npm install` + `npm run build:node`；
 - 用户级 SoT 在 `$HOME/.agentforge`；投影换行默认规则同 Windows（profile 可配置）；
-- `build:bun` 的 `--target=bun-windows-x64` 需按平台改为 `bun-linux-x64` / `bun-darwin-arm64`。
+- `npm run build:bun` 自动按当前平台选 target，`build:bun:all` 一次交叉编译五平台；
+- macOS 二进制未签名未公证，见上文「方式二」的 `xattr` 说明。
 
 ## 开发
 
@@ -182,7 +203,7 @@ npm run build      # 双轨构建（node + bun）
 
 ## 发布
 
-版本号唯一来源是 git tag：推送 `v1.2.3` 触发 `.github/workflows/release.yml`，它把版本写进 `package.json` → `src/version.ts`（`scripts/gen-version.mjs`），发布 npm 包并把 exe 挂到 Release。
+版本号唯一来源是 git tag：推送 `v1.2.3` 触发 `.github/workflows/release.yml`，它把版本写进 `package.json` → `src/version.ts`（`scripts/gen-version.mjs`），发布 npm 包，并把五平台二进制压缩包挂到 Release。
 
 - 不要手改 `package.json` 的 `version` 后发布，两处版本会漂移；`npm run gen:version:check` 在 CI 里拦这类漂移。
 - 带连字符的 tag（`v1.2.3-rc.1`）发到 npm 的 `next` 频道，不抢占 `latest`。

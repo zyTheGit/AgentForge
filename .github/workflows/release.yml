@@ -120,8 +120,28 @@ jobs:
           name: binaries
           path: release
 
-      - name: Collect assets
-        run: (cd release && sha256sum * > checksums.txt)
+      - name: Package assets
+        working-directory: release
+        # 压缩后再挂 Release：单个二进制 64~90 MB（bun 运行时占绝大部分），
+        # 压缩后 36~39 MB（实测 linux-x64 80→36 MB、win32-x64 86→39 MB），
+        # 下载量少一半以上。checksums 覆盖压缩包本身。
+        # tar 前先补执行位：upload/download-artifact 不保留 mode，
+        # 不补的话解包出来的二进制在 POSIX 上不可执行。
+        run: |
+          chmod +x aforge-linux-* aforge-darwin-*
+          for f in aforge-linux-* aforge-darwin-*; do
+            tar -czf "$f.tar.gz" "$f"
+            rm "$f"
+          done
+          # Windows 侧给 .zip（Explorer 双击即解）；runner 镜像自带 zip，
+          # 缺失时退回 python3 stdlib，避免为一条打包命令依赖额外安装
+          if command -v zip > /dev/null; then
+            zip -q aforge-win32-x64.zip aforge-win32-x64.exe
+          else
+            python3 -m zipfile -c aforge-win32-x64.zip aforge-win32-x64.exe
+          fi
+          rm aforge-win32-x64.exe
+          sha256sum * > checksums.txt
 
       - uses: softprops/action-gh-release@v2
         with:
