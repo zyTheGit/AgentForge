@@ -77,8 +77,11 @@ export function createDirAwareHost(
     async writeFile(p, content) {
       files.set(p, content);
     },
-    async chmod() {
-      // 目录感知测试不关心 chmod
+    async clearReadonly() {
+      // 目录感知测试不关心权限位
+    },
+    async copyMode() {
+      // 目录感知测试不关心权限位
     },
     async exists(p) {
       return files.has(p) || isDir(p);

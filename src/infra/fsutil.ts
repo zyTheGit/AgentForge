@@ -87,9 +87,12 @@ export async function mkdirp(host: Host, dir: string): Promise<void> {
 /**
  * 原子写入（Spec §2.5）：同目录临时文件（随机后缀）→ rename 覆盖目标。
  *
- * Windows 细节：
- * - 目标已存在时，rename 前尽力 chmod 0o666 清除只读属性（git clone 常见）；
- * - rename 遇 EPERM/EACCES（只读未除净 / 文件被占用 / 目录 ACL）→ PermissionError(4)。
+ * 目标已存在时，rename 前做两件与权限相关的事（均 best-effort，真正的失败由 rename 报告）：
+ * - `clearReadonly(target)`：清 Windows 只读属性（git clone 常见），POSIX 上 no-op；
+ * - `copyMode(target, tmp)`：把目标原有权限位复制到临时文件，避免 rename 后目标
+ *   继承 `0o666 & ~umask`（POSIX 上 `0600` 的文件会被放宽到 0644），win32 上 no-op。
+ *
+ * rename 遇 EPERM/EACCES（只读未除净 / 文件被占用 / 目录 ACL）→ PermissionError(4)。
  *
  * 无论成败，finally 中清理残留临时文件。
  */
@@ -109,12 +112,17 @@ export async function atomicWrite(host: Host, target: string, content: string): 
       throw err;
     }
 
-    // Windows 只读属性：写入（rename 覆盖）前尽力去除；失败留给 rename 判定
+    // 目标已存在：清 Windows 只读属性 + 把原权限位带到临时文件上（见函数注释）
     if (await host.exists(target)) {
       try {
-        await host.chmod(target, 0o666);
+        await host.clearReadonly(target);
       } catch {
         // best-effort：真正的失败由下方 rename 报告
+      }
+      try {
+        await host.copyMode(target, tmp);
+      } catch {
+        // best-effort：复制不到权限位只会让目标退回默认 mode，不阻断写入
       }
     }
 

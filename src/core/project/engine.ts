@@ -1475,9 +1475,9 @@ async function recoverPendingTransaction(
  * 很可能在事件循环被终止前来不及落盘，导致「声称已回滚但实际没回滚」。同步 API 是
  * 该路径下唯一可保证完成的写入方式。
  *
- * 语义与 rollbackWrites 一致：逆序、备份为 null 则删除、写回前复核基准。写回前先
- * `chmodSync(0o666)`：异步路径的 atomicWrite 会做同样的事，同步路径若省略，Windows
- * 上带只读属性的文件（git clone 常见）会以 EPERM 恢复失败。
+ * 语义与 rollbackWrites 一致：逆序、备份为 null 则删除、写回前复核基准。Windows 上写回前
+ * 先 `chmodSync(0o666)`：异步路径的 atomicWrite 会做同样的事（host.clearReadonly），
+ * 同步路径若省略，带只读属性的文件（git clone 常见）会以 EPERM 恢复失败。
  */
 export function rollbackActiveSyncTransactionSync(): SyncRollbackEntry[] {
   const tx = activeTransaction;
@@ -1508,7 +1508,11 @@ export function rollbackActiveSyncTransactionSync(): SyncRollbackEntry[] {
       } else {
         if (exists) {
           try {
-            chmodSync(file, 0o666); // Windows 只读属性：不先清除会 EPERM
+            // Windows 只读属性：不先清除会 EPERM。POSIX 上跳过——0o666 会把备份
+            // 文件原有的 0600 放宽，而写回本身不需要放宽权限（当前用户即所有者）
+            if (process.platform === 'win32') {
+              chmodSync(file, 0o666);
+            }
           } catch {
             // best-effort：真正的失败由下面的写入报告
           }

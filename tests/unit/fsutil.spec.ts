@@ -2,7 +2,7 @@
  * fsutil 单测（Spec §2.5）：原子写入（含只读目标）/ 换行规范化 / BOM / sha256 / mkdirp。
  * 真实 IO 用 realHost + 系统临时目录；权限失败分支用 fake host 注入。
  */
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -153,6 +153,23 @@ describe('atomicWrite + realHost（真实临时目录）', () => {
     // Windows：只读属性应已被去除（0o444 会阻断后续 append/rewrite）
     chmodSync(target, 0o666);
   });
+
+  it.skipIf(process.platform === 'win32')(
+    '保留目标原有权限位：0600 的文件写入后仍是 0600（POSIX）',
+    async () => {
+      const target = path.join(tmpRoot, 'mode-preserve', 'profile.yaml');
+      await mkdirp(realHost, path.dirname(target));
+      writeFileSync(target, 'old\n', 'utf8');
+      chmodSync(target, 0o600);
+
+      await atomicWrite(realHost, target, 'fresh\n');
+
+      expect(await realHost.readFile(target)).toBe('fresh\n');
+      // rename 让目标继承临时文件的 mode（0o666 & ~umask，通常 0644）；
+      // copyMode 在 rename 前把原 0600 带到临时文件上，权限才不会被放宽
+      expect(statSync(target).mode & 0o777).toBe(0o600);
+    },
+  );
 });
 
 describe('atomicWrite + fake host（权限失败分支）', () => {
@@ -198,18 +215,21 @@ describe('atomicWrite + fake host（权限失败分支）', () => {
     );
   });
 
-  it('目标已存在时写入前会尝试 chmod 去只读（Spec §2.5 Windows 细节）', async () => {
+  it('目标已存在时写入前会清只读属性并复制原权限位（Spec §2.5）', async () => {
     const host = createFakeHost();
     const target = 'C:\\proj\\AGENTS.md';
     await host.writeFile(target, 'old\n');
     await atomicWrite(host, target, 'new\n');
-    expect(host.chmodCalls).toContain(target);
+    expect(host.clearReadonlyCalls).toContain(target);
+    // copyMode 的方向是 target → tmp（临时文件带上原权限位后再 rename 覆盖）
+    expect(host.copyModeCalls.some((c) => c.startsWith(`${target}>${target}.agf-`))).toBe(true);
   });
 
-  it('目标不存在时不调用 chmod', async () => {
+  it('目标不存在时不动权限位', async () => {
     const host = createFakeHost();
     await atomicWrite(host, 'C:\\proj\\AGENTS.md', 'new\n');
-    expect(host.chmodCalls).toEqual([]);
+    expect(host.clearReadonlyCalls).toEqual([]);
+    expect(host.copyModeCalls).toEqual([]);
   });
 
   it('rename 非 errno 错误原样抛出（不吞异常）', async () => {

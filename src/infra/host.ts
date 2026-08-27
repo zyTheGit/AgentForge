@@ -37,8 +37,22 @@ export interface Host {
   readFile(path: string): Promise<string>;
   /** 写文本文件（UTF-8、无 BOM）。 */
   writeFile(path: string, content: string): Promise<void>;
-  /** 修改文件权限位；Windows 上用于清除只读属性（0o666）。 */
-  chmod(path: string, mode: number): Promise<void>;
+  /**
+   * 清除文件的只读属性（Windows 的 FILE_ATTRIBUTE_READONLY，git clone 常见）。
+   *
+   * 只在 win32 上有动作（chmod 0o666）；POSIX 上是 no-op——那里 0o666 不是
+   * 「去只读」而是真实的权限放宽，会把 `0600` 的配置文件放开给同组与其他用户。
+   * 平台分支放在 real-host（平台已知处），调用方按意图调用即可。
+   */
+  clearReadonly(path: string): Promise<void>;
+  /**
+   * 把 `from` 的权限位复制到 `to`（POSIX 语义；win32 上 no-op）。
+   *
+   * atomicWrite 用它保住目标文件原有的 mode：`rename(tmp, target)` 后目标继承的是
+   * **临时文件**的权限（`0o666 & ~umask`，通常 0644），不复制的话每次 sync 都会把
+   * `0600` 的文件放宽到 0644。`from` 不存在时 reject，由调用方决定是否忽略。
+   */
+  copyMode(from: string, to: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   /** 列出目录下的直接子项名（不含 `.` / `..`）。 */
   listDir(path: string): Promise<string[]>;

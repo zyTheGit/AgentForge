@@ -3,7 +3,8 @@
  *
  * - files：内存文件表（path → content），测试可直接读写断言；
  * - dirs：经 mkdirExclusive 原子创建的目录集合（互斥锁语义所需，见下）；
- * - chmodCalls：记录 chmod 调用的路径（断言"只读属性去除"路径用）；
+ * - clearReadonlyCalls：记录 clearReadonly 调用的路径（断言"只读属性去除"路径用）；
+ * - copyModeCalls：记录 copyMode 的 `from>to`（断言"原权限位被带到临时文件上"）；
  * - createScriptedPrompt：按序返回预设应答的 PromptApi（驱动 init -i 五步流程）。
  */
 import path from 'node:path';
@@ -32,13 +33,15 @@ export interface FakeHost extends Host {
   readonly files: Map<string, string>;
   /** 已存在的「目录」集合（内存 fs 无目录概念，仅 mkdirExclusive 的互斥判据需要）。 */
   readonly dirs: Set<string>;
-  readonly chmodCalls: string[];
+  readonly clearReadonlyCalls: string[];
+  readonly copyModeCalls: string[];
 }
 
 export function createFakeHost(envMap: Readonly<Record<string, string>> = {}): FakeHost {
   const files = new Map<string, string>();
   const dirs = new Set<string>();
-  const chmodCalls: string[] = [];
+  const clearReadonlyCalls: string[] = [];
+  const copyModeCalls: string[] = [];
 
   /** 目录是否"存在"：显式创建过，或其下有任意文件键（对齐真实 fs 的目录语义）。 */
   const dirExists = (p: string): boolean => {
@@ -52,7 +55,8 @@ export function createFakeHost(envMap: Readonly<Record<string, string>> = {}): F
   const host: FakeHost = {
     files,
     dirs,
-    chmodCalls,
+    clearReadonlyCalls,
+    copyModeCalls,
     async readFile(p) {
       const content = files.get(p);
       if (content === undefined) {
@@ -63,8 +67,11 @@ export function createFakeHost(envMap: Readonly<Record<string, string>> = {}): F
     async writeFile(p, content) {
       files.set(p, content);
     },
-    async chmod(p, _mode) {
-      chmodCalls.push(p);
+    async clearReadonly(p) {
+      clearReadonlyCalls.push(p);
+    },
+    async copyMode(from, to) {
+      copyModeCalls.push(`${from}>${to}`);
     },
     async exists(p) {
       return files.has(p);

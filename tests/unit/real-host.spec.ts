@@ -73,10 +73,23 @@ describe('文件操作（真实 fs）', () => {
     await expect(realHost.rm(file)).resolves.toBeUndefined();
   });
 
-  it('chmod：可执行且不报错（0o666）', async () => {
-    const file = path.join(tmpRoot, 'chmod.txt');
+  it('clearReadonly：可执行且不报错（win32 清只读属性，posix no-op）', async () => {
+    const file = path.join(tmpRoot, 'readonly.txt');
     await realHost.writeFile(file, 'x');
-    await expect(realHost.chmod(file, 0o666)).resolves.toBeUndefined();
+    await expect(realHost.clearReadonly(file)).resolves.toBeUndefined();
+  });
+
+  it.skipIf(process.platform === 'win32')('copyMode：POSIX 上把源权限位复制到目标', async () => {
+    const from = path.join(tmpRoot, 'mode-src.txt');
+    const to = path.join(tmpRoot, 'mode-dst.txt');
+    await realHost.writeFile(from, 'x');
+    await realHost.writeFile(to, 'y');
+    await fsp.chmod(from, 0o600);
+    await fsp.chmod(to, 0o644);
+
+    await realHost.copyMode(from, to);
+
+    expect((await fsp.stat(to)).mode & 0o777).toBe(0o600);
   });
 });
 
@@ -166,7 +179,7 @@ describe('长路径归一化（Spec §2.1.1：所有接受路径参数的方法�
     expect(readlink).toHaveBeenCalledWith(norm(long), 'utf8');
   });
 
-  it('writeFile / mkdirp / rm / chmod 传归一化路径', async () => {
+  it('writeFile / mkdirp / rm / 权限位方法传归一化路径', async () => {
     const writeFile = vi.spyOn(fsp, 'writeFile').mockRejectedValue(stub());
     await realHost.writeFile(long, 'x').catch(() => undefined);
     expect(writeFile).toHaveBeenCalledWith(norm(long), 'x', 'utf8');
@@ -180,8 +193,15 @@ describe('长路径归一化（Spec §2.1.1：所有接受路径参数的方法�
     expect(rm).toHaveBeenCalledWith(norm(long), { recursive: true, force: true });
 
     const chmod = vi.spyOn(fsp, 'chmod').mockRejectedValue(stub());
-    await realHost.chmod(long, 0o666).catch(() => undefined);
-    expect(chmod).toHaveBeenCalledWith(norm(long), 0o666);
+    if (process.platform === 'win32') {
+      await realHost.clearReadonly(long).catch(() => undefined);
+      expect(chmod).toHaveBeenCalledWith(norm(long), 0o666);
+    } else {
+      // posix 上 clearReadonly 是 no-op（0o666 会真实放宽权限），改由 copyMode 覆盖
+      vi.spyOn(fsp, 'stat').mockResolvedValue({ mode: 0o100600 } as never);
+      await realHost.copyMode(long, long2).catch(() => undefined);
+      expect(chmod).toHaveBeenCalledWith(norm(long2), 0o600);
+    }
   });
 
   it('exists / stat / lstat 传归一化路径', async () => {

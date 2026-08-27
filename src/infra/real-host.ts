@@ -56,8 +56,21 @@ export const realHost: Host = {
     await fsp.writeFile(n(path), content, 'utf8');
   },
 
-  async chmod(path: string, mode: number): Promise<void> {
-    await fsp.chmod(n(path), mode);
+  async clearReadonly(path: string): Promise<void> {
+    // 只读属性是 Windows 概念；POSIX 上 chmod 0o666 会把 0600 的文件真实放宽，故不做
+    if (currentOs().platform !== 'win32') {
+      return;
+    }
+    await fsp.chmod(n(path), 0o666);
+  },
+
+  async copyMode(from: string, to: string): Promise<void> {
+    // win32 无 POSIX 权限位（chmod 只映射只读属性），复制没有意义
+    if (currentOs().platform === 'win32') {
+      return;
+    }
+    const s = await fsp.stat(n(from));
+    await fsp.chmod(n(to), s.mode & 0o7777); // 只取权限位，去掉文件类型位
   },
 
   async exists(path: string): Promise<boolean> {

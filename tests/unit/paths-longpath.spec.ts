@@ -90,7 +90,7 @@ describe('longPathAware 覆盖 atomicWrite 的 tmp → rename 链路（回归）
     expect(await realHost.readFile(to)).toBe('data');
   });
 
-  it('stat / lstat / chmod / rm 在超 MAX_PATH 的路径上可用', async () => {
+  it('stat / lstat / clearReadonly / rm 在超 MAX_PATH 的路径上可用', async () => {
     const dir = path.join(tmpRoot, 's'.repeat(150), 's'.repeat(80));
     await mkdirp(realHost, dir);
     const file = path.join(dir, `${'v'.repeat(60)}.md`);
@@ -99,7 +99,7 @@ describe('longPathAware 覆盖 atomicWrite 的 tmp → rename 链路（回归）
     await realHost.writeFile(file, '0123456789');
     expect((await realHost.stat(file)).size).toBe(10);
     expect((await realHost.lstat(file)).isFile).toBe(true);
-    await expect(realHost.chmod(file, 0o666)).resolves.toBeUndefined();
+    await expect(realHost.clearReadonly(file)).resolves.toBeUndefined();
     await realHost.rm(file);
     expect(await realHost.exists(file)).toBe(false);
   });
