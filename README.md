@@ -66,13 +66,13 @@ git clone https://github.com/zyTheGit/AgentForge.git
 cd AgentForge
 npm install
 
-npm run build:node   # 产出 dist\aforge.js（esbuild 打包压缩，需 Node ≥ 20.19）
-npm run build:bun    # 产出当前平台的单文件二进制（dist\aforge-win32-x64.exe 等）
+npm run build:node    # 产出 dist\aforge.js（esbuild 打包压缩，需 Node ≥ 20.19）
+npm run build:bun     # 产出当前平台的单文件二进制（dist\aforge-win32-x64.exe 等）
 npm run build:bun:all # 交叉编译五平台（win32-x64 / linux-x64 / linux-arm64 / darwin-x64 / darwin-arm64）
-bun link             # 之后任意目录可用 aforge 命令
+bun link              # 之后任意目录可用 aforge 命令
 ```
 
-两条构建轨道产物等价：二进制零依赖可直接分发（代价是体积）；`aforge.js` 适合已有 Node 环境的机器，也是 npm 包实际发布的东西。
+两条构建轨道功能等价、分发形态不同：二进制零依赖可直接分发，代价是体积；`aforge.js` 需要既有 Node 环境，也是 npm 包实际发布的产物。
 
 
 ## 快速开始（Windows PowerShell）

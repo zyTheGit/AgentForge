@@ -8,8 +8,8 @@
  * 所以 release 只用一个 ubuntu runner 就能出全部资产。代价是**产出的非宿主平台
  * 二进制无法在编译机上冒烟**，冒烟要在对应平台的 runner 上单独做（见 release.yml）。
  *
- * 体积说明：产物 70~85 MB，其中 JS 载荷不足 1 MB —— 体积由内嵌的 bun runtime 决定，
- * --minify 只影响那不足 1 MB 的部分。想要小体积请走 npm 轨道（dist/aforge.js）。
+ * 体积说明：产物体积由内嵌的 bun runtime 决定（具体数值见 README），其中 JS 载荷不足
+ * 1 MB —— --minify 只影响那不足 1 MB 的部分。想要小体积请走 npm 轨道（dist/aforge.js）。
  */
 import { spawnSync } from 'node:child_process';
 import { mkdir, stat } from 'node:fs/promises';

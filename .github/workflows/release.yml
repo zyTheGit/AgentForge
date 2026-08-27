@@ -1,6 +1,7 @@
 name: Release
 
-# v* tag 是版本唯一来源：tag v1.2.3 → npm 包 1.2.3 + Release 资产 aforge.exe。
+# v* tag 是版本唯一来源：tag v1.2.3 → npm 包 1.2.3 + Release 资产（五平台二进制
+# 压缩包 .tar.gz / .zip 与 checksums.txt）。
 # 不要手改 package.json 的 version 再发布，两处版本必然漂移。
 on:
   push:
@@ -58,10 +59,13 @@ jobs:
   # 编译机上冒烟，故拆出 smoke job 到各自平台的 runner 上跑 --version。
   build-binaries:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
         with:
           bun-version: latest
 
@@ -98,6 +102,8 @@ jobs:
           - os: macos-latest
             bin: aforge-darwin-arm64
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -120,30 +126,43 @@ jobs:
           name: binaries
           path: release
 
+      # 压缩后再挂 Release：二进制体积由内嵌 bun runtime 决定（具体数值见 README），
+      # 压缩能省掉一半以上下载量。checksums 覆盖压缩包本身。
+      # 平台清单不在这里重复：直接按 download-artifact 拿到的产物名分派，
+      # .exe 走 zip，其余走 tar.gz，唯一来源仍是 scripts/build-bun.mjs 的 TARGETS。
       - name: Package assets
         working-directory: release
-        # 压缩后再挂 Release：单个二进制 64~90 MB（bun 运行时占绝大部分），
-        # 压缩后 36~39 MB（实测 linux-x64 80→36 MB、win32-x64 86→39 MB），
-        # 下载量少一半以上。checksums 覆盖压缩包本身。
-        # tar 前先补执行位：upload/download-artifact 不保留 mode，
-        # 不补的话解包出来的二进制在 POSIX 上不可执行。
         run: |
-          chmod +x aforge-linux-* aforge-darwin-*
-          for f in aforge-linux-* aforge-darwin-*; do
-            tar -czf "$f.tar.gz" "$f"
+          set -uo pipefail
+          shopt -s failglob
+          for f in aforge-*; do
+            case "$f" in
+              *.exe)
+                # Windows 侧给 .zip（Explorer 双击即解）；runner 镜像自带 zip，
+                # 缺失时退回 python3 stdlib，避免为一条打包命令依赖额外安装
+                if command -v zip > /dev/null; then
+                  zip -q "${f%.exe}.zip" "$f"
+                  unzip -qt "${f%.exe}.zip" > /dev/null
+                else
+                  python3 -m zipfile -c "${f%.exe}.zip" "$f"
+                  python3 -m zipfile -t "${f%.exe}.zip" > /dev/null
+                fi
+                ;;
+              *)
+                # tar 前先补执行位：upload/download-artifact 不保留 mode，
+                # 不补的话解包出来的二进制在 POSIX 上不可执行
+                chmod +x "$f"
+                tar -czf "$f.tar.gz" "$f"
+                # 回读校验：rm 之后就没有第二份副本可重来了
+                tar -tzf "$f.tar.gz" > /dev/null
+                ;;
+            esac
             rm "$f"
           done
-          # Windows 侧给 .zip（Explorer 双击即解）；runner 镜像自带 zip，
-          # 缺失时退回 python3 stdlib，避免为一条打包命令依赖额外安装
-          if command -v zip > /dev/null; then
-            zip -q aforge-win32-x64.zip aforge-win32-x64.exe
-          else
-            python3 -m zipfile -c aforge-win32-x64.zip aforge-win32-x64.exe
-          fi
-          rm aforge-win32-x64.exe
           sha256sum * > checksums.txt
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+
         with:
           files: release/*
           generate_release_notes: true
