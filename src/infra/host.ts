@@ -99,4 +99,19 @@ export interface Host {
    * 都缺失时用它兜底（见 core/env.readEnv）。
    */
   homedir(): string | undefined;
+  /**
+   * 机器名（node `os.hostname()`；解析不到 → undefined）。
+   *
+   * 与 `env('HOSTNAME')` 不是一回事：HOSTNAME 不是 POSIX 导出变量，非交互 shell /
+   * 容器 / systemd 下常常没有。sync 事务的锁与 journal 用它做「跨机器」判据，
+   * 取不到就会退化成空串，让跨机器校验形同虚设（见 core/project/engine.machineIdOf）。
+   */
+  hostname(): string | undefined;
+  /**
+   * 当前用户名（node `os.userInfo().username`；解析不到 → undefined）。
+   *
+   * 与 `env('USER')` 同理：cron / systemd 等环境不导出 USER，而锁与 journal 的
+   * 「同机跨用户」判据依赖它。
+   */
+  username(): string | undefined;
 }

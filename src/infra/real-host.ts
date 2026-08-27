@@ -6,7 +6,7 @@
  */
 import { execFile } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname, userInfo } from 'node:os';
 import { currentOs, longPathAware } from '../core/paths';
 import { stripBom } from './fsutil';
 import type { ExecOptions, ExecResult, FileStat, Host } from './host';
@@ -179,5 +179,20 @@ export const realHost: Host = {
     // os.homedir() 在解析失败时返回空串而非抛错，统一收敛为 undefined
     const home = homedir();
     return home === '' ? undefined : home;
+  },
+
+  hostname(): string | undefined {
+    const name = hostname();
+    return name === '' ? undefined : name;
+  },
+
+  username(): string | undefined {
+    try {
+      const name = userInfo().username;
+      return name === '' ? undefined : name;
+    } catch {
+      // 无 passwd 条目的 uid（部分容器）下 userInfo() 会抛 SystemError
+      return undefined;
+    }
   },
 };

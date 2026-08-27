@@ -284,14 +284,35 @@ interface SyncLockHandle {
   heartbeat: ReturnType<typeof setInterval> | null;
 }
 
-/** 机器标识（Host.env 口径，避免 core 层直接依赖 node:os）。 */
-function machineIdOf(host: Host): string {
-  return host.env('COMPUTERNAME') ?? host.env('HOSTNAME') ?? '';
+/**
+ * 取第一个非空白值（`??` 不够：环境变量可以导出为空串，那与「没有」等价）。
+ * 全部缺失时返回空串——调用方（锁 / journal 的归属判据）把空串视为"未知"。
+ */
+function firstNonBlank(...values: readonly (string | undefined)[]): string {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed !== undefined && trimmed !== '') {
+      return trimmed;
+    }
+  }
+  return '';
 }
 
-/** 用户标识（同上）。 */
+/**
+ * 机器标识（优先 Host.env 口径，便于注入；环境变量缺失时退回 host.hostname()）。
+ *
+ * 为什么必须有 os 兜底：HOSTNAME 不是 POSIX 导出变量，`sh -c` / 容器 / systemd 下
+ * 常常读不到。退化成空串后，「跨机器 journal 只清理不恢复」与「同机同用户才判 pid
+ * 存活」两处判据会双双变成恒真——共享 SoT（网盘 / NFS）时可能拿别人机器的 journal
+ * 回滚本机文件，或按本机 pid 空间误判他人的锁已死而抢占。
+ */
+function machineIdOf(host: Host): string {
+  return firstNonBlank(host.env('COMPUTERNAME'), host.env('HOSTNAME'), host.hostname());
+}
+
+/** 用户标识（同上；USER 在 cron / systemd 下同样可能未导出）。 */
 function userIdOf(host: Host): string {
-  return host.env('USERNAME') ?? host.env('USER') ?? '';
+  return firstNonBlank(host.env('USERNAME'), host.env('USER'), host.username());
 }
 
 /**

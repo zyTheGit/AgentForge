@@ -1157,6 +1157,44 @@ describe('recoverPendingTransaction — journal 校验', () => {
     expect(host.files.has(JOURNAL_FILE)).toBe(false);
   });
 
+  it('环境变量缺失时机器/用户标识退回 host.hostname()/username()（POSIX 上 HOSTNAME 常未导出）', async () => {
+    const base = createSyncHost();
+    const host: FakeHost = { ...base, hostname: () => 'linux-box', username: () => 'dev' };
+    await seed(host, PROFILE_ALL);
+    const halfWritten = '# 半成品\n';
+    await seedKilledTransaction(
+      host,
+      halfWritten,
+      '# sync 前的原始内容\n',
+      sha256Hex(halfWritten),
+      {
+        machine: 'linux-box',
+        user: 'dev',
+      },
+    );
+
+    const result = await syncOnce(syncOptions(host));
+
+    expect(result.recovered).toEqual([{ path: AGENTS_MD, restored: true }]);
+  });
+
+  it('本机可解析而 journal 机器标识为空 → 视为跨机器（空串不再两边相等）', async () => {
+    const base = createSyncHost();
+    const host: FakeHost = { ...base, hostname: () => 'linux-box', username: () => 'dev' };
+    await seed(host, PROFILE_ALL);
+    const halfWritten = '# 半成品\n';
+    // seedKilledTransaction 默认写 machine:''/user:''：修复前本机标识同样退化为空串，
+    // 「跨机器只清理」的判据两边相等 → 会拿别人机器的备份覆盖本机文件
+    await seedKilledTransaction(host, halfWritten, '# sync 前的原始内容\n', sha256Hex(halfWritten));
+
+    const result = await syncOnce(syncOptions(host));
+
+    expect(result.recovered).toEqual([]);
+    expect(host.files.get(AGENTS_MD)).toContain('半成品');
+    expect(host.files.get(AGENTS_MD)).not.toContain('sync 前的原始内容');
+    expect(host.files.has(JOURNAL_FILE)).toBe(false);
+  });
+
   it('committed=true 的 journal（上次已提交后被强杀）→ 只清理不回滚', async () => {
     const host = createSyncHost();
     await seed(host, PROFILE_ALL);

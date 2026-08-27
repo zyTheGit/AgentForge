@@ -182,6 +182,12 @@ export function createDirAwareHost(
     homedir() {
       return undefined;
     },
+    hostname() {
+      return undefined;
+    },
+    username() {
+      return undefined;
+    },
   };
 
   return host;

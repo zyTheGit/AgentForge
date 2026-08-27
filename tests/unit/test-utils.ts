@@ -160,6 +160,13 @@ export function createFakeHost(envMap: Readonly<Record<string, string>> = {}): F
       // 默认取不到：家目录兜底属于"环境变量都缺失"的分支，用例需要时自行覆盖
       return undefined;
     },
+    hostname() {
+      // 同上：机器/用户标识默认为"未知"，需要断言兜底行为的用例自行覆盖
+      return undefined;
+    },
+    username() {
+      return undefined;
+    },
   };
 
   return host;

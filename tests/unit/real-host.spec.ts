@@ -246,4 +246,10 @@ describe('now / env', () => {
     expect(realHost.env('PATH')).toBeTruthy();
     expect(realHost.env('AGF_ENV_DEFINITELY_NOT_SET_12345')).toBeUndefined();
   });
+
+  it('hostname / username 解析出非空标识（sync 锁与 journal 的归属判据依赖它）', () => {
+    // os.hostname() 在三大平台都能解析；空串会被收敛为 undefined，那是回归信号
+    expect(realHost.hostname()).toMatch(/\S/);
+    expect(realHost.username()).toMatch(/\S/);
+  });
 });
