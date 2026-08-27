@@ -77,4 +77,12 @@ export interface Host {
   now(): Date;
   /** 读取环境变量（不存在 → undefined；不 trim）。 */
   env(key: string): string | undefined;
+  /**
+   * 当前用户的家目录（node `os.homedir()`；解析不到 → undefined）。
+   *
+   * 与 `env('HOME')` 不是一回事：POSIX 上 HOME 未导出时 os.homedir() 仍能从
+   * passwd 拿到；Windows 上它综合 USERPROFILE 与注册表。core 层只在环境变量
+   * 都缺失时用它兜底（见 core/env.readEnv）。
+   */
+  homedir(): string | undefined;
 }

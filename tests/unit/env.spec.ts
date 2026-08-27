@@ -1,11 +1,16 @@
 /**
- * env 单测（Spec §2.4 环境变量 / USERPROFILE 优先于 HOME）。
+ * env 单测（Spec §2.4 环境变量 / 家目录按平台决定 USERPROFILE 与 HOME 的优先级）。
  */
 import { describe, expect, it } from 'vitest';
 import { readEnv } from '../../src/core/env';
+import { currentOs, type OsContext } from '../../src/core/paths';
 import { createFakeHost } from './test-utils';
 
-const envOf = (map: Readonly<Record<string, string>>) => readEnv(createFakeHost(map));
+const WIN: OsContext = { platform: 'win32' };
+const POSIX: OsContext = { platform: 'linux' };
+
+const envOf = (map: Readonly<Record<string, string>>, os: OsContext = currentOs()) =>
+  readEnv(createFakeHost(map), os);
 
 describe('readEnv（Spec §2.4）', () => {
   it('读取全部关注的变量', () => {
@@ -75,12 +80,51 @@ describe('readEnv（Spec §2.4）', () => {
     expect(envOf({}).ci).toBe(false);
   });
 
-  it('USERPROFILE 优先于 HOME（Windows 语义，Spec §2.4）', () => {
-    expect(envOf({ USERPROFILE: 'C:\\Users\\u', HOME: '/home/u' }).userProfile).toBe(
+  it('win32：USERPROFILE 优先于 HOME（Spec §2.4）', () => {
+    expect(envOf({ USERPROFILE: 'C:\\Users\\u', HOME: '/home/u' }, WIN).userProfile).toBe(
       'C:\\Users\\u',
     );
-    expect(envOf({ HOME: '/home/u' }).userProfile).toBe('/home/u');
-    expect(envOf({ USERPROFILE: '', HOME: '/home/u' }).userProfile).toBe('/home/u');
+  });
+
+  it('posix：HOME 优先于 USERPROFILE（WSL 互操作会把 Windows 侧 USERPROFILE 带进来）', () => {
+    expect(envOf({ USERPROFILE: 'C:\\Users\\u', HOME: '/home/u' }, POSIX).userProfile).toBe(
+      '/home/u',
+    );
+  });
+
+  it('单边缺失 / 空串时两者互为兜底（两个平台同）', () => {
+    for (const os of [WIN, POSIX]) {
+      expect(envOf({ HOME: '/home/u' }, os).userProfile).toBe('/home/u');
+      expect(envOf({ USERPROFILE: 'C:\\Users\\u' }, os).userProfile).toBe('C:\\Users\\u');
+      expect(envOf({ USERPROFILE: '', HOME: '/home/u' }, os).userProfile).toBe('/home/u');
+      expect(envOf({ USERPROFILE: 'C:\\Users\\u', HOME: '   ' }, os).userProfile).toBe(
+        'C:\\Users\\u',
+      );
+    }
+  });
+
+  it('两个变量都缺 → 退回 host.homedir()（posix 上可从 passwd 拿到）', () => {
+    const host = { ...createFakeHost({}), homedir: () => '/home/from-passwd' };
+    expect(readEnv(host, POSIX).userProfile).toBe('/home/from-passwd');
+  });
+
+  it('homedir 也取不到（空串 / undefined）→ undefined，由路径解析层报 ConfigError', () => {
+    const blank = { ...createFakeHost({}), homedir: () => '  ' };
+    expect(readEnv(blank, POSIX).userProfile).toBeUndefined();
+    expect(readEnv(createFakeHost({}), POSIX).userProfile).toBeUndefined();
+  });
+
+  it('环境变量存在时不调用 homedir（不让兜底盖掉显式设置）', () => {
+    let called = 0;
+    const host = {
+      ...createFakeHost({ HOME: '/home/u' }),
+      homedir: () => {
+        called += 1;
+        return '/home/other';
+      },
+    };
+    expect(readEnv(host, POSIX).userProfile).toBe('/home/u');
+    expect(called).toBe(0);
   });
 
   it('全空白值视为未设置（trim 语义）', () => {

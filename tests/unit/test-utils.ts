@@ -149,6 +149,10 @@ export function createFakeHost(envMap: Readonly<Record<string, string>> = {}): F
     env(key) {
       return envMap[key];
     },
+    homedir() {
+      // 默认取不到：家目录兜底属于"环境变量都缺失"的分支，用例需要时自行覆盖
+      return undefined;
+    },
   };
 
   return host;

@@ -61,7 +61,7 @@ export const SKILL_DOC_FILENAME = 'SKILL.md';
 function requireUserProfile(env: EnvSnapshot): string {
   const home = env.userProfile;
   if (home === undefined || home === '') {
-    throw new ConfigError('无法确定用户目录（USERPROFILE 与 HOME 均未设置）', {
+    throw new ConfigError('无法确定用户目录（USERPROFILE / HOME 均未设置，且 homedir 解析失败）', {
       hint: '设置 USERPROFILE（Windows）或 HOME（类 Unix），或用 AGF_HOME 显式指定用户级 SoT 根目录',
     });
   }

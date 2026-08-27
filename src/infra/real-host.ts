@@ -6,6 +6,7 @@
  */
 import { execFile } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
+import { homedir } from 'node:os';
 import { currentOs, longPathAware } from '../core/paths';
 import { stripBom } from './fsutil';
 import type { ExecOptions, ExecResult, FileStat, Host } from './host';
@@ -159,5 +160,11 @@ export const realHost: Host = {
 
   env(key: string): string | undefined {
     return process.env[key];
+  },
+
+  homedir(): string | undefined {
+    // os.homedir() 在解析失败时返回空串而非抛错，统一收敛为 undefined
+    const home = homedir();
+    return home === '' ? undefined : home;
   },
 };

@@ -6,6 +6,7 @@
  * 以 ConfigError(2) 报告；这样 doctor 能同时报告多个问题而非首个。
  */
 import type { Host } from '../infra/host';
+import { currentOs, type OsContext } from './paths';
 
 /** Spec §4.2 projection.line_ending。 */
 export type LineEnding = 'lf' | 'crlf';
@@ -28,8 +29,9 @@ export interface EnvSnapshot {
   /** CODEX_HOME：Codex 根目录覆盖（Spec §2.2）。 */
   readonly codexHome: string | undefined;
   /**
-   * 用户目录：USERPROFILE 优先于 HOME（Windows 语义，Spec §2.4）。
-   * 两者都缺失时为 undefined（路径解析层负责报 ConfigError）。
+   * 用户目录（Spec §2.4）：win32 上 USERPROFILE 优先、类 Unix 上 HOME 优先；
+   * 两者皆缺时退回 host.homedir()。全都取不到才是 undefined（路径解析层报
+   * ConfigError）。
    */
   readonly userProfile: string | undefined;
 }
@@ -53,8 +55,35 @@ function isTruthyCi(value: string | undefined): boolean {
   return !(v === '' || v === 'false' || v === '0');
 }
 
-/** 读取并解析 AgentForge 关注的全部环境变量（Spec §2.4）。 */
-export function readEnv(host: Host): EnvSnapshot {
+/**
+ * 家目录解析（Spec §2.4）：按平台决定 USERPROFILE 与 HOME 的优先级。
+ *
+ * 为什么必须平台化而不能固定 `USERPROFILE ?? HOME`：WSL 互操作会把 Windows 侧
+ * 的 USERPROFILE（`C:\Users\x`）带进 Linux 进程，部分 CI 镜像与 Wine 也如此。
+ * 固定优先 USERPROFILE 会让 posix 上的用户级 SoT 落到一个不存在的盘符路径下。
+ *
+ * 两个变量都缺时退回 host.homedir()：POSIX 上 HOME 未导出（`sh -c`、部分容器）
+ * 时它仍能从 passwd 拿到，比直接报 ConfigError 更可用。
+ */
+function resolveUserProfile(host: Host, os: OsContext): string | undefined {
+  const fromEnv =
+    os.platform === 'win32'
+      ? (rawEnv(host, 'USERPROFILE') ?? rawEnv(host, 'HOME'))
+      : (rawEnv(host, 'HOME') ?? rawEnv(host, 'USERPROFILE'));
+  if (fromEnv !== undefined) {
+    return fromEnv;
+  }
+  const home = host.homedir()?.trim();
+  return home === undefined || home === '' ? undefined : home;
+}
+
+/**
+ * 读取并解析 AgentForge 关注的全部环境变量（Spec §2.4）。
+ *
+ * @param os 宿主平台（决定 USERPROFILE / HOME 优先级）；缺省取当前进程平台，
+ *        测试请显式注入。
+ */
+export function readEnv(host: Host, os: OsContext = currentOs()): EnvSnapshot {
   const scope = rawEnv(host, 'AGF_SCOPE');
   const lineEnding = rawEnv(host, 'AGF_LINE_ENDING');
   return {
@@ -64,6 +93,6 @@ export function readEnv(host: Host): EnvSnapshot {
     lineEnding: lineEnding === 'lf' || lineEnding === 'crlf' ? lineEnding : undefined,
     ci: isTruthyCi(host.env('CI')),
     codexHome: rawEnv(host, 'CODEX_HOME'),
-    userProfile: rawEnv(host, 'USERPROFILE') ?? rawEnv(host, 'HOME'),
+    userProfile: resolveUserProfile(host, os),
   };
 }

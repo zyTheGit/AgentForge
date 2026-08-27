@@ -176,6 +176,9 @@ export function createDirAwareHost(
     env(key) {
       return env[key];
     },
+    homedir() {
+      return undefined;
+    },
   };
 
   return host;
