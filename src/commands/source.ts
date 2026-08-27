@@ -86,13 +86,28 @@ export async function runSourceUpdate(
   return updateSource(managerContext(ctx), id);
 }
 
-/** 单行源摘要（ASCII，固定列对齐）。 */
-function sourceLine(source: Source): string {
-  const detail =
-    source.type === 'git'
-      ? `${source.ref ?? source.commit ?? '?'} @ ${(source.commit ?? '?').slice(0, 12)}`
-      : source.path;
-  return `  ${source.id}  [${source.type}]  ${detail}`;
+/** list 表头（首列是源 id——remove/update 的入参，避免与 commit 混淆）。 */
+const LIST_HEADER = ['ID', 'TYPE', 'REF', 'COMMIT/PATH'] as const;
+
+/** 单行源摘要拆成列：git → ref + commit 前 12 位；local → path（无 ref）。 */
+function sourceCells(source: Source): string[] {
+  return source.type === 'git'
+    ? [source.id, source.type, source.ref ?? '-', (source.commit ?? '?').slice(0, 12)]
+    : [source.id, source.type, '-', source.path];
+}
+
+/** 渲染 ASCII 表格（列宽按内容自适应，两空格缩进 + 两空格列间距；末列不补空格）。 */
+function renderTable(rows: readonly string[][]): string[] {
+  const columns = rows[0]?.length ?? 0;
+  const widths = Array.from({ length: columns }, (_, col) =>
+    Math.max(...rows.map((row) => (row[col] ?? '').length)),
+  );
+  return rows.map((row) => {
+    const cells = row.map((cell, col) =>
+      col === columns - 1 ? cell : cell.padEnd(widths[col] ?? 0),
+    );
+    return `  ${cells.join('  ')}`;
+  });
 }
 
 export function registerSourceCommand(program: Command): void {
@@ -141,7 +156,7 @@ export function registerSourceCommand(program: Command): void {
         console.log('no sources registered - run `aforge source add <path-or-url>` to add one');
         return;
       }
-      const lines = sources.map(sourceLine);
+      const lines = renderTable([[...LIST_HEADER], ...sources.map(sourceCells)]);
       lines.push('', `${sources.length} source(s)`);
       console.log(lines.join('\n'));
     });
