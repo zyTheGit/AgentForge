@@ -36,8 +36,12 @@ describe('longPathAware 接入 realHost 写入热路径', () => {
   });
 
   it('中文 + 空格 + 长路径组合（压力测试）', async () => {
-    const longSegment = '规则目录'.repeat(50); // 200 字符
-    const targetFile = path.join(tmpRoot, longSegment, 'AGENTS.md');
+    // 总长要过 240（触发 win32 的 \\?\ 归一化），但**单段**不能过 posix 的
+    // NAME_MAX（255 字节）：中文一字 3 字节，一段 60 字符即 180 字节，
+    // 分 4 段嵌套凑够总长，两个平台都能落盘。
+    const segment = `${'规则目录'.repeat(14)} 目录`; // 59 字符 / 177 字节
+    const targetFile = path.join(tmpRoot, segment, segment, segment, segment, 'AGENTS.md');
+    expect(targetFile.length).toBeGreaterThan(240);
 
     await mkdirp(realHost, path.dirname(targetFile));
     await atomicWrite(realHost, targetFile, '# 规则\n');

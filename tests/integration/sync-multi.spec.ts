@@ -562,8 +562,12 @@ describe.skipIf(!isPosix || isRoot)('真实只读 target 目录（POSIX chmod 05
 
       const agentsMd = path.join(root, 'AGENTS.md');
       const opencodeJson = path.join(root, 'opencode.json');
+      const claudeMd = path.join(root, 'CLAUDE.md');
+      const mcpJson = path.join(root, '.mcp.json');
       const agentsV1 = await readFile(agentsMd, 'utf8');
       const opencodeV1 = await readFile(opencodeJson, 'utf8');
+      const claudeV1 = await readFile(claudeMd, 'utf8');
+      const mcpV1 = await readFile(mcpJson, 'utf8');
 
       // 渲染变化（custom）+ MCP 变化（profile）→ AGENTS.md 与 opencode.json 均需重写
       await writeFile(
@@ -582,9 +586,12 @@ describe.skipIf(!isPosix || isRoot)('真实只读 target 目录（POSIX chmod 05
       // 其余 target 文件恢复到 sync 前内容（逐字节）
       expect(await readFile(agentsMd, 'utf8')).toBe(agentsV1);
       expect(await readFile(opencodeJson, 'utf8')).toBe(opencodeV1);
-      // 未开始的 target 无文件
-      expect(await realHost.exists(path.join(root, 'CLAUDE.md'))).toBe(false);
-      expect(await realHost.exists(path.join(root, '.mcp.json'))).toBe(false);
+      // 未开始的 target（claude/pi）：v1 的产物原样留着，本次 sync 的新内容一个字节都没进去
+      // （init 已把四个 target 全部投影，所以这里不是"文件不存在"，而是"内容仍是 v1"）
+      expect(await readFile(claudeMd, 'utf8')).toBe(claudeV1);
+      expect(await readFile(mcpJson, 'utf8')).toBe(mcpV1);
+      // v2 profile 新增的 MCP server 只应出现在 sync 成功的产物里，claude 侧不该有
+      expect(mcpV1).not.toContain('server-fs');
     } finally {
       await chmod(path.join(root, '.codex'), 0o755);
       await rm(base, { recursive: true, force: true });

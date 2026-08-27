@@ -21,7 +21,10 @@ await build({
   target: 'node20',
   outfile,
   sourcemap: false,
-  minify: false,
+  // npm 轨道的产物是绝大多数用户实际下载的东西（npx 首次执行要拉整包），
+  // 压缩后约为未压缩的 40%；栈信息靠 keepNames 保留函数名，不影响可读性。
+  minify: true,
+  keepNames: true,
   banner: {
     js: [
       '#!/usr/bin/env node',

@@ -113,7 +113,7 @@ describe('resolveTargetUserDirs（Spec §2.2 四 target 用户级目录）', () 
 describe('validatePath（Spec §2.1.1 UNC 拒绝）', () => {
   it('UNC 反斜杠形式 → GenericError(1) 且 hint 提示 AGF_HOME 不支持网络路径', () => {
     try {
-      validatePath('\\\\server\\share\\af');
+      validatePath('\\\\server\\share\\af', WIN);
       expect.unreachable('should throw');
     } catch (err) {
       expect(err).toBeInstanceOf(GenericError);
@@ -124,14 +124,19 @@ describe('validatePath（Spec §2.1.1 UNC 拒绝）', () => {
   });
 
   it('UNC 正斜杠形式 → GenericError(1)', () => {
-    expect(() => validatePath('//server/share/af')).toThrow(GenericError);
+    expect(() => validatePath('//server/share/af', WIN)).toThrow(GenericError);
+  });
+
+  it('posix 上 `//x` 不是 UNC：不拦，按 posix 语义折叠为 /x', () => {
+    // UNC 是 Windows 概念；posix 上 `//foo` 是合法绝对路径，拦掉即误伤
+    expect(validatePath('//home/u/.agentforge', POSIX)).toBe('/home/u/.agentforge');
   });
 
   it('正常路径返回规范化绝对路径', () => {
-    expect(validatePath('C:\\Users\\u\\.agentforge')).toBe('C:\\Users\\u\\.agentforge');
-    expect(validatePath('C:\\Users\\u\\.agentforge\\')).toBe('C:\\Users\\u\\.agentforge');
-    const rel = validatePath('rel/path');
-    expect(path.isAbsolute(rel)).toBe(true);
+    expect(validatePath('C:\\Users\\u\\.agentforge', WIN)).toBe('C:\\Users\\u\\.agentforge');
+    expect(validatePath('C:\\Users\\u\\.agentforge\\', WIN)).toBe('C:\\Users\\u\\.agentforge');
+    const rel = validatePath('rel/path', WIN);
+    expect(path.win32.isAbsolute(rel)).toBe(true);
   });
 });
 

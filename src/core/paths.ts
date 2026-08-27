@@ -74,7 +74,7 @@ function requireUserProfile(env: EnvSnapshot): string {
  */
 export function resolveUserSoT(env: EnvSnapshot, os: OsContext = currentOs()): string {
   if (env.agfHome !== undefined && env.agfHome !== '') {
-    return validatePath(env.agfHome);
+    return validatePath(env.agfHome, os);
   }
   const api = pathApiFor(os);
   return api.resolve(requireUserProfile(env), '.agentforge');
@@ -108,14 +108,19 @@ export function resolveTargetUserDirs(env: EnvSnapshot, os: OsContext): TargetUs
 /**
  * 校验路径并返回规范化绝对路径。
  * UNC 网络路径（`\\server\share` 或 `//server/share`）→ GenericError(1)（Spec §2.1.1）。
+ *
+ * UNC 是 Windows 概念，故只在 win32 上拦：posix 上 `\` 是合法文件名字符，
+ * `//foo` 是合法绝对路径（`path.posix.resolve` 折叠为 `/foo`），拦掉即误伤。
+ * 绝对化同样按注入 os 走 pathApiFor，否则在 posix 宿主上算 win32 路径会退化为
+ * "拼到 cwd 后面"。
  */
-export function validatePath(p: string): string {
-  if (p.startsWith('\\\\') || p.startsWith('//')) {
+export function validatePath(p: string, os: OsContext = currentOs()): string {
+  if (os.platform === 'win32' && (p.startsWith('\\\\') || p.startsWith('//'))) {
     throw new GenericError(`AGF_HOME 不支持网络路径（UNC）: ${p}`, {
       hint: '改用本地磁盘路径（如 C:\\agentforge），或将网络位置先同步到本地再使用',
     });
   }
-  return path.resolve(p);
+  return pathApiFor(os).resolve(p);
 }
 
 /** 路径等价比较：win32 先 normalize 再大小写不敏感；posix 精确比较（Spec §2.1）。 */

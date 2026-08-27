@@ -33,13 +33,17 @@ jobs:
       - run: npm run build:node
       - run: node dist/aforge.js --version
       - run: npm run build:bun
-      - run: ./dist/aforge.exe --version
+      - run: ./dist/aforge-win32-x64.exe --version
 
   ubuntu:
     name: ubuntu-latest (regression)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
 
       - uses: actions/setup-node@v4
         with:
@@ -49,4 +53,35 @@ jobs:
       - run: npm run gen:version:check
       - run: npm run typecheck
       - run: npm run test
+
+      - run: npm run build:node
+      - run: node dist/aforge.js --version
+      - run: npm run build:bun
+      - run: ./dist/aforge-linux-x64 --version
+
+  macos:
+    name: macos-latest (regression)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+      - run: npm run gen:version:check
+      - run: npm run typecheck
+      - run: npm run test
+
+      - run: npm run build:node
+      - run: node dist/aforge.js --version
+      # runner 是 arm64（macos-14+），build:bun 取宿主目标即 darwin-arm64
+      - run: npm run build:bun
+      - run: ./dist/aforge-darwin-arm64 --version
+
 

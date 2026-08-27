@@ -11,12 +11,15 @@ import { parse as parseYaml } from 'yaml';
 import { editProfile, newProfileDefaults } from '../../src/core/config/edit-profile';
 import { loadProfile } from '../../src/core/config/load';
 import type { TargetLayer } from '../../src/core/config/target-layer';
-import type { OsContext } from '../../src/core/paths';
+import { currentOs, type OsContext } from '../../src/core/paths';
 import type { ProfileInput } from '../../src/schema';
 import { createDirAwareHost } from './sources/helpers';
+import { abs } from './test-utils';
 
-const SOT = 'C:\\proj\\.agentforge';
-const PROFILE_FILE_PATH = path.win32.join(SOT, 'profile.yaml');
+// 夹具走宿主平台语义：被测代码（edit-profile / load / SoT 事务锁）用宿主
+// path.join 拼内存 fs 的键，夹具必须同语义，否则 posix 上键错位（见 test-utils.abs）。
+const SOT = abs('proj', '.agentforge');
+const PROFILE_FILE_PATH = path.join(SOT, 'profile.yaml');
 
 function layer(): TargetLayer {
   return { scope: 'project', sotRoot: SOT, profileFile: PROFILE_FILE_PATH };
@@ -124,7 +127,7 @@ describe('editProfile', () => {
 });
 
 describe('editProfile 并发（SoT 事务锁：读-改-写不被覆盖）', () => {
-  const OS: OsContext = { platform: 'win32' };
+  const OS: OsContext = currentOs();
 
   it('两个并发 editProfile：后者拿不到锁（ConflictError(3)），重试后两次修改都在', async () => {
     const host = createDirAwareHost();

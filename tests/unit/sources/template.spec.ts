@@ -12,14 +12,18 @@ import { parse as parseYaml } from 'yaml';
 import { loadProfile } from '../../../src/core/config/load';
 import type { TargetLayer } from '../../../src/core/config/target-layer';
 import type { EnvSnapshot } from '../../../src/core/env';
+import { currentOs } from '../../../src/core/paths';
 import { addLocalSource, type SourceManagerContext } from '../../../src/core/sources/manager';
 import { listTemplates, setTemplateEnabled } from '../../../src/core/sources/template';
+import { abs } from '../test-utils';
 import { createDirAwareHost } from './helpers';
 
-const USER_SOT = 'C:\\user-sot';
-const PROJECT_ROOT = 'C:\\proj';
-const PROJECT_SOT = path.win32.join(PROJECT_ROOT, '.agentforge');
-const VENDOR = 'C:\\proj\\vendor-src';
+// 夹具走宿主平台语义：被测代码（load / template / manager）用宿主 path.join 拼
+// 内存 fs 的键，夹具必须同语义，否则 posix 上键错位（见 test-utils.abs）。
+const USER_SOT = abs('user-sot');
+const PROJECT_ROOT = abs('proj');
+const PROJECT_SOT = path.join(PROJECT_ROOT, '.agentforge');
+const VENDOR = path.join(PROJECT_ROOT, 'vendor-src');
 
 function envFor(): EnvSnapshot {
   return {
@@ -29,7 +33,7 @@ function envFor(): EnvSnapshot {
     lineEnding: undefined,
     ci: false,
     codexHome: undefined,
-    userProfile: 'C:\\user',
+    userProfile: abs('user'),
   };
 }
 
@@ -37,7 +41,7 @@ function tplCtx(host: ReturnType<typeof createDirAwareHost>, effectiveTemplates:
   return {
     host,
     env: envFor(),
-    os: { platform: 'win32' as const },
+    os: currentOs(),
     cwd: PROJECT_ROOT,
     userSoTRoot: USER_SOT,
     projectSoTRoot: PROJECT_SOT,
@@ -53,7 +57,7 @@ function projectLayer(): TargetLayer {
   return {
     scope: 'project',
     sotRoot: PROJECT_SOT,
-    profileFile: path.win32.join(PROJECT_SOT, 'profile.yaml'),
+    profileFile: path.join(PROJECT_SOT, 'profile.yaml'),
   };
 }
 
@@ -72,9 +76,9 @@ describe('listTemplates', () => {
 
   it('两层 SoT templates\\ 递归扫描（相对路径去 .md 为 id，/ 分隔）', async () => {
     const host = createDirAwareHost();
-    host.files.set(path.win32.join(PROJECT_SOT, 'templates', 'review.md'), 'a');
-    host.files.set(path.win32.join(PROJECT_SOT, 'templates', 'team', 'style.md'), 'b');
-    host.files.set(path.win32.join(USER_SOT, 'templates', 'global.md'), 'c');
+    host.files.set(path.join(PROJECT_SOT, 'templates', 'review.md'), 'a');
+    host.files.set(path.join(PROJECT_SOT, 'templates', 'team', 'style.md'), 'b');
+    host.files.set(path.join(USER_SOT, 'templates', 'global.md'), 'c');
 
     const items = await listTemplates(tplCtx(host, ['review']));
     expect(items.find((i) => i.id === 'review')).toMatchObject({
@@ -91,7 +95,7 @@ describe('listTemplates', () => {
   it('源 manifest.templates 进清单（origin source，带 sourceId 与 description）', async () => {
     const host = createDirAwareHost();
     host.files.set(
-      path.win32.join(VENDOR, 'manifest.yaml'),
+      path.join(VENDOR, 'manifest.yaml'),
       [
         'name: v',
         "version: '1.0.0'",
@@ -190,7 +194,7 @@ describe('setTemplateEnabled', () => {
     const userLayer: TargetLayer = {
       scope: 'user',
       sotRoot: USER_SOT,
-      profileFile: path.win32.join(USER_SOT, 'profile.yaml'),
+      profileFile: path.join(USER_SOT, 'profile.yaml'),
     };
     await setTemplateEnabled(host, userLayer, 'global', true);
     expect((await loadProfile(host, USER_SOT))?.templates).toEqual(['global']);

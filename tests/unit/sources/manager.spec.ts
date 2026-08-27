@@ -28,10 +28,16 @@ import {
   updateSource,
 } from '../../../src/core/sources/manager';
 import type { Source } from '../../../src/schema';
+import { abs } from '../test-utils';
 import { createDirAwareHost } from './helpers';
 
-const USER_SOT = 'C:\\user-sot';
-const CWD = 'C:\\proj';
+// 夹具走宿主平台语义：被测代码（manager / config.load）用宿主 path.join / resolve
+// 拼内存 fs 的键，夹具必须同语义，否则 posix 上键错位（见 test-utils.abs）。
+const USER_SOT = abs('user-sot');
+const CWD = abs('proj');
+const VENDOR = path.join(CWD, 'vendor-src');
+const VENDOR_MANIFEST = path.join(VENDOR, 'manifest.yaml');
+const SOURCES_JSON = path.join(USER_SOT, 'sources.json');
 
 function ctxFor(
   host: ReturnType<typeof createDirAwareHost>,
@@ -46,7 +52,7 @@ function ctxFor(
       lineEnding: undefined,
       ci: false,
       codexHome: undefined,
-      userProfile: 'C:\\user',
+      userProfile: abs('user'),
       ...envOverrides,
     },
     userSoTRoot: USER_SOT,
@@ -80,6 +86,8 @@ describe('deriveSourceId', () => {
   });
 
   it('本地 Windows 路径取末段', () => {
+    // 此用例断言 win32 专属语义（反斜杠分隔的本地路径），夹具刻意不跟随宿主：
+    // deriveSourceId 是纯字符串函数（先统一分隔符再取末段），与宿主平台无关。
     expect(deriveSourceId('C:\\sources\\My Source')).toBe('my-source');
   });
 
@@ -116,24 +124,24 @@ describe('deriveSourceId', () => {
 describe('addLocalSource', () => {
   it('路径不存在 → ConfigError(2)', async () => {
     const host = createDirAwareHost();
-    await expect(addLocalSource(ctxFor(host), { path: 'C:\\missing' })).rejects.toMatchObject({
+    await expect(addLocalSource(ctxFor(host), { path: abs('missing') })).rejects.toMatchObject({
       code: 2,
     });
   });
 
   it('登记 {type:"local", path 绝对化} 到 user 层 sources.json（相对路径按 cwd 解析）', async () => {
     const host = createDirAwareHost();
-    host.files.set('C:\\proj\\vendor-src\\manifest.yaml', 'version: 1\n');
+    host.files.set(VENDOR_MANIFEST, 'version: 1\n');
     const result = await addLocalSource(ctxFor(host), { path: 'vendor-src' });
 
     expect(result.source).toMatchObject({
       id: 'vendor-src',
       type: 'local',
-      path: 'C:\\proj\\vendor-src',
+      path: VENDOR,
       enabled: true,
       kind: [],
     });
-    expect(result.file).toBe(path.win32.join(USER_SOT, 'sources.json'));
+    expect(result.file).toBe(SOURCES_JSON);
     const registry = JSON.parse(host.files.get(result.file) ?? '');
     expect(registry.version).toBe(1);
     expect(registry.sources).toHaveLength(1);
@@ -141,7 +149,7 @@ describe('addLocalSource', () => {
 
   it('id 重复 → ConfigError(2)', async () => {
     const host = createDirAwareHost();
-    host.files.set('C:\\proj\\vendor-src\\manifest.yaml', 'version: 1\n');
+    host.files.set(VENDOR_MANIFEST, 'version: 1\n');
     await addLocalSource(ctxFor(host), { path: 'vendor-src' });
     await expect(addLocalSource(ctxFor(host), { path: 'vendor-src' })).rejects.toMatchObject({
       code: 2,
@@ -203,7 +211,7 @@ describe('addGitSource', () => {
     expect(calls[3]?.args).toEqual(['rev-parse', 'HEAD']);
 
     // sources.json 登记
-    const registry = JSON.parse(host.files.get(path.win32.join(USER_SOT, 'sources.json')) ?? '');
+    const registry = JSON.parse(host.files.get(SOURCES_JSON) ?? '');
     expect(registry.sources[0]).toMatchObject({ id: 'rules', type: 'git', ref: 'v1.2.0' });
   });
 
@@ -217,7 +225,7 @@ describe('addGitSource', () => {
 
   it('孤儿缓存清理：store/<id> 下残留文件在重新 add 前被删除', async () => {
     const host = createDirAwareHost();
-    const stale = path.win32.join(sourceStoreDir(ctxFor(host), 'rules'), 'stale.txt');
+    const stale = path.join(sourceStoreDir(ctxFor(host), 'rules'), 'stale.txt');
     host.files.set(stale, '旧缓存');
     await addGitSource(ctxFor(host), { url: URL, ref: 'v1.0.0' });
     expect(host.files.has(stale)).toBe(false);
@@ -232,7 +240,7 @@ describe('updateSource', () => {
 
   it('local 源无远端可更新 → ConfigError(2)', async () => {
     const host = createDirAwareHost();
-    host.files.set('C:\\proj\\vendor-src\\manifest.yaml', 'version: 1\n');
+    host.files.set(VENDOR_MANIFEST, 'version: 1\n');
     await addLocalSource(ctxFor(host), { path: 'vendor-src' });
     await expect(updateSource(ctxFor(host), 'vendor-src')).rejects.toMatchObject({ code: 2 });
   });
@@ -251,7 +259,7 @@ describe('updateSource', () => {
     const ctx = ctxFor(host);
     await addGitSource(ctx, { url: 'https://example.com/rules.git', ref: 'v1' });
     // fake exec 不产生 clone 产物——补一个 store 文件模拟 clone 结果
-    host.files.set(path.win32.join(sourceStoreDir(ctx, 'rules'), '.git', 'HEAD'), 'ref: main\n');
+    host.files.set(path.join(sourceStoreDir(ctx, 'rules'), '.git', 'HEAD'), 'ref: main\n');
     host.gitCalls.length = 0;
 
     const result = await updateSource(ctx, 'rules');
@@ -267,7 +275,7 @@ describe('updateSource', () => {
     const ctx = ctxFor(host);
     await addGitSource(ctx, { url: 'https://example.com/rules.git', ref: 'v1' });
     // 手工清空 store（模拟缓存丢失；fake exec 本就不产生 clone 产物）
-    const storePrefix = path.win32.join(USER_SOT, 'store');
+    const storePrefix = path.join(USER_SOT, 'store');
     for (const key of [...host.files.keys()]) {
       if (key.startsWith(storePrefix)) {
         host.files.delete(key);
@@ -286,7 +294,7 @@ describe('removeSource', () => {
   it('git 源：删登记 + 删除 store/<id> 缓存（M8 决策：缓存随登记回收）', async () => {
     const host = createDirAwareHost();
     await addGitSource(ctxFor(host), { url: 'https://example.com/rules.git', ref: 'v1' });
-    const cached = path.win32.join(sourceStoreDir(ctxFor(host), 'rules'), 'templates', 'a.md');
+    const cached = path.join(sourceStoreDir(ctxFor(host), 'rules'), 'templates', 'a.md');
     host.files.set(cached, '模板内容');
 
     const result = await removeSource(ctxFor(host), 'rules');
@@ -300,10 +308,10 @@ describe('removeSource', () => {
 
   it('local 源：仅删登记，不动源目录文件', async () => {
     const host = createDirAwareHost();
-    host.files.set('C:\\proj\\vendor-src\\manifest.yaml', 'version: 1\n');
+    host.files.set(VENDOR_MANIFEST, 'version: 1\n');
     await addLocalSource(ctxFor(host), { path: 'vendor-src' });
     await removeSource(ctxFor(host), 'vendor-src');
-    expect(host.files.has('C:\\proj\\vendor-src\\manifest.yaml')).toBe(true);
+    expect(host.files.has(VENDOR_MANIFEST)).toBe(true);
     expect(await listSources(ctxFor(host))).toEqual([]);
   });
 });
@@ -311,7 +319,7 @@ describe('removeSource', () => {
 describe('loadSourceManifest', () => {
   it('源无 manifest.yaml → null（非错误）', async () => {
     const host = createDirAwareHost();
-    host.files.set('C:\\proj\\vendor-src\\skill.txt', 'x');
+    host.files.set(path.join(VENDOR, 'skill.txt'), 'x');
     const ctx = ctxFor(host);
     await addLocalSource(ctx, { path: 'vendor-src' });
     const source = await firstSource(ctx);
@@ -321,7 +329,7 @@ describe('loadSourceManifest', () => {
   it('合法 manifest（§4.5：name/version/min_agentforge/templates/skills）→ 解析为对象', async () => {
     const host = createDirAwareHost();
     host.files.set(
-      path.win32.join('C:\\proj\\vendor-src', 'manifest.yaml'),
+      VENDOR_MANIFEST,
       [
         'name: vendor-pack',
         "version: '1.0.0'",
@@ -350,7 +358,7 @@ describe('loadSourceManifest', () => {
 
   it('非法 YAML → ConfigError(2)', async () => {
     const host = createDirAwareHost();
-    host.files.set(path.win32.join('C:\\proj\\vendor-src', 'manifest.yaml'), 'name: [unclosed');
+    host.files.set(VENDOR_MANIFEST, 'name: [unclosed');
     const ctx = ctxFor(host);
     await addLocalSource(ctx, { path: 'vendor-src' });
     const source = await firstSource(ctx);
@@ -359,10 +367,7 @@ describe('loadSourceManifest', () => {
 
   it('schema 校验失败（缺必填 name）→ ConfigError(2)', async () => {
     const host = createDirAwareHost();
-    host.files.set(
-      path.win32.join('C:\\proj\\vendor-src', 'manifest.yaml'),
-      "version: '1.0.0'\nmin_agentforge: 1\n",
-    );
+    host.files.set(VENDOR_MANIFEST, "version: '1.0.0'\nmin_agentforge: 1\n");
     const ctx = ctxFor(host);
     await addLocalSource(ctx, { path: 'vendor-src' });
     const source = await firstSource(ctx);
@@ -402,18 +407,16 @@ describe('assertSourceId', () => {
 
 describe('assertWithinStore / assertNotOptionLike / assertGitUrl / assertGitRef（统一导出后直测）', () => {
   const ctx = (): SourceManagerContext => ctxFor(createDirAwareHost());
-  const storeRoot = path.win32.join(USER_SOT, 'store');
+  const storeRoot = path.join(USER_SOT, 'store');
 
   it('assertWithinStore：store 内子目录通过；根本身 / 兄弟前缀目录 / 越界 → ConfigError(2)', () => {
-    expect(() => assertWithinStore(ctx(), path.win32.join(storeRoot, 'rules'))).not.toThrow();
-    expect(() =>
-      assertWithinStore(ctx(), path.win32.join(storeRoot, 'rules', 'nested')),
-    ).not.toThrow();
+    expect(() => assertWithinStore(ctx(), path.join(storeRoot, 'rules'))).not.toThrow();
+    expect(() => assertWithinStore(ctx(), path.join(storeRoot, 'rules', 'nested'))).not.toThrow();
     for (const bad of [
       storeRoot, // 不允许整体回收
       `${storeRoot}-evil`, // 裸 startsWith 会放过的兄弟目录
-      path.win32.join(storeRoot, '..', 'evil'),
-      'C:\\evil',
+      path.join(storeRoot, '..', 'evil'),
+      abs('evil'),
     ]) {
       expect(() => assertWithinStore(ctx(), bad)).toThrow(expect.objectContaining({ code: 2 }));
     }
@@ -446,16 +449,16 @@ describe('assertWithinStore / assertNotOptionLike / assertGitUrl / assertGitRef�
 describe('显式 --id 不绕过 id 校验（越界删除 / 越界写入防线）', () => {
   it('addLocalSource --id ../../evil → ConfigError(2)，不产生登记', async () => {
     const host = createDirAwareHost();
-    host.files.set('C:\\proj\\vendor-src\\manifest.yaml', 'version: 1\n');
+    host.files.set(VENDOR_MANIFEST, 'version: 1\n');
     await expect(
       addLocalSource(ctxFor(host), { path: 'vendor-src', id: '../../evil' }),
     ).rejects.toMatchObject({ code: 2 });
-    expect(host.files.has(path.win32.join(USER_SOT, 'sources.json'))).toBe(false);
+    expect(host.files.has(SOURCES_JSON)).toBe(false);
   });
 
   it('addGitSource --id ..\\..\\evil → ConfigError(2)，不发起任何 git 调用（不越界 clone/删除）', async () => {
     const host = createDirAwareHost();
-    const outsider = 'C:\\evil\\keep.txt';
+    const outsider = abs('evil', 'keep.txt');
     host.files.set(outsider, '不该被删');
     await expect(
       addGitSource(ctxFor(host), {
@@ -480,7 +483,7 @@ describe('sources.json 读入项逐项校验（手工编辑 / 恶意登记表）
   /** 手工写入一张含越界 id 的登记表。 */
   function seedTamperedRegistry(host: ReturnType<typeof createDirAwareHost>, id: string): void {
     host.files.set(
-      path.win32.join(USER_SOT, 'sources.json'),
+      SOURCES_JSON,
       `${JSON.stringify(
         {
           version: 1,
@@ -502,7 +505,7 @@ describe('sources.json 读入项逐项校验（手工编辑 / 恶意登记表）
 
   it('removeSource 在越界 id 上不执行任何删除（store 外文件保留）', async () => {
     const host = createDirAwareHost();
-    const outsider = 'C:\\evil\\keep.txt';
+    const outsider = abs('evil', 'keep.txt');
     host.files.set(outsider, '不该被删');
     seedTamperedRegistry(host, '..\\..\\evil');
     await expect(removeSource(ctxFor(host), '..\\..\\evil')).rejects.toMatchObject({ code: 2 });
@@ -558,7 +561,7 @@ describe('git 参数注入防护（§10）', () => {
   it('update：sources.json 中被篡改成 - 开头的 ref → ConfigError(2)，不发起 git 调用', async () => {
     const host = createDirAwareHost();
     host.files.set(
-      path.win32.join(USER_SOT, 'sources.json'),
+      SOURCES_JSON,
       `${JSON.stringify({
         version: 1,
         sources: [
@@ -572,7 +575,7 @@ describe('git 参数注入防护（§10）', () => {
         ],
       })}\n`,
     );
-    host.files.set(path.win32.join(sourceStoreDir(ctxFor(host), 'rules'), '.git', 'HEAD'), 'x');
+    host.files.set(path.join(sourceStoreDir(ctxFor(host), 'rules'), '.git', 'HEAD'), 'x');
     await expect(updateSource(ctxFor(host), 'rules')).rejects.toMatchObject({ code: 2 });
     expect(host.gitCalls).toHaveLength(0);
   });

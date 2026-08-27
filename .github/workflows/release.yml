@@ -53,11 +53,11 @@ jobs:
           DIST_TAG: ${{ contains(github.ref_name, '-') && 'next' || 'latest' }}
         run: npm publish --provenance --tag "$DIST_TAG"
 
-  # 无 Node 环境的兜底分发：Windows 单文件 exe 挂到 GitHub Release
-  release-exe:
-    runs-on: windows-latest
-    permissions:
-      contents: write
+  # 无 Node 环境的兜底分发：五平台单文件二进制挂到 GitHub Release。
+  # bun --compile 支持交叉编译，所以编译只用一个 ubuntu runner；但交叉产物无法在
+  # 编译机上冒烟，故拆出 smoke job 到各自平台的 runner 上跑 --version。
+  build-binaries:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -72,23 +72,60 @@ jobs:
       - run: npm ci
 
       - name: Sync package version with tag
-        shell: bash
         env:
           TAG: ${{ github.ref_name }}
         run: npm version "${TAG#v}" --no-git-tag-version --allow-same-version
 
-      - run: npm run build:bun
-      - run: ./dist/aforge.exe --version
+      - run: npm run build:bun:all
 
-      - name: Collect assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/aforge-*
+          if-no-files-found: error
+
+  # linux-arm64 与 darwin-x64 无免费 runner，保持"编译产出但不冒烟"。
+  smoke-binaries:
+    needs: build-binaries
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bin: aforge-linux-x64
+          - os: windows-latest
+            bin: aforge-win32-x64.exe
+          - os: macos-latest
+            bin: aforge-darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+
+      - name: Run --version
         shell: bash
         run: |
-          mkdir -p release
-          cp dist/aforge.exe "release/aforge-win-x64.exe"
-          (cd release && sha256sum * > checksums.txt)
+          chmod +x "${{ matrix.bin }}"
+          "./${{ matrix.bin }}" --version
+
+  release-binaries:
+    needs: smoke-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: release
+
+      - name: Collect assets
+        run: (cd release && sha256sum * > checksums.txt)
 
       - uses: softprops/action-gh-release@v2
         with:
           files: release/*
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+

@@ -13,16 +13,23 @@
  *
  * PATH 与 git 可执行文件：shell.gitExec 在 win32 上只 spawn 从 PATH 解析出的
  * **绝对路径**（§10，解析不到即 code=127，不退回裸 `git`）。因此本 helper 默认
- * 往 env 里放一个 PATH 并在内存 fs 里放 `<FAKE_GIT_DIR>\git.exe`；exec 侧按
- * basename 判定"这是不是 git"，从而同时兼容 win32（绝对路径）与 posix（裸名）。
+ * 往 env 里放一个 PATH 并在内存 fs 里放 `<FAKE_GIT_DIR>/git[.exe]`（后缀随宿主
+ * 平台，posix 候选无 PATHEXT 展开）；exec 侧按 basename 判定"这是不是 git"，
+ * 从而同时兼容 win32（绝对路径）与 posix（裸名）。
+ *
+ * 路径夹具一律走 test-utils.abs（宿主平台语义）：内存 fs 以路径字符串为键，
+ * 而被测代码用宿主 path.join 拼键，硬编码 `C:\` 在 posix 上会双向错位。
  */
 import path from 'node:path';
 import type { ExecOptions, ExecResult, Host } from '../../../src/infra/host';
-import { createFakeHost, errnoError } from '../test-utils';
+import { abs, createFakeHost, errnoError } from '../test-utils';
 
 /** fake PATH 目录与其中的 git（供 resolveExecutable 命中）。 */
-export const FAKE_GIT_DIR = 'C:\\fake\\bin';
-export const FAKE_GIT_EXE = path.win32.join(FAKE_GIT_DIR, 'git.exe');
+export const FAKE_GIT_DIR = abs('fake', 'bin');
+export const FAKE_GIT_EXE = path.join(
+  FAKE_GIT_DIR,
+  process.platform === 'win32' ? 'git.exe' : 'git',
+);
 
 /** 命令是否为 git（裸名 / PATH 解析出的绝对路径 + PATHEXT 后缀都算）。 */
 function isGitCommand(cmd: string): boolean {

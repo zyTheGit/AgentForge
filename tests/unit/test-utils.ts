@@ -10,6 +10,24 @@ import path from 'node:path';
 import type { Host } from '../../src/infra/host';
 import type { PromptApi, PromptOption } from '../../src/infra/prompt';
 
+/**
+ * 夹具路径的绝对根：win32 `C:\`，posix `/`。
+ *
+ * 内存 fake host 以路径字符串为键，而被测代码（config/load、sources/*、
+ * learning/* 等）用**宿主** `path.join` 拼键。夹具因此必须与宿主同语义：
+ * 硬编码 `C:\x` 在 Linux 上既不是绝对路径（`path.resolve` 会拼到 cwd 后面），
+ * 分隔符也与 `path.join` 的产物不一致，两处都会让键查不到。
+ *
+ * 需要断言"另一平台"路径语义的用例（paths / shell / 四个 projector）不用这里，
+ * 它们显式注入 OsContext 并配 path.win32 / path.posix，与宿主无关。
+ */
+export const ABS_ROOT = process.platform === 'win32' ? 'C:\\' : '/';
+
+/** 构造宿主平台语义的绝对路径夹具（分隔符与被测代码的 path.join 一致）。 */
+export function abs(...segments: string[]): string {
+  return path.join(ABS_ROOT, ...segments);
+}
+
 export interface FakeHost extends Host {
   readonly files: Map<string, string>;
   /** 已存在的「目录」集合（内存 fs 无目录概念，仅 mkdirExclusive 的互斥判据需要）。 */

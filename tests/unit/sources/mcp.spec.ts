@@ -13,16 +13,19 @@ import { loadProfile } from '../../../src/core/config/load';
 import type { TargetLayer } from '../../../src/core/config/target-layer';
 import { addMcpServer, validateMcpServer } from '../../../src/core/sources/mcp';
 import type { McpServerInput } from '../../../src/schema';
+import { abs } from '../test-utils';
 import { createDirAwareHost } from './helpers';
 
-const USER_SOT = 'C:\\user-sot';
-const PROJECT_SOT = 'C:\\proj\\.agentforge';
+// 夹具走宿主平台语义：被测代码（mcp / config.load）用宿主 path.join 拼内存 fs 的
+// 键，夹具必须同语义，否则 posix 上键错位（见 test-utils.abs）。
+const USER_SOT = abs('user-sot');
+const PROJECT_SOT = abs('proj', '.agentforge');
 
 function projectLayer(): TargetLayer {
   return {
     scope: 'project',
     sotRoot: PROJECT_SOT,
-    profileFile: path.win32.join(PROJECT_SOT, 'profile.yaml'),
+    profileFile: path.join(PROJECT_SOT, 'profile.yaml'),
   };
 }
 
@@ -154,7 +157,7 @@ describe('addMcpServer', () => {
     const userLayer: TargetLayer = {
       scope: 'user',
       sotRoot: USER_SOT,
-      profileFile: path.win32.join(USER_SOT, 'profile.yaml'),
+      profileFile: path.join(USER_SOT, 'profile.yaml'),
     };
     await addMcpServer(host, userLayer, stdioServer);
     expect((await loadProfile(host, USER_SOT))?.mcp?.servers).toHaveLength(1);
