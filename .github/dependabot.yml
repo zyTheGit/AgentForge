@@ -1,0 +1,11 @@
+# action 全部按 commit SHA 锁定（tag 可被重打，SHA 不可），代价是不会自动跟上上游修复，
+# 所以交给 Dependabot 每周提 PR —— 它会同时更新 SHA 与后面的 `# vX` 注释。
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci

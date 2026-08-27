@@ -51,7 +51,7 @@ macOS 上二进制未做签名与公证，首次运行会被 Gatekeeper 拦下�
 xattr -d com.apple.quarantine ./aforge
 ```
 
-`aforge-linux-arm64` 与 `aforge-darwin-x64` 没有免费 runner 可跑冒烟，属于「已交叉编译但未在真机验证」。
+`aforge-linux-arm64` 在 CI 里只靠 QEMU 模拟跑过 `--version`，没有 arm64 真机验证；`aforge-darwin-x64` 既无免费 runner 也无法用容器模拟，属于「已交叉编译但完全未冒烟」。
 
 ### 方式三：从源码构建
 

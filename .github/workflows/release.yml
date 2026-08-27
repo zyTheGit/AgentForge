@@ -14,9 +14,9 @@ jobs:
       contents: read
       id-token: write # npm provenance 需要
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -61,15 +61,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      smoke: ${{ steps.smoke-matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-
         with:
           bun-version: latest
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
@@ -82,38 +83,49 @@ jobs:
 
       - run: npm run build:bun:all
 
-      - uses: actions/upload-artifact@v4
+      # 冒烟矩阵由 scripts/build-bun.mjs 的 TARGETS 唯一决定，不在 YAML 里再抄一遍平台清单
+      - name: Export smoke matrix
+        id: smoke-matrix
+        run: echo "matrix=$(node scripts/build-bun.mjs --list)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: binaries
           path: dist/aforge-*
           if-no-files-found: error
 
-  # linux-arm64 与 darwin-x64 无免费 runner，保持"编译产出但不冒烟"。
+  # 冒烟矩阵来自 build-bun.mjs --list：有对应 runner 的直接跑，linux-arm64 无 arm64 runner，
+  # 用 docker + QEMU 在 arm64 容器里跑；darwin-x64 既无 runner 也无法模拟，保持"编译产出但不冒烟"。
   smoke-binaries:
     needs: build-binaries
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            bin: aforge-linux-x64
-          - os: windows-latest
-            bin: aforge-win32-x64.exe
-          - os: macos-latest
-            bin: aforge-darwin-arm64
+      matrix: ${{ fromJSON(needs.build-binaries.outputs.smoke) }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: binaries
 
       - name: Run --version
+        if: matrix.platform == ''
         shell: bash
         run: |
           chmod +x "${{ matrix.bin }}"
           "./${{ matrix.bin }}" --version
+
+      - name: Set up QEMU
+        if: matrix.platform != ''
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Run --version (${{ matrix.platform }} via QEMU)
+        if: matrix.platform != ''
+        run: |
+          chmod +x "${{ matrix.bin }}"
+          docker run --rm --platform "${{ matrix.platform }}" \
+            -v "$PWD:/work" -w /work ubuntu:24.04 "./${{ matrix.bin }}" --version
 
   release-binaries:
     needs: smoke-binaries
@@ -121,7 +133,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: binaries
           path: release
