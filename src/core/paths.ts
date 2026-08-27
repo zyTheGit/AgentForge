@@ -48,7 +48,8 @@ export function pathApiFor(os: OsContext): PathApi {
  * target 的投影侧 `<targetRoot>/skills/<name>/` 同名，故只有一处定义。
  *
  * 放在本模块（最底层的纯路径模块）而非 projectors/shared：SoT 侧的消费者
- * （core/sources/skill、core/learning/promote、core/doctor/checks、commands/init）
+ * （core/sources/skill、core/learning/promote、core/doctor/check-environment、
+ * commands/init-scaffold）
  * 与投影侧的消费者（四个 projector）互不依赖，共享物必须落在两者共同的下游。
  * projectors/shared 仍原样导出这两个名字（见该文件），投影侧调用点无需改动。
  */
@@ -209,4 +210,36 @@ export function detectOneDrive(userProfile: string, host: Host): boolean {
   return (
     upLower === odLower || upLower.startsWith(`${odLower}/`) || odLower.startsWith(`${upLower}/`)
   );
+}
+
+/**
+ * 去掉 Windows 长路径前缀（`\\?\` / `\\?\UNC\`），使两侧路径可以逐段比较。
+ *
+ * longPathAware 加过前缀的路径与未加前缀的根直接比较必然不等，而"是否加前缀"取决于
+ * 路径长度这种与语义无关的因素——比较前先剥掉，避免边界判定随路径长度漂移。
+ */
+export function stripLongPathPrefix(p: string): string {
+  if (p.startsWith('\\\\?\\UNC\\')) {
+    return `\\\\${p.slice('\\\\?\\UNC\\'.length)}`;
+  }
+  return p.startsWith('\\\\?\\') ? p.slice('\\\\?\\'.length) : p;
+}
+
+/**
+ * 目标路径是否落在任一白名单根内（win32 大小写不敏感）。
+ *
+ * 用 `relative` 而不是字符串前缀：前缀比较会把 `C:\a-b` 判成在 `C:\a` 内。
+ * 恢复落盘 journal（§10 不信任磁盘上的 JSON）与事务锁根解析都靠它划边界。
+ */
+export function isWithinAnyRoot(target: string, roots: readonly string[], os: OsContext): boolean {
+  const api = pathApiFor(os);
+  const fold = (p: string): string => {
+    const bare = stripLongPathPrefix(p);
+    return os.platform === 'win32' ? bare.toLowerCase() : bare;
+  };
+  const folded = fold(target);
+  return roots.some((root) => {
+    const rel = api.relative(fold(root), folded);
+    return rel === '' || (!rel.startsWith('..') && !api.isAbsolute(rel));
+  });
 }

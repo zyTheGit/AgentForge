@@ -3,14 +3,14 @@
  * §11.2.12 回滚验收 / §11.2.10 中文与空格路径）：
  *
  * 1) 四 target 全量 sync：AGENTS.md×1（opencode/codex/pi 共享）+ CLAUDE.md +
- *    opencode.json + .mcp.json + .codex\config.toml + .pi\settings.json，
+ *    opencode.json + .mcp.json + .codex\config.toml + .pi\mcp.json，
  *    内容一致共享同一渲染正文；
  * 2) custom/*.md 修改再 sync：marker 区间更新、marker 外保留（§11.2.2）；
  * 3) 回滚：目录/写入异常 → 退出码 4 → 其余 target 文件全部恢复
  *    （含"新建文件被删除"场景；Windows 注入 EPERM + POSIX 真实 chmod 0555）；
  * 4) MCP servers 配置：opencode.json 与 .mcp.json 深合并保留未知键、
  *    config.toml 标记段替换保注释；
- * 5) Pi settings 目录异常 → sync 成功但输出 warning（§8.6 soft）。
+ * 5) Pi MCP 目录异常 → sync 成功但输出 warning（§8.6 soft）。
  */
 import { spawnSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -79,7 +79,7 @@ interface Workspace {
   readonly opencodeJson: string;
   readonly mcpJson: string;
   readonly codexToml: string;
-  readonly piSettings: string;
+  readonly piMcp: string;
   readonly sotRoot: string;
   readonly syncMetaPath: string;
 }
@@ -119,7 +119,7 @@ async function createWorkspace(label: string): Promise<Workspace> {
     opencodeJson: path.join(root, 'opencode.json'),
     mcpJson: path.join(root, '.mcp.json'),
     codexToml: path.join(root, '.codex', 'config.toml'),
-    piSettings: path.join(root, '.pi', 'settings.json'),
+    piMcp: path.join(root, '.pi', 'mcp.json'),
     sotRoot,
     syncMetaPath: path.join(sotRoot, 'sync-meta.json'),
   };
@@ -198,7 +198,7 @@ describe('四 target 全量 sync（§8.7 投影矩阵）', () => {
       ws.opencodeJson,
       ws.mcpJson,
       ws.codexToml,
-      ws.piSettings,
+      ws.piMcp,
     ]) {
       expect(await stat(file)).toBeTruthy();
     }
@@ -216,7 +216,7 @@ describe('四 target 全量 sync（§8.7 投影矩阵）', () => {
     // MCP 管理键（无 servers → 空管理键声明）；config.toml 标记段
     expect(JSON.parse(await readFile(ws.opencodeJson, 'utf8'))).toEqual({ mcp: {} });
     expect(JSON.parse(await readFile(ws.mcpJson, 'utf8'))).toEqual({ mcpServers: {} });
-    expect(JSON.parse(await readFile(ws.piSettings, 'utf8'))).toEqual({ mcpServers: {} });
+    expect(JSON.parse(await readFile(ws.piMcp, 'utf8'))).toEqual({ mcpServers: {} });
     const toml = await readFile(ws.codexToml, 'utf8');
     expect(toml).toContain(CODEX_MCP_TOML_BEGIN);
     expect(toml).toContain(CODEX_MCP_TOML_END);
@@ -373,8 +373,8 @@ describe('MCP servers 配置后的投影（§8.3/§8.4/§8.5/§8.6 管理键）'
     expect(toml).not.toContain('[[mcp_servers.old]]');
     expect(toml).not.toContain('command = "old"');
 
-    // pi settings.json：mcpServers 同 .mcp.json 管理键形态
-    expect(JSON.parse(await readFile(ws.piSettings, 'utf8'))).toEqual({
+    // pi .pi\mcp.json：mcpServers 同 .mcp.json 管理键形态
+    expect(JSON.parse(await readFile(ws.piMcp, 'utf8'))).toEqual({
       mcpServers: {
         fs: { command: 'npx', args: ['-y', 'server-fs'], env: { KEY: 'v' } },
         docs: {
@@ -437,7 +437,7 @@ describe('事务回滚（§7.3-6 / §11.2.12）', () => {
     // 未开始的 target（claude/pi）无任何文件
     expect(await realHost.exists(ws.claudeMd)).toBe(false);
     expect(await realHost.exists(ws.mcpJson)).toBe(false);
-    expect(await realHost.exists(ws.piSettings)).toBe(false);
+    expect(await realHost.exists(ws.piMcp)).toBe(false);
 
     // 失败汇总报告：每 target 状态表 + 回滚声明
     const report = getSyncFailureReport(err);
@@ -493,10 +493,10 @@ describe('Pi soft（§8.6 MVP best-effort）', () => {
     await disposeWorkspace(ws);
   });
 
-  it('settings 目录异常（写入注入失败）→ sync 成功但输出 warning，其余 target 正常', async () => {
+  it('mcp.json 目录异常（写入注入失败）→ sync 成功但输出 warning，其余 target 正常', async () => {
     await runInit({ host: ws.host, cwd: ws.root, os: OS });
 
-    const denied = withDeniedWrite(ws.host, ws.piSettings);
+    const denied = withDeniedWrite(ws.host, ws.piMcp);
     const result = await runSync({
       host: denied,
       cwd: ws.root,
@@ -506,16 +506,14 @@ describe('Pi soft（§8.6 MVP best-effort）', () => {
 
     // 整体成功：四 target 全部执行
     expect(result.targets.map((t) => t.targetId)).toEqual(['opencode', 'codex', 'claude', 'pi']);
-    expect(result.warnings).toEqual([
-      expect.objectContaining({ targetId: 'pi', path: ws.piSettings }),
-    ]);
+    expect(result.warnings).toEqual([expect.objectContaining({ targetId: 'pi', path: ws.piMcp })]);
 
-    // 其余 target 文件正常；settings 未写入
+    // 其余 target 文件正常；mcp.json 未写入
     expect(await realHost.exists(ws.agentsMd)).toBe(true);
     expect(await realHost.exists(ws.opencodeJson)).toBe(true);
     expect(await realHost.exists(ws.codexToml)).toBe(true);
     expect(await realHost.exists(ws.claudeMd)).toBe(true);
-    expect(await realHost.exists(ws.piSettings)).toBe(false);
+    expect(await realHost.exists(ws.piMcp)).toBe(false);
 
     // sync-meta：pi 不记录（投影不完整不提供 doctor 基准）
     const meta = JSON.parse(await readFile(ws.syncMetaPath, 'utf8')) as {
@@ -598,7 +596,7 @@ describe.skipIf(!isPosix || isRoot)('真实只读 target 目录（POSIX chmod 05
     }
   }, 120_000);
 
-  it('.pi 目录只读（settings 尚不存在）→ sync 成功 + warning（§8.6 soft，真实 EACCES）', async () => {
+  it('.pi 目录只读（mcp.json 尚不存在）→ sync 成功 + warning（§8.6 soft，真实 EACCES）', async () => {
     const base = await mkdtemp(path.join(tmpdir(), 'aforge-m6-soft-'));
     const root = path.join(base, 'proj');
     const home = path.join(base, 'home');
@@ -626,16 +624,16 @@ describe.skipIf(!isPosix || isRoot)('真实只读 target 目录（POSIX chmod 05
     try {
       await runInit({ host, cwd: root, os: OS });
       await mkdir(piDir, { recursive: true });
-      await chmod(piDir, 0o555); // settings 写入将失败（EACCES）
+      await chmod(piDir, 0o555); // mcp.json 写入将失败（EACCES）
 
       const result = await runSync({ host, cwd: root, os: OS, agentforgeVersion: VERSION });
 
       expect(result.warnings).toEqual([
-        expect.objectContaining({ targetId: 'pi', path: path.join(piDir, 'settings.json') }),
+        expect.objectContaining({ targetId: 'pi', path: path.join(piDir, 'mcp.json') }),
       ]);
       expect(await realHost.exists(path.join(root, 'AGENTS.md'))).toBe(true);
       expect(await realHost.exists(path.join(root, 'CLAUDE.md'))).toBe(true);
-      expect(await realHost.exists(path.join(piDir, 'settings.json'))).toBe(false);
+      expect(await realHost.exists(path.join(piDir, 'mcp.json'))).toBe(false);
 
       const meta = JSON.parse(
         await readFile(path.join(root, '.agentforge', 'sync-meta.json'), 'utf8'),

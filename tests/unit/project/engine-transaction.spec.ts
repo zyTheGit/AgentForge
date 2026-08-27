@@ -1,7 +1,7 @@
 /**
  * sync 引擎事务化单测（M6，Spec §7.3-6/7 + §8.6/§8.7，fake host）：
  * 四 target 全量投影（共享根 AGENTS.md）/ MCP 管理键落盘 / 幂等跳写 /
- * soft（pi settings）失败仅 warning 且不写该 target 的 sync-meta /
+ * soft（pi mcp.json）失败仅 warning 且不写该 target 的 sync-meta /
  * 硬项失败 → 逆序回滚（已存在恢复原内容、新建文件删除）+ 失败汇总报告。
  *
  * 并发与中断：`.sync.lock/` 排他锁（**目录**形态，原子 mkdir 互斥；占用 →
@@ -37,7 +37,9 @@ import {
   type SyncOptions,
   syncOnce,
 } from '../../../src/core/project/engine';
+import { withSotLock } from '../../../src/core/project/sync-lock';
 import { syncMetaPath } from '../../../src/core/project/sync-meta';
+import { inspectPiLegacyMcp } from '../../../src/core/project/sync-residuals';
 import { sha256Hex } from '../../../src/infra/fsutil';
 import { realHost } from '../../../src/infra/real-host';
 import { createFakeHost, type FakeHost } from '../test-utils';
@@ -53,7 +55,7 @@ const OPENCODE_JSON = path.join(CWD, 'opencode.json');
 const CODEX_TOML = path.join(CWD, '.codex', 'config.toml');
 const CLAUDE_MD = path.join(CWD, 'CLAUDE.md');
 const MCP_JSON = path.join(CWD, '.mcp.json');
-const PI_SETTINGS = path.join(CWD, '.pi', 'settings.json');
+const PI_MCP = path.join(CWD, '.pi', 'mcp.json');
 
 const HABITS_YAML = 'version: 1\n';
 /** 空声明 habits + base/default 的渲染结果（composer 规范化后）。 */
@@ -169,7 +171,7 @@ describe('syncOnce — 四 target 全量投影（§8.7 投影矩阵）', () => {
     expect(host.files.has(CODEX_TOML)).toBe(true);
     expect(host.files.has(CLAUDE_MD)).toBe(true);
     expect(host.files.has(MCP_JSON)).toBe(true);
-    expect(host.files.has(PI_SETTINGS)).toBe(true);
+    expect(host.files.has(PI_MCP)).toBe(true);
 
     // AGENTS.md marker 区间 = 统一渲染正文（§8.2 渲染一次分发）
     const agents = host.files.get(AGENTS_MD) as string;
@@ -180,7 +182,7 @@ describe('syncOnce — 四 target 全量投影（§8.7 投影矩阵）', () => {
     // MCP 管理键恒产出（空 servers → 空管理键声明，§8.3/§8.5/§8.6）
     expect(JSON.parse(host.files.get(OPENCODE_JSON) as string)).toEqual({ mcp: {} });
     expect(JSON.parse(host.files.get(MCP_JSON) as string)).toEqual({ mcpServers: {} });
-    expect(JSON.parse(host.files.get(PI_SETTINGS) as string)).toEqual({ mcpServers: {} });
+    expect(JSON.parse(host.files.get(PI_MCP) as string)).toEqual({ mcpServers: {} });
     const toml = host.files.get(CODEX_TOML) as string;
     expect(toml).toContain('# BEGIN AGENTFORGE MCP');
     expect(toml).toContain('# END AGENTFORGE MCP');
@@ -225,7 +227,7 @@ describe('syncOnce — 四 target 全量投影（§8.7 投影矩阵）', () => {
       },
     };
     expect(JSON.parse(host.files.get(MCP_JSON) as string)).toEqual({ mcpServers });
-    expect(JSON.parse(host.files.get(PI_SETTINGS) as string)).toEqual({ mcpServers });
+    expect(JSON.parse(host.files.get(PI_MCP) as string)).toEqual({ mcpServers });
 
     const toml = host.files.get(CODEX_TOML) as string;
     expect(toml).toContain('[[mcp_servers.fs]]');
@@ -274,7 +276,7 @@ describe('syncOnce — 四 target 全量投影（§8.7 投影矩阵）', () => {
     for (const target of result.targets) {
       expect(target.statuses.every((s) => s === 'planned')).toBe(true);
     }
-    for (const file of [AGENTS_MD, OPENCODE_JSON, CODEX_TOML, CLAUDE_MD, MCP_JSON, PI_SETTINGS]) {
+    for (const file of [AGENTS_MD, OPENCODE_JSON, CODEX_TOML, CLAUDE_MD, MCP_JSON, PI_MCP]) {
       expect(host.files.has(file)).toBe(false);
     }
     expect(host.files.has(syncMetaPath(PROJECT_SOT))).toBe(false);
@@ -282,10 +284,10 @@ describe('syncOnce — 四 target 全量投影（§8.7 投影矩阵）', () => {
 });
 
 describe('syncOnce — soft 项（§8.6 Pi MVP）', () => {
-  it('settings 写入失败 → sync 整体成功 + warning；sync-meta 不含 pi，其余 target 照常记录', async () => {
+  it('mcp.json 写入失败 → sync 整体成功 + warning；sync-meta 不含 pi，其余 target 照常记录', async () => {
     const host = createSyncHost();
     await seed(host, PROFILE_ALL);
-    const denied = withDeniedWrite(host, PI_SETTINGS);
+    const denied = withDeniedWrite(host, PI_MCP);
 
     const result = await syncOnce(syncOptions(denied));
 
@@ -294,22 +296,22 @@ describe('syncOnce — soft 项（§8.6 Pi MVP）', () => {
     expect(result.warnings).toEqual([
       {
         targetId: 'pi',
-        path: PI_SETTINGS,
+        path: PI_MCP,
         message: expect.stringContaining('无法写入目标文件'),
       },
     ]);
 
-    // pi target：AGENTS.md 照常（unchanged），settings 项标记 warning
+    // pi target：AGENTS.md 照常（unchanged），mcp.json 项标记 warning
     const pi = result.targets.find((t) => t.targetId === 'pi');
     expect(pi?.statuses).toEqual(['unchanged', 'warning']);
 
-    // 其余 target 文件正常落盘；settings 未写入
+    // 其余 target 文件正常落盘；mcp.json 未写入
     expect(host.files.has(AGENTS_MD)).toBe(true);
     expect(host.files.has(OPENCODE_JSON)).toBe(true);
     expect(host.files.has(CODEX_TOML)).toBe(true);
     expect(host.files.has(CLAUDE_MD)).toBe(true);
     expect(host.files.has(MCP_JSON)).toBe(true);
-    expect(host.files.has(PI_SETTINGS)).toBe(false);
+    expect(host.files.has(PI_MCP)).toBe(false);
 
     // sync-meta：pi 投影不完整 → 不记录（doctor 基准不受污染）
     const meta = JSON.parse(host.files.get(syncMetaPath(PROJECT_SOT)) as string) as {
@@ -345,7 +347,7 @@ describe('syncOnce — 事务回滚（§7.3-6）', () => {
     // 未开始的 target（claude / pi）无任何文件
     expect(host.files.has(CLAUDE_MD)).toBe(false);
     expect(host.files.has(MCP_JSON)).toBe(false);
-    expect(host.files.has(PI_SETTINGS)).toBe(false);
+    expect(host.files.has(PI_MCP)).toBe(false);
 
     // 失败汇总报告（§7.3-6：每 target 状态表 + 回滚声明）
     const report = getSyncFailureReport(err);
@@ -387,10 +389,10 @@ describe('syncOnce — 事务回滚（§7.3-6）', () => {
     expect(host.files.has(syncMetaPath(PROJECT_SOT))).toBe(false);
   });
 
-  it('soft 项失败不触发回滚：pi settings 写失败时其余文件保持写入后状态', async () => {
+  it('soft 项失败不触发回滚：pi mcp.json 写失败时其余文件保持写入后状态', async () => {
     const host = createSyncHost();
     await seed(host, PROFILE_ALL);
-    const denied = withDeniedWrite(host, PI_SETTINGS);
+    const denied = withDeniedWrite(host, PI_MCP);
 
     // sync 成功（无异常）→ 无回滚：AGENTS.md 等保持写入后状态
     const result = await syncOnce(syncOptions(denied));
@@ -475,7 +477,7 @@ describe('syncOnce — 事务排他锁（并发）', () => {
     expect(toExitCode(err as ConflictError)).toBe(3);
     expect((err as ConflictError).message).toContain('4242');
     expect((err as ConflictError).hint).toContain(LOCK_DIR);
-    for (const file of [AGENTS_MD, OPENCODE_JSON, CODEX_TOML, CLAUDE_MD, MCP_JSON, PI_SETTINGS]) {
+    for (const file of [AGENTS_MD, OPENCODE_JSON, CODEX_TOML, CLAUDE_MD, MCP_JSON, PI_MCP]) {
       expect(host.files.has(file)).toBe(false);
     }
     expect(host.files.has(syncMetaPath(PROJECT_SOT))).toBe(false);
@@ -1409,5 +1411,77 @@ describe('inspectSyncResiduals（Spec §3.2 运行时产物）', () => {
     expect(residuals.map((r) => r.kind)).toEqual(['backup-failed']);
     expect(residuals[0]?.path).toBe(failedDir);
     expect(host.files.get(evidence)).toBe('original'); // 诊断绝不销毁唯一副本
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 回读校验失败必须释放锁（否则盘上的新鲜 meta 把后续 5 分钟内的 sync 全挡住）
+// ---------------------------------------------------------------------------
+
+describe('withSotLock：元数据回读不符时让出锁', () => {
+  it('回读不到元数据 → ConflictError(3)，且锁目录已释放（下一次能立刻取到）', async () => {
+    const base = createSyncHost();
+    let tamper = true;
+    const host: FakeHost = {
+      ...base,
+      async readFile(p) {
+        // 模拟"锁目录被外部替换"：写进去的元数据回读不出来（损坏 / 被清空）
+        if (tamper && p.endsWith(SYNC_LOCK_META_FILE)) {
+          return '{ broken';
+        }
+        return base.readFile(p);
+      },
+    };
+
+    await expect(withSotLock(host, PROJECT_SOT, OS, async () => 'never')).rejects.toMatchObject({
+      code: 3,
+      name: 'ConflictError',
+    });
+
+    // 修复前：锁目录连同刚写的（acquiredAt 恒新鲜）meta 留在盘上，
+    // 接下来 SYNC_LOCK_STALE_MS 内任何进程取锁都撞 lockBusyError
+    tamper = false;
+    expect(host.dirs.has(path.join(PROJECT_SOT, SYNC_LOCK_DIRNAME))).toBe(false);
+    await expect(withSotLock(host, PROJECT_SOT, OS, async () => 'ok')).resolves.toBe('ok');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pi 的 MCP 历史落点残留（settings.json → mcp.json 迁移后无人认领）
+// ---------------------------------------------------------------------------
+
+describe('inspectPiLegacyMcp（只诊断不删）', () => {
+  const PROJECT_LEGACY = path.join(CWD, '.pi', 'settings.json');
+  const USER_LEGACY = path.join(HOME, '.pi', 'agent', 'settings.json');
+
+  it('project / user 两处含 mcpServers 的 settings.json → 各报一条 pi-legacy-mcp', async () => {
+    const host = createSyncHost();
+    await host.writeFile(
+      PROJECT_LEGACY,
+      JSON.stringify({ mcpServers: { fs: { command: 'npx' } } }),
+    );
+    await host.writeFile(USER_LEGACY, JSON.stringify({ mcpServers: {} }));
+
+    const residuals = await inspectPiLegacyMcp(host, CWD, HOME, OS);
+
+    expect(residuals.map((r) => r.kind)).toEqual(['pi-legacy-mcp', 'pi-legacy-mcp']);
+    expect(residuals.map((r) => r.path)).toEqual([PROJECT_LEGACY, USER_LEGACY]);
+    // 只读诊断：文件原样留在盘上（删除与否由用户决定）
+    expect(host.files.has(PROJECT_LEGACY)).toBe(true);
+  });
+
+  it('无 mcpServers 键 / 非法 JSON / 文件不存在 → 不报（settings.json 本身是 pi 的通用设置）', async () => {
+    const host = createSyncHost();
+    await host.writeFile(PROJECT_LEGACY, JSON.stringify({ theme: 'dark' }));
+    await host.writeFile(USER_LEGACY, '{ not json');
+
+    expect(await inspectPiLegacyMcp(host, CWD, HOME, OS)).toEqual([]);
+    expect(await inspectPiLegacyMcp(createSyncHost(), CWD, HOME, OS)).toEqual([]);
+  });
+
+  it('用户目录未解析（userProfile 缺失）→ 只查 project 侧', async () => {
+    const host = createSyncHost();
+    await host.writeFile(USER_LEGACY, JSON.stringify({ mcpServers: {} }));
+    expect(await inspectPiLegacyMcp(host, CWD, undefined, OS)).toEqual([]);
   });
 });

@@ -13,8 +13,8 @@
  */
 import path from 'node:path';
 import type { Command } from 'commander';
-import { stringify as stringifyYaml } from 'yaml';
 import { HABITS_FILE, loadHabits, PROFILE_FILE } from '../core/config/load';
+import { serializeYamlDoc } from '../core/config/serialize';
 import { readEnv } from '../core/env';
 import { ConfigError } from '../core/errors';
 import {
@@ -28,7 +28,7 @@ import {
   parseImportedFile,
 } from '../core/importer/importer';
 import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
-import { atomicWrite, ensureTrailingNewline } from '../infra/fsutil';
+import { atomicWrite } from '../infra/fsutil';
 import { type CommandContext, defaultCommandContext, printJson } from './context';
 import { resolveJsonFlag } from './flags';
 
@@ -109,8 +109,7 @@ export async function runImport(ctx: ImportCommandContext, pathArg: string): Pro
       now.toISOString(),
     );
   }
-  const habitsYaml = stringifyYaml({ ...habits, detected }, { lineWidth: 0 });
-  await atomicWrite(ctx.host, habitsFile, ensureTrailingNewline(habitsYaml));
+  await atomicWrite(ctx.host, habitsFile, serializeYamlDoc({ ...habits, detected }));
 
   // §7.7-4：剩余内容块 → custom/imported-<timestamp>.md
   let customFile: string | null = null;

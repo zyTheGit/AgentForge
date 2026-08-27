@@ -215,7 +215,7 @@ describe('init → sync 端到端（进程内，真实 fs）', () => {
     expect(await realHost.exists(path.join(ws.root, 'AGENTS.md'))).toBe(false);
     expect(await realHost.exists(path.join(ws.root, 'opencode.json'))).toBe(false);
     expect(await realHost.exists(path.join(ws.root, '.codex', 'config.toml'))).toBe(false);
-    expect(await realHost.exists(path.join(ws.root, '.pi', 'settings.json'))).toBe(false);
+    expect(await realHost.exists(path.join(ws.root, '.pi', 'mcp.json'))).toBe(false);
     expect(await realHost.exists(ws.syncMetaPath)).toBe(false);
   }, 30_000);
 

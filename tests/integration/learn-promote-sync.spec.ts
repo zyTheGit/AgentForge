@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { parse as parseYaml } from 'yaml';
 
 import { runInit } from '../../src/commands/init';
 import { runLearn } from '../../src/commands/learn';
@@ -94,16 +94,6 @@ async function createWorkspace(label: string): Promise<Workspace> {
 
 async function disposeWorkspace(ws: Workspace): Promise<void> {
   await rm(path.dirname(ws.root), { recursive: true, force: true });
-}
-
-/** 把 skill 名写进 project 层 profile.skills.always（读写原始 YAML，保序保其余字段）。 */
-async function enableSkillInProfile(host: Host, sotRoot: string, name: string): Promise<void> {
-  const file = path.join(sotRoot, 'profile.yaml');
-  const raw = parseYaml(await host.readFile(file)) as Record<string, unknown>;
-  const skills = (raw.skills as Record<string, unknown> | undefined) ?? {};
-  raw.skills = { ...skills, always: [name] };
-  const text = stringifyYaml(raw, { lineWidth: 0 });
-  await host.writeFile(file, text.endsWith('\n') ? text : `${text}\n`);
 }
 
 /** 临时真 git 仓库 fixture（ASCII 目录；init + commit + 分支改名 main）。 */
@@ -239,7 +229,7 @@ describe('source add local + skill add → sync（§11.2.6）', () => {
     await disposeWorkspace(ws);
   });
 
-  it('skill add 实体 copy 落地 SoT skills/（非 symlink），skills.always → sync 投影 .claude/skills/', async () => {
+  it('skill add 实体 copy 落地 SoT skills/（非 symlink）并自动登记 skills.always → sync 投影 .claude/skills/', async () => {
     await runInit({ host: ws.host, cwd: ws.root, os: OS });
 
     const vendor = path.join(ws.root, 'vendor-src');
@@ -258,13 +248,71 @@ describe('source add local + skill add → sync（§11.2.6）', () => {
     await writeFile(path.join(vendor, 'skills', 'pdf', 'SKILL.md'), '# pdf skill V2\n', 'utf8');
     expect(await readFile(sotSkill, 'utf8')).toBe('# pdf skill V1\n');
 
-    // 声明 skills.always 后 sync：投影 target 侧 skills 落地（§8.5 .claude\skills\<name>\SKILL.md）
-    await enableSkillInProfile(ws.host, ws.sotRoot, 'pdf');
+    // 自动登记：skill add 已把名字写进安装层 profile.skills.always（无需手工点名）
+    expect(added.registered?.always).toEqual(['pdf']);
+    expect(added.registered?.profileFile).toBe(path.join(ws.sotRoot, 'profile.yaml'));
+    const profileRaw = parseYaml(await readFile(path.join(ws.sotRoot, 'profile.yaml'), 'utf8')) as {
+      skills?: { always?: string[] };
+    };
+    expect(profileRaw.skills?.always).toEqual(['pdf']);
+
+    // 直接 sync：投影 target 侧 skills 落地（§8.5 .claude\skills\<name>\SKILL.md）
     await runSync({ host: ws.host, cwd: ws.root, os: OS, agentforgeVersion: VERSION });
 
     const projected = path.join(ws.root, '.claude', 'skills', 'pdf', 'SKILL.md');
     expect(statSync(projected).isFile()).toBe(true);
     expect(await readFile(projected, 'utf8')).toBe('# pdf skill V1\n');
+  }, 30_000);
+
+  it('--no-register：只 copy 不碰 profile.yaml（registered 缺席）', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS });
+    const profileFile = path.join(ws.sotRoot, 'profile.yaml');
+    const profileBefore = existsSync(profileFile) ? await readFile(profileFile, 'utf8') : null;
+
+    const vendor = path.join(ws.root, 'vendor-src');
+    await mkdir(path.join(vendor, 'skills', 'pdf'), { recursive: true });
+    await writeFile(path.join(vendor, 'skills', 'pdf', 'SKILL.md'), '# pdf skill\n', 'utf8');
+    await runSourceAdd({ host: ws.host, cwd: ws.root, os: OS }, 'vendor-src', { id: 'vendor' });
+
+    const added = await runSkillAdd(
+      { host: ws.host, cwd: ws.root, os: OS },
+      'pdf',
+      'vendor',
+      false,
+    );
+    // copy 照做，登记这一步整段跳过：profile.yaml 逐字节未变（连重排格式都没有）
+    expect(added.registered).toBeUndefined();
+    expect(existsSync(path.join(ws.sotRoot, 'skills', 'pdf', 'SKILL.md'))).toBe(true);
+    expect(existsSync(profileFile) ? await readFile(profileFile, 'utf8') : null).toBe(
+      profileBefore,
+    );
+  }, 30_000);
+
+  it('登记失败 → 撤销 copy（修好 profile 后重跑不被 ConflictError 挡死）', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS });
+    const profileFile = path.join(ws.sotRoot, 'profile.yaml');
+    const validProfile = existsSync(profileFile)
+      ? await readFile(profileFile, 'utf8')
+      : 'version: 1\n';
+
+    const vendor = path.join(ws.root, 'vendor-src');
+    await mkdir(path.join(vendor, 'skills', 'pdf'), { recursive: true });
+    await writeFile(path.join(vendor, 'skills', 'pdf', 'SKILL.md'), '# pdf skill\n', 'utf8');
+    await runSourceAdd({ host: ws.host, cwd: ws.root, os: OS }, 'vendor-src', { id: 'vendor' });
+
+    // profile.yaml 损坏 → 登记步骤抛 ConfigError(2)，此时 copy 已经落盘
+    await writeFile(profileFile, 'version: 1\nskills: [unclosed\n', 'utf8');
+    const ctx = { host: ws.host, cwd: ws.root, os: OS };
+    await expect(runSkillAdd(ctx, 'pdf', 'vendor')).rejects.toThrow(
+      expect.objectContaining({ code: 2 }),
+    );
+    // 补偿回滚：SoT 里不留半装的 skill，否则下次 add 撞 ConflictError(3) 永久挡死
+    expect(existsSync(path.join(ws.sotRoot, 'skills', 'pdf'))).toBe(false);
+
+    await writeFile(profileFile, validProfile, 'utf8');
+    const retry = await runSkillAdd(ctx, 'pdf', 'vendor');
+    expect(retry.registered?.always).toEqual(['pdf']);
+    expect(existsSync(path.join(ws.sotRoot, 'skills', 'pdf', 'SKILL.md'))).toBe(true);
   }, 30_000);
 });
 

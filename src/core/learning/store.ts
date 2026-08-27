@@ -2,7 +2,8 @@
  * learnings 存储层（Spec §4.3 / §7.4 / §7.5 / §10）。
  *
  * 布局：`<SoT>\learnings\<id>.yaml`（一文件一条，§3.1/§3.2 learnings\ 子目录）。
- * - YAML 序列化用 yaml 包（lineWidth: 0 禁止折行——长 content 不得被改写）；
+ * - YAML 序列化统一走 config/serialize.serializeYamlDoc（lineWidth: 0 禁止折行——
+ *   长 content 不得被改写；补尾换行同源）；
  * - id 受 §4.3 正则约束（^[a-z0-9][a-z0-9_-]{1,63}$），该字符集天然排除
  *   Windows 非法文件名字符（<>:"/\|?*），自定义 id 时显式校验并给出可操作报错；
  * - CI 守卫（§10"不在 CI 中写入 learnings"）：env.CI 为真时 createLearning
@@ -12,8 +13,8 @@
  */
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
-import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from 'yaml';
-import { atomicWrite, ensureTrailingNewline } from '../../infra/fsutil';
+import { parse as parseYaml, YAMLParseError } from 'yaml';
+import { atomicWrite } from '../../infra/fsutil';
 import type { Host } from '../../infra/host';
 import {
   type Learning,
@@ -22,6 +23,7 @@ import {
   LearningSchema,
   type PromoteTarget,
 } from '../../schema';
+import { serializeYamlDoc } from '../config/serialize';
 import type { Scope } from '../env';
 import { readEnv } from '../env';
 import { ConfigError } from '../errors';
@@ -102,11 +104,6 @@ export interface CreateLearningResult {
   readonly file: string;
   /** 内容重复的既有未晋升条目 id（§7.5：仍创建，命令层输出 warning）。 */
   readonly duplicateOf: string | undefined;
-}
-
-/** learning 条目 YAML 序列化（lineWidth 0：长 content 不折行，保证往返一致）。 */
-function serializeLearning(learning: Learning): string {
-  return ensureTrailingNewline(stringifyYaml(learning, { lineWidth: 0 }));
 }
 
 /**
@@ -235,7 +232,7 @@ export async function createLearning(
     promote_target: input.promoteTarget ?? 'custom_rule',
   });
 
-  await atomicWrite(host, file, serializeLearning(learning));
+  await atomicWrite(host, file, serializeYamlDoc(learning));
   return { learning, file, duplicateOf };
 }
 
@@ -283,7 +280,7 @@ export async function updateLearning(
     ...patch,
     updated_at: store.host.now().toISOString(),
   });
-  await atomicWrite(store.host, learningFilePath(store.sotRoot, id), serializeLearning(updated));
+  await atomicWrite(store.host, learningFilePath(store.sotRoot, id), serializeYamlDoc(updated));
   return updated;
 }
 

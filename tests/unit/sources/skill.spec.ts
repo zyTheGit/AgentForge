@@ -9,6 +9,8 @@
 
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { loadProfile } from '../../../src/core/config/load';
+import type { TargetLayer } from '../../../src/core/config/target-layer';
 import type { EnvSnapshot } from '../../../src/core/env';
 import { currentOs } from '../../../src/core/paths';
 import { addLocalSource, type SourceManagerContext } from '../../../src/core/sources/manager';
@@ -17,6 +19,7 @@ import {
   listSkills,
   MAX_COPY_DEPTH,
   readSkillsToMaterialize,
+  setSkillAlways,
   validateSkillName,
 } from '../../../src/core/sources/skill';
 import type { FileStat } from '../../../src/infra/host';
@@ -57,7 +60,7 @@ function skillCtx(host: ReturnType<typeof createDirAwareHost>) {
 }
 
 function mgrCtx(host: ReturnType<typeof createDirAwareHost>): SourceManagerContext {
-  return { host, env: envFor(), userSoTRoot: USER_SOT, cwd: PROJECT_ROOT };
+  return { host, env: envFor(), userSoTRoot: USER_SOT, cwd: PROJECT_ROOT, os: currentOs() };
 }
 
 /** 源里放一个 skill：<vendorRoot>/skills/<name>/SKILL.md（+ 可选附属文件）。 */
@@ -409,5 +412,141 @@ describe('addSkill 失败清理（不留残骸挡死下次安装）', () => {
 
     const retry = await addSkill(skillCtx(host), 'pdf', VENDOR);
     expect(retry.files).toEqual(['SKILL.md', 'a.md', 'b.md'].sort());
+  });
+});
+
+describe('addSkill 空安装守卫（产物必须含 SKILL.md）', () => {
+  it('源目录有文件但没有 SKILL.md → ConfigError(2)，且本次 copy 全部回滚', async () => {
+    // 修复前：files 里没有 SKILL.md 也算成功，命令层随即把名字登记进 skills.always，
+    // 此后每次 sync 都在 readSkillsToMaterialize 抛「声明的 skill 未安装」(2)，无法自愈
+    const host = createDirAwareHost();
+    host.files.set(path.join(VENDOR, 'skills', 'pdf', 'assets', 'note.md'), '附属文件');
+
+    await expect(addSkill(skillCtx(host), 'pdf', VENDOR)).rejects.toMatchObject({ code: 2 });
+
+    const targetDir = path.join(PROJECT_SOT, 'skills', 'pdf');
+    expect([...host.files.keys()].filter((k) => k.startsWith(targetDir))).toEqual([]);
+  });
+
+  it('SKILL.md 是 symlink（被安全边界跳过）→ ConfigError(2)，hint 点明 symlink', async () => {
+    const base = createDirAwareHost();
+    const skillDir = path.join(VENDOR, 'skills', 'pdf');
+    const doc = path.join(skillDir, 'SKILL.md');
+    base.files.set(doc, '正文（实为链接目标）');
+    base.files.set(path.join(skillDir, 'assets', 'note.md'), '附属文件');
+    const host = withSymlinks(base, [doc]);
+
+    await expect(addSkill(skillCtx(host), 'pdf', VENDOR)).rejects.toMatchObject({
+      code: 2,
+      hint: expect.stringContaining('符号链接'),
+      details: expect.objectContaining({ skipped: [{ path: doc, reason: 'symlink' }] }),
+    });
+    const targetDir = path.join(PROJECT_SOT, 'skills', 'pdf');
+    expect([...host.files.keys()].filter((k) => k.startsWith(targetDir))).toEqual([]);
+  });
+
+  it('回滚只清本次内容：用户预先建的空目录本身保留', async () => {
+    const host = createDirAwareHost();
+    host.files.set(path.join(VENDOR, 'skills', 'pdf', 'assets', 'note.md'), '附属文件');
+    const targetDir = path.join(PROJECT_SOT, 'skills', 'pdf');
+    expect(await host.mkdirExclusive(targetDir)).toBe(true);
+
+    await expect(addSkill(skillCtx(host), 'pdf', VENDOR)).rejects.toMatchObject({ code: 2 });
+    expect(await host.exists(targetDir)).toBe(true);
+    expect([...host.files.keys()].filter((k) => k.startsWith(targetDir))).toEqual([]);
+  });
+});
+
+describe('setSkillAlways', () => {
+  function projectLayer(): TargetLayer {
+    return {
+      scope: 'project',
+      sotRoot: PROJECT_SOT,
+      profileFile: path.join(PROJECT_SOT, 'profile.yaml'),
+    };
+  }
+
+  it('登记：追加到 skills.always 末尾；其他字段与 skills 子字段原样保留', async () => {
+    const host = createDirAwareHost();
+    host.files.set(
+      projectLayer().profileFile,
+      'version: 1\ntargets: [claude]\nskills:\n  copy_mode: copy\n',
+    );
+
+    const result = await setSkillAlways(host, projectLayer(), 'pdf', true);
+    expect(result.changed).toBe(true);
+    expect(result.always).toEqual(['pdf']);
+
+    const profile = await loadProfile(host, PROJECT_SOT);
+    expect(profile?.skills?.always).toEqual(['pdf']);
+    expect(profile?.skills?.copy_mode).toBe('copy');
+    expect(profile?.targets).toEqual(['claude']);
+  });
+
+  it('profile 无 skills 段：新建 skills.always（skill add 装完即可 sync）', async () => {
+    const host = createDirAwareHost();
+    host.files.set(projectLayer().profileFile, 'version: 1\ntargets: [opencode]\n');
+
+    await setSkillAlways(host, projectLayer(), 'pdf', true);
+    expect((await loadProfile(host, PROJECT_SOT))?.skills?.always).toEqual(['pdf']);
+  });
+
+  it('已登记 → changed false 且不写重名（重复 skill add 幂等）', async () => {
+    const host = createDirAwareHost();
+    host.files.set(
+      projectLayer().profileFile,
+      'version: 1\ntargets: [claude]\nskills:\n  always: [pdf]\n',
+    );
+
+    const result = await setSkillAlways(host, projectLayer(), 'pdf', true);
+    expect(result.changed).toBe(false);
+    expect(result.always).toEqual(['pdf']);
+    expect((await loadProfile(host, PROJECT_SOT))?.skills?.always).toEqual(['pdf']);
+  });
+
+  it('已登记时完全不写盘：profile.yaml 逐字节保留（注释与行内数组不被重排）', async () => {
+    const host = createDirAwareHost();
+    const raw = '# 手写注释\nversion: 1\ntargets: [claude]\nskills:\n  always: [pdf]\n';
+    host.files.set(projectLayer().profileFile, raw);
+
+    // editProfile 的写盘是整份重新序列化，注释与行内风格会丢；无改动必须跳过写盘，
+    // 否则重复 skill add 在 git 里就是一次纯格式 diff
+    expect((await setSkillAlways(host, projectLayer(), 'pdf', true)).changed).toBe(false);
+    expect(host.files.get(projectLayer().profileFile)).toBe(raw);
+  });
+
+  it('摘除：从数组移除；本就不含 → changed false', async () => {
+    const host = createDirAwareHost();
+    host.files.set(
+      projectLayer().profileFile,
+      'version: 1\ntargets: [claude]\nskills:\n  always: [pdf, code-review]\n',
+    );
+
+    expect((await setSkillAlways(host, projectLayer(), 'pdf', false)).always).toEqual([
+      'code-review',
+    ]);
+    expect((await setSkillAlways(host, projectLayer(), 'pdf', false)).changed).toBe(false);
+    expect((await loadProfile(host, PROJECT_SOT))?.skills?.always).toEqual(['code-review']);
+  });
+
+  it('user 层 targetLayer：写 user 层 profile.yaml（登记层与安装层同源）', async () => {
+    const host = createDirAwareHost();
+    const userLayer: TargetLayer = {
+      scope: 'user',
+      sotRoot: USER_SOT,
+      profileFile: path.join(USER_SOT, 'profile.yaml'),
+    };
+    await setSkillAlways(host, userLayer, 'pdf', true);
+    expect((await loadProfile(host, USER_SOT))?.skills?.always).toEqual(['pdf']);
+    expect(await host.exists(path.join(PROJECT_SOT, 'profile.yaml'))).toBe(false);
+  });
+
+  it('非法 skill 名 → ConfigError(2)，不写盘', async () => {
+    const host = createDirAwareHost();
+    host.files.set(projectLayer().profileFile, 'version: 1\ntargets: [claude]\n');
+    await expect(setSkillAlways(host, projectLayer(), 'a/b', true)).rejects.toThrow(
+      expect.objectContaining({ code: 2 }),
+    );
+    expect((await loadProfile(host, PROJECT_SOT))?.skills?.always).toBeUndefined();
   });
 });

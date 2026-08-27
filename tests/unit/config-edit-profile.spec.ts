@@ -8,7 +8,13 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-import { editProfile, newProfileDefaults } from '../../src/core/config/edit-profile';
+import {
+  editProfile,
+  editProfileLocked,
+  editProfileStringArray,
+  newProfileDefaults,
+  type ProfileStringArrayField,
+} from '../../src/core/config/edit-profile';
 import { loadProfile } from '../../src/core/config/load';
 import type { TargetLayer } from '../../src/core/config/target-layer';
 import { currentOs, type OsContext } from '../../src/core/paths';
@@ -167,5 +173,149 @@ describe('editProfile 并发（SoT 事务锁：读-改-写不被覆盖）', () =
     await expect(editProfile(host, layer(), (p) => p, OS)).resolves.toMatchObject({
       profileFile: PROFILE_FILE_PATH,
     });
+  });
+});
+
+/**
+ * editProfileStringArray：`skills.always`（skill add）与 `templates`
+ * （template enable/disable）共用的登记 / 摘除语义，幂等只有这一处实现。
+ */
+describe('editProfileStringArray', () => {
+  const TEMPLATES: ProfileStringArrayField = {
+    read: (profile) => profile.templates,
+    write: (profile, next) => ({ ...profile, templates: next }),
+  };
+  const SKILLS_ALWAYS: ProfileStringArrayField = {
+    read: (profile) => profile.skills?.always,
+    write: (profile, next) => ({ ...profile, skills: { ...profile.skills, always: next } }),
+  };
+
+  it('登记：追加到末尾，changed=true，落盘', async () => {
+    const host = createDirAwareHost();
+    host.files.set(PROFILE_FILE_PATH, 'version: 1\ntargets:\n  - claude\ntemplates:\n  - keep\n');
+
+    const result = await editProfileStringArray(
+      (mutate) => editProfile(host, layer(), mutate),
+      TEMPLATES,
+      'added',
+      true,
+    );
+
+    expect(result).toMatchObject({ next: ['keep', 'added'], changed: true });
+    expect(parseYaml(host.files.get(PROFILE_FILE_PATH) ?? '').templates).toEqual(['keep', 'added']);
+  });
+
+  it('登记已存在项：changed=false 且**不写盘**（不产生纯格式 diff），next 仍是当前值', async () => {
+    const host = createDirAwareHost();
+    const original = 'version: 1\ntargets: [claude]\ntemplates: [keep] # 注释\n';
+    host.files.set(PROFILE_FILE_PATH, original);
+
+    const result = await editProfileStringArray(
+      (mutate) => editProfile(host, layer(), mutate),
+      TEMPLATES,
+      'keep',
+      true,
+    );
+
+    expect(result).toMatchObject({ next: ['keep'], changed: false });
+    // 逐字节未变：注释与行内数组风格都还在
+    expect(host.files.get(PROFILE_FILE_PATH)).toBe(original);
+  });
+
+  it('摘除：移除该项，changed=true；摘到空数组仍写 []', async () => {
+    const host = createDirAwareHost();
+    host.files.set(PROFILE_FILE_PATH, 'version: 1\ntargets:\n  - claude\ntemplates:\n  - only\n');
+
+    const result = await editProfileStringArray(
+      (mutate) => editProfile(host, layer(), mutate),
+      TEMPLATES,
+      'only',
+      false,
+    );
+
+    expect(result).toMatchObject({ next: [], changed: true });
+    expect(parseYaml(host.files.get(PROFILE_FILE_PATH) ?? '').templates).toEqual([]);
+  });
+
+  it('摘除不存在项：changed=false 且不写盘', async () => {
+    const host = createDirAwareHost();
+    const result = await editProfileStringArray(
+      (mutate) => editProfile(host, layer(), mutate),
+      TEMPLATES,
+      'nope',
+      false,
+    );
+
+    expect(result).toMatchObject({ next: [], changed: false });
+    expect(host.files.has(PROFILE_FILE_PATH)).toBe(false);
+  });
+
+  it('字段缺省（未设置）视为 []：登记后只有该项', async () => {
+    const host = createDirAwareHost();
+    const result = await editProfileStringArray(
+      (mutate) => editProfile(host, layer(), mutate),
+      SKILLS_ALWAYS,
+      's1',
+      true,
+    );
+
+    expect(result.next).toEqual(['s1']);
+    expect(parseYaml(host.files.get(PROFILE_FILE_PATH) ?? '').skills.always).toEqual(['s1']);
+  });
+
+  it('嵌套字段的 setter 不丢同级键（skills.on_demand 原样保留）', async () => {
+    const host = createDirAwareHost();
+    host.files.set(
+      PROFILE_FILE_PATH,
+      'version: 1\ntargets:\n  - claude\nskills:\n  on_demand:\n    - od\n',
+    );
+
+    await editProfileStringArray(
+      (mutate) => editProfile(host, layer(), mutate),
+      SKILLS_ALWAYS,
+      's1',
+      true,
+    );
+
+    expect(parseYaml(host.files.get(PROFILE_FILE_PATH) ?? '').skills).toEqual({
+      on_demand: ['od'],
+      always: ['s1'],
+    });
+  });
+
+  it('runner 走 editProfileLocked（已持锁调用方）：结果与自取锁路径一致', async () => {
+    const host = createDirAwareHost();
+    host.files.set(PROFILE_FILE_PATH, 'version: 1\ntargets:\n  - claude\n');
+
+    const locked = await editProfileStringArray(
+      (mutate) => editProfileLocked(host, layer(), mutate),
+      SKILLS_ALWAYS,
+      's1',
+      true,
+    );
+
+    expect(locked).toMatchObject({ profileFile: PROFILE_FILE_PATH, next: ['s1'], changed: true });
+    // 本路径不自取锁：锁目录内的 meta 文件未出现（不与调用方已持有的锁互撞）
+    expect([...host.files.keys()].some((k) => k.includes('.sync.lock'))).toBe(false);
+  });
+
+  it('next 是新数组：不与入参 profile 的数组共享引用（mutate 纯函数约定）', async () => {
+    const host = createDirAwareHost();
+    host.files.set(PROFILE_FILE_PATH, 'version: 1\ntargets:\n  - claude\ntemplates:\n  - keep\n');
+
+    let seen: readonly string[] | undefined;
+    const result = await editProfileStringArray(
+      (mutate) =>
+        editProfile(host, layer(), (profile) => {
+          seen = profile.templates;
+          return mutate(profile);
+        }),
+      TEMPLATES,
+      'keep',
+      true,
+    );
+
+    expect(result.next).toEqual(['keep']);
+    expect(result.next).not.toBe(seen);
   });
 });

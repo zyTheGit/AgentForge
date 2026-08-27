@@ -50,7 +50,7 @@ function tplCtx(host: ReturnType<typeof createDirAwareHost>, effectiveTemplates:
 }
 
 function mgrCtx(host: ReturnType<typeof createDirAwareHost>): SourceManagerContext {
-  return { host, env: envFor(), userSoTRoot: USER_SOT, cwd: PROJECT_ROOT };
+  return { host, env: envFor(), userSoTRoot: USER_SOT, cwd: PROJECT_ROOT, os: currentOs() };
 }
 
 function projectLayer(): TargetLayer {

@@ -4,6 +4,8 @@
  * - addSkill：从源（local 路径 / git store）**实体 copy** 到目标层 SoT
  *   `skills\<name\>\`（递归目录；非 symlink，§7.6 Windows 默认；写入为独立
  *   文件——修改 SoT 副本不影响源）。目标已存在 → ConflictError(3)；
+ * - setSkillAlways / validateSkillName：实现在 skill-registry（登记要持 SoT 锁、
+ *   要读改写 profile.yaml，与"文件搬运"不是一件事），本模块原样再导出；
  * - listSkills：目标层 SoT skills\ + 各源 skills 清单（源侧直接列目录名，
  *   manifest.skills 为 loose 结构不作强约束）；
  * - readSkillsToMaterialize：sync 引擎的物化数据源（§5.3 同名优先级
@@ -35,9 +37,18 @@ import {
   type SourceManagerContext,
   sourceRootDir,
 } from './manager';
+import { validateSkillName } from './skill-registry';
 
-/** skill 名安全校验（目录名）：字母数字开头，可含字母数字/./_/-，总长 ≤64。 */
-const SKILL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/**
+ * skill 名规则与 `skills.always` 登记搬到了 skill-registry（登记要持 SoT 锁、要读改写
+ * profile.yaml，与"文件搬运"不是一件事）；这里原样再导出，对外仍是同一个入口。
+ */
+export {
+  type SetSkillAlwaysResult,
+  setSkillAlways,
+  setSkillAlwaysLocked,
+  validateSkillName,
+} from './skill-registry';
 
 /** 递归 copy 深度上限（超过 → ConfigError(2)；正常 skill 目录远不及此）。 */
 export const MAX_COPY_DEPTH = 32;
@@ -74,6 +85,14 @@ export interface AddSkillResult {
   readonly files: string[];
   /** 跳过的项（symlink / 环路）；空数组表示无跳过。 */
   readonly skipped: SkippedEntry[];
+  /**
+   * copy 前目标目录是否已存在（必为空目录，否则冲突检查已拦下）。
+   *
+   * 给调用方做后续步骤失败时的补偿回滚用（见 rollbackSkillCopy 的两种语义）：
+   * 命令层"copy 成功但登记 skills.always 失败"要撤销 copy，必须知道那个空目录
+   * 是不是用户自己建的——不能删自己没创建的东西。
+   */
+  readonly targetPreexisted: boolean;
 }
 
 /** 清单项。 */
@@ -83,19 +102,6 @@ export interface SkillListItem {
   readonly status: 'installed' | 'available';
   /** installed 项的所在层（project / user）；available 项为来源源 id。 */
   readonly origin: string;
-}
-
-/** 校验 skill 名（目录名安全）。@throws ConfigError(2) 名字非法。 */
-export function validateSkillName(name: string): void {
-  if (!SKILL_NAME_PATTERN.test(name)) {
-    throw new ConfigError(
-      `非法 skill 名: ${name}（须以字母或数字开头，长度 1-64，仅含字母数字、点、下划线、连字符）`,
-      {
-        hint: 'skill 名同时是 SoT 下的目录名（skills/<name>/），不能包含路径分隔符等字符',
-        details: { name },
-      },
-    );
-  }
 }
 
 /** copy 过程共享状态（累积文件清单 / 跳过项 / 环路基准）。 */
@@ -185,7 +191,7 @@ async function copyDirDeep(
  * 创建的）→ 只删本次写入的子项，保留那个空目录本身（不删自己没创建的东西）。
  * 两种情况回滚后目标都回到"无内容"状态，与冲突检查的前置条件一致。
  */
-async function rollbackSkillCopy(
+export async function rollbackSkillCopy(
   host: Host,
   targetDir: string,
   preexisted: boolean,
@@ -209,7 +215,8 @@ async function rollbackSkillCopy(
  * @param from 源标识：登记的源 id、或源根目录路径（其下 skills\<name\>\）、
  *        或直接指向 skill 目录本身（含 SKILL.md）的路径。缺省时按登记顺序
  *        在全部源中找首个含该 skill 的源。
- * @throws ConfigError(2) 名字非法 / 源或 skill 不存在 / 源目录层级过深；
+ * @throws ConfigError(2) 名字非法 / 源或 skill 不存在 / 源目录层级过深 /
+ *         copy 产物不含 SKILL.md（空安装，见下）。
  * @throws ConflictError(3) 目标 skills\<name\> 已存在内容。
  */
 export async function addSkill(
@@ -243,6 +250,8 @@ export async function addSkill(
   };
   try {
     await copyDirDeep(state, skillDir.dir, targetDir, '', 0);
+    // 4. 空安装守卫：产物必须含 SKILL.md（sync 物化的唯一正文来源）
+    assertSkillDocCopied(state, name, targetDir, skillDir.dir);
   } catch (err) {
     await rollbackSkillCopy(ctx.host, targetDir, targetPreexisted);
     throw err;
@@ -255,7 +264,48 @@ export async function addSkill(
     targetDir,
     files: state.files.sort(),
     skipped: state.skipped,
+    targetPreexisted,
   };
+}
+
+/**
+ * 产物不含 SKILL.md → ConfigError(2)（**空安装**必须失败，不能登记成功）。
+ *
+ * 为什么修在这里而不是命令层：`--no-register` 路径也要被保护。空安装（源目录为空，
+ * 或 SKILL.md 本身是 symlink 被 copyDirDeep 跳过）过去照样返回成功，命令层随即把
+ * 名字登记进 skills.always；此后每次 `aforge sync` 都在 readSkillsToMaterialize
+ * 抛「声明的 skill 未安装」(2)，而重跑 `skill add` 因冲突判据是「目标目录非空」
+ * 也不会报冲突——依旧空装 + 幂等登记，用户只能手改 profile.yaml 才能自愈。
+ *
+ * 消息里带上 skipped 清单：symlink 项是"为什么复制出来是空的"的唯一线索（§10
+ * 不跟随符号链接）。抛出后由 addSkill 的 catch 走 rollbackSkillCopy 撤销本次 copy。
+ */
+function assertSkillDocCopied(
+  state: CopyState,
+  name: string,
+  targetDir: string,
+  fromDir: string,
+): void {
+  if (state.files.includes(SKILL_DOC_FILENAME)) {
+    return;
+  }
+  const skippedDoc = state.skipped.filter((entry) => entry.path.endsWith(SKILL_DOC_FILENAME));
+  throw new ConfigError(
+    `skill 安装产物不含 ${SKILL_DOC_FILENAME}: ${name}（源 ${fromDir}，复制了 ${state.files.length} 个文件）`,
+    {
+      hint:
+        skippedDoc.length > 0
+          ? `源里的 ${SKILL_DOC_FILENAME} 是符号链接，已按安全边界跳过（§10 不跟随 symlink）：把它替换为实体文件后重试`
+          : `确认源目录 ${fromDir} 下有 ${SKILL_DOC_FILENAME}（sync 只物化该文件的正文）`,
+      details: {
+        name,
+        targetDir,
+        fromDir,
+        files: state.files,
+        skipped: state.skipped,
+      },
+    },
+  );
 }
 
 /** 源 skill 目录定位结果。 */
@@ -280,6 +330,7 @@ async function locateSourceSkillDir(
     env: ctx.env,
     userSoTRoot: ctx.userSoTRoot,
     cwd: ctx.cwd,
+    os: ctx.os,
   };
 
   if (from !== undefined) {
@@ -386,6 +437,7 @@ export async function listSkills(ctx: SkillContext): Promise<SkillListItem[]> {
     env: ctx.env,
     userSoTRoot: ctx.userSoTRoot,
     cwd: ctx.cwd,
+    os: ctx.os,
   };
   for (const source of await listSources(mgr)) {
     if (source.enabled === false) {

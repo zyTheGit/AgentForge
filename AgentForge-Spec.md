@@ -306,6 +306,8 @@ extensions: object
 
 **`skills.on_demand`（MVP 决定）：** 只登记不物化——`sync` 仅投影 `skills.always`；`on_demand` 清单由 `aforge status` 展示并标注"declared only - not projected in MVP"。按需装载属 Phase 2。
 
+**`skills.always` 的维护方：** 除手写外，`aforge skill add` 会把装入的技能名自动登记进**同一层** `profile.yaml` 的 `skills.always`（幂等，`--no-register` 关闭，见 §7.6）；该回写会重排整份 `profile.yaml` 的格式并丢弃注释（§7.6"写 `profile.yaml` 的副作用"）。
+
 **Windows 安装默认值：**
 
 ```yaml
@@ -433,7 +435,7 @@ mcp: []
 | `aforge learnings list\|show\|edit\|rm` | 管理 learnings |
 | `aforge source add\|list\|remove\|update` | 模板/skill 源 |
 | `aforge template list\|enable\|disable` | 模板 |
-| `aforge skill add\|list` | Skill |
+| `aforge skill add [--from <源名\|路径>] [--no-register]\|list` | Skill（`add` 默认登记进 `skills.always`，`--no-register` 关闭） |
 | `aforge mcp add` | MCP 描述加入 SoT（交互录入，或 `--from-json` 从 stdin 读 JSON 声明） |
 | `aforge status` | 状态与路径 |
 | `aforge doctor` | 诊断 |
@@ -530,9 +532,11 @@ mcp: []
 |------|------|
 | source add local | 登记路径 |
 | source add git | clone 到 store，检出 pin，记录 commit |
-| skill add | **copy** 到 SoT skills 目录 |
+| skill add | **copy** 到 SoT skills 目录 + 登记进目标层 `profile.yaml` 的 `skills.always`（幂等，`--no-register` 关闭） |
 | template enable | 只改 profile.templates |
 | 默认 | 不使用 symlink |
+
+**写 `profile.yaml` 的副作用**：`skill add`、`mcp add`、`template enable` 均经 `editProfile` 回写整份文档（`stringifyYaml(整个对象)`），YAML 注释、空行与行内数组风格（`targets: [claude]`）会丢失，键顺序变为对象插入顺序。手写的 `profile.yaml` 在被这些命令改过后需按重排后的形态阅读。
 
 ### 7.7 Import（MVP 基础版）
 
@@ -697,6 +701,14 @@ interface Projector {
 11. 多个 template 启用时，合并输出符合 §5.2 优先级。
 12. sync 任一 target 失败时，所有 target 回滚到 sync 前状态。
 13. `aforge import` 从 AGENTS.md 导入工具链声明，映射到 habits detected 字段。
+
+---
+
+### 11.3 代码组织门禁
+
+- **`src\` 下单个 `.ts` 文件不得超过 500 行**，由 `npm run lint:size`（`scripts\check-file-size.mjs`）在 `npm run lint` 与 CI 主 job 中强制。
+- 超标即视为该文件承担了多个职责，处理方式是按职责拆模块并保持对外导出面不变；不接受删注释/压行来凑数。
+- 只约束 `src\`：`tests\` 里一个 spec 对应一个被测模块，长度来自用例堆叠而非职责不清。
 
 ---
 

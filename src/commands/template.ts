@@ -60,7 +60,7 @@ export async function runSetTemplateEnabled(
 ): Promise<SetTemplateResult> {
   const env = readEnv(ctx.host);
   const targetLayer = await resolveWriteTargetLayer(ctx.host, env, ctx.os, ctx.cwd);
-  return setTemplateEnabled(ctx.host, targetLayer, id, enabled);
+  return setTemplateEnabled(ctx.host, targetLayer, id, enabled, ctx.os);
 }
 
 /** 单行模板摘要（ASCII；builtin 项加 always-rendered 注记）。 */

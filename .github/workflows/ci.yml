@@ -26,6 +26,9 @@ jobs:
       # bun 只用于 build:bun 的编译步骤，不参与装包。
       - run: npm ci
       - run: npm run gen:version:check
+      # lint（biome + src 单文件 500 行体积卡口）只在主 job 跑：结果与平台无关，
+      # 三个 job 各跑一遍纯属浪费额度
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm run test
 

@@ -21,17 +21,20 @@
  * promoted:false，用户处理掉冲突/权限问题后可直接重跑 promote。
  *
  * 并发（round-2 修复）：整段「读条目 → 校验 → 写产物 → 写 promoted 标记」在
- * **SoT 事务锁**内执行（project/engine.withSotLock，与 sync 同一把 `.sync.lock`）。
+ * **SoT 事务锁**内执行（project/sync-lock.withSotLock，与 sync 同一把 `.sync.lock`）。
+ * 锁原语直接从 project/sync-lock 取而不经 project/engine 转出口——engine 顶层会求值
+ * 整套 sync 引擎（projector 注册表、sources/skill、writer），为一个锁函数拖进来无谓，
+ * 与 config/edit-profile 同源（见该模块头「依赖方向」）。
  * 不持锁时有两个窗口：① 两个并发 promote 都读到 promoted:false → 产物写两遍、
  * 标记互相覆盖；② 与 sync 并发时 sync 的备份基准已过期，回滚会覆盖 promote 的写入。
  * 条目在锁内**重新读取**（锁外那次只用于确定要锁哪几个 SoT 根）。
  */
 import path from 'node:path';
-import { stringify as stringifyYaml } from 'yaml';
-import { atomicWrite, ensureTrailingNewline, mkdirp } from '../../infra/fsutil';
+import { atomicWrite, mkdirp } from '../../infra/fsutil';
 import type { Host } from '../../infra/host';
 import { type HabitsInput, type Learning, LearningSchema } from '../../schema';
 import { HABITS_FILE, loadHabits } from '../config/load';
+import { serializeYamlDoc } from '../config/serialize';
 import type { EnvSnapshot } from '../env';
 import { ConfigError, ConflictError } from '../errors';
 import {
@@ -41,7 +44,7 @@ import {
   SKILL_DOC_FILENAME,
   SKILLS_DIRNAME,
 } from '../paths';
-import { withSotLock } from '../project/engine';
+import { withSotLock } from '../project/sync-lock';
 import { learningFilePath, readLearningFile } from './store';
 
 /** promote 上下文（host/env/os/cwd 注入；测试可换 fake host）。 */
@@ -107,11 +110,7 @@ async function appendPromoteNote(host: Host, sotRoot: string, learning: Learning
   habits.detected = detected;
 
   await mkdirp(host, sotRoot);
-  await atomicWrite(
-    host,
-    habitsFile,
-    ensureTrailingNewline(stringifyYaml(habits, { lineWidth: 0 })),
-  );
+  await atomicWrite(host, habitsFile, serializeYamlDoc(habits));
   return habitsFile;
 }
 
@@ -258,11 +257,7 @@ async function promoteInLock(
     promoted_at: now,
     updated_at: now,
   });
-  await atomicWrite(
-    host,
-    learningFilePath(found.sotRoot, id),
-    ensureTrailingNewline(stringifyYaml(promoted, { lineWidth: 0 })),
-  );
+  await atomicWrite(host, learningFilePath(found.sotRoot, id), serializeYamlDoc(promoted));
 
   return {
     learning: promoted,

@@ -225,7 +225,7 @@ describe('syncOnce — 单 target 闭环（claude）', () => {
     // opencode / pi 主规则共用根 AGENTS.md（投影矩阵 §8.7）；各自 MCP 配置独立
     expect(host.files.has(path.join(CWD, 'AGENTS.md'))).toBe(true);
     expect(host.files.has(path.join(CWD, 'opencode.json'))).toBe(true);
-    expect(host.files.has(path.join(CWD, '.pi', 'settings.json'))).toBe(true);
+    expect(host.files.has(path.join(CWD, '.pi', 'mcp.json'))).toBe(true);
     expect(host.files.has(path.join(CWD, '.mcp.json'))).toBe(true); // claude 在 targets 内
     expect(host.files.has(path.join(CWD, '.codex', 'config.toml'))).toBe(false); // codex 未启用
   });

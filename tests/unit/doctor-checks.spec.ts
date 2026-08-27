@@ -312,7 +312,7 @@ describe('runDoctorChecks — marker_mode: none 时 plan 与 sync 一致（build
 
     const report = await runDoctorChecks(doctorOpts(host));
     // buildPlanCtx 漏传 markerMode 时 plan 仍产出 merge_marker →
-    // checkProjectionHash 会在这份无 marker 的投影上误报"无 marker 区间"
+    // checkOneProjectionFile 会在这份无 marker 的投影上误报"无 marker 区间"
     const markerChecks = report.results.filter((r) => r.item.startsWith('projection-hash/'));
     expect(markerChecks).toEqual([]);
     expect(report.results.some((r) => r.detail.includes('无 marker 区间'))).toBe(false);
@@ -509,5 +509,25 @@ describe('runDoctorChecks — broken symlink（§9 symlink 失败检查）', () 
     expect(r.detail).toContain('broken-skill');
     expect(r.hint).toContain('copy_mode');
     expect(report.exitCode).toBe(0); // warn 不抬升退出码
+  });
+
+  it('PI_CODING_AGENT_DIR 置位 → warn（未置位时不产出该项）', async () => {
+    const withVar = createFakeHost({
+      HOME,
+      PI_CODING_AGENT_DIR: path.join(HOME, 'custom-pi'),
+    });
+    await seedProjectSoT(withVar);
+    const withVarReport = await runDoctorChecks(doctorOpts(withVar));
+    const r = resultOf(withVarReport, 'pi-coding-agent-dir');
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain('custom-pi');
+    expect(r.hint).toContain('user scope');
+    expect(withVarReport.exitCode).toBe(0); // warn 不抬升退出码
+
+    // 未置位：不产出该项（避免给没用 pi 的用户增加噪音）
+    const without = createFakeHost({ HOME });
+    await seedProjectSoT(without);
+    const withoutReport = await runDoctorChecks(doctorOpts(without));
+    expect(withoutReport.results.some((x) => x.item === 'pi-coding-agent-dir')).toBe(false);
   });
 });

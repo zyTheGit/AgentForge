@@ -11,7 +11,11 @@ import path from 'node:path';
 import { BASE_DEFAULT_TEMPLATE_ID } from '../../assets/templates';
 import { listDirSafe } from '../../infra/fsutil';
 import type { Host } from '../../infra/host';
-import { editProfile } from '../config/edit-profile';
+import {
+  editProfile,
+  editProfileStringArray,
+  type ProfileStringArrayField,
+} from '../config/edit-profile';
 import type { TargetLayer } from '../config/target-layer';
 import type { EnvSnapshot } from '../env';
 import { type OsContext, toPosixSeparators } from '../paths';
@@ -92,6 +96,7 @@ export async function listTemplates(ctx: TemplateContext): Promise<TemplateListI
     env: ctx.env,
     userSoTRoot: ctx.userSoTRoot,
     cwd: ctx.cwd,
+    os: ctx.os,
   };
   for (const source of await listSources(mgr)) {
     if (source.enabled === false) {
@@ -124,6 +129,12 @@ export interface SetTemplateResult {
   readonly changed: boolean;
 }
 
+/** `templates` 的字段访问器（与 skills.always 共用同一套幂等语义，见 editProfileStringArray）。 */
+const TEMPLATES_FIELD: ProfileStringArrayField = {
+  read: (profile) => profile.templates,
+  write: (profile, next) => ({ ...profile, templates: next }),
+};
+
 /**
  * 启用 / 禁用模板（§7.6：只改 profile.templates）。
  *
@@ -131,6 +142,8 @@ export interface SetTemplateResult {
  * 自己的 profile.yaml：templates 缺省视为 []；enable 追加到末尾、disable 移除；
  * 禁用到空数组写入 `templates: []`（合法；base/default 仍恒渲染，§5.2 第 ④ 层）。
  *
+ * @param os 宿主平台（透传给 editProfile 决定锁目录的长路径归一）；缺省由
+ *        editProfile 取当前进程平台，跨平台用例必须显式注入。
  * @throws ConfigError(2) 目标层 profile.yaml 损坏 / 修改后校验失败。
  */
 export async function setTemplateEnabled(
@@ -138,25 +151,20 @@ export async function setTemplateEnabled(
   targetLayer: TargetLayer,
   id: string,
   enabled: boolean,
+  os?: OsContext,
 ): Promise<SetTemplateResult> {
-  let next: string[] = [];
-  let changed = false;
-  const { profileFile } = await editProfile(host, targetLayer, (profile) => {
-    const current = profile.templates ?? [];
-    next = enabled
-      ? current.includes(id)
-        ? current
-        : [...current, id]
-      : current.filter((t) => t !== id);
-    changed = next.length !== current.length;
-    return { ...profile, templates: next };
-  });
+  const result = await editProfileStringArray(
+    (mutate) => editProfile(host, targetLayer, mutate, os),
+    TEMPLATES_FIELD,
+    id,
+    enabled,
+  );
 
   return {
     id,
     enabled,
-    profileFile,
-    templates: next,
-    changed,
+    profileFile: result.profileFile,
+    templates: result.next,
+    changed: result.changed,
   };
 }

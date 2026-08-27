@@ -48,6 +48,7 @@ function managerContext(ctx: SourceCommandContext): SourceManagerContext {
     env,
     userSoTRoot: resolveUserSoT(env, ctx.os),
     cwd: ctx.cwd,
+    os: ctx.os,
   };
 }
 

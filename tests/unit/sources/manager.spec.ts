@@ -11,6 +11,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { EnvSnapshot } from '../../../src/core/env';
 import { ConfigError } from '../../../src/core/errors';
+import { currentOs } from '../../../src/core/paths';
 import {
   addGitSource,
   addLocalSource,
@@ -57,6 +58,7 @@ function ctxFor(
     },
     userSoTRoot: USER_SOT,
     cwd: CWD,
+    os: currentOs(),
   };
 }
 

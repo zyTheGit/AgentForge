@@ -8,6 +8,7 @@ import { ConfigError, GenericError } from '../../src/core/errors';
 import {
   currentOs,
   detectOneDrive,
+  isWithinAnyRoot,
   longPathAware,
   resolveProjectSoT,
   resolveTargetUserDirs,
@@ -15,6 +16,7 @@ import {
   SKILL_DOC_FILENAME,
   SKILLS_DIRNAME,
   samePath,
+  stripLongPathPrefix,
   toPosixSeparators,
   validatePath,
 } from '../../src/core/paths';
@@ -307,5 +309,49 @@ describe('skills 布局常量（Spec §2.3；projectors/shared 原样再导出�
   it('SKILLS_DIRNAME / SKILL_DOC_FILENAME 取值固定', () => {
     expect(SKILLS_DIRNAME).toBe('skills');
     expect(SKILL_DOC_FILENAME).toBe('SKILL.md');
+  });
+});
+
+describe('stripLongPathPrefix', () => {
+  it('剥掉 \\\\?\\ 前缀；UNC 前缀还原成 \\\\server\\share', () => {
+    expect(stripLongPathPrefix('\\\\?\\C:\\proj\\a')).toBe('C:\\proj\\a');
+    expect(stripLongPathPrefix('\\\\?\\UNC\\srv\\share')).toBe('\\\\srv\\share');
+  });
+
+  it('无前缀原样返回（posix 路径不受影响）', () => {
+    expect(stripLongPathPrefix('C:\\proj\\a')).toBe('C:\\proj\\a');
+    expect(stripLongPathPrefix('/home/u/x')).toBe('/home/u/x');
+  });
+});
+
+describe('isWithinAnyRoot（§10 边界判定：恢复 journal / 锁根解析共用）', () => {
+  it('root 自身与其子路径都算在内', () => {
+    expect(isWithinAnyRoot('C:\\proj', ['C:\\proj'], WIN)).toBe(true);
+    expect(isWithinAnyRoot('C:\\proj\\a\\b', ['C:\\proj'], WIN)).toBe(true);
+  });
+
+  it('win32 大小写折叠：盘符与目录名大小写不同仍算在内', () => {
+    expect(isWithinAnyRoot('c:\\Proj\\A', ['C:\\proj'], WIN)).toBe(true);
+  });
+
+  it('posix 大小写敏感：只差大小写即视为不同根', () => {
+    expect(isWithinAnyRoot('/home/U/x', ['/home/u'], POSIX)).toBe(false);
+    expect(isWithinAnyRoot('/home/u/x', ['/home/u'], POSIX)).toBe(true);
+  });
+
+  it('同名前缀不算在内（字符串前缀比较会误判 C:\\a-b 在 C:\\a 内）', () => {
+    expect(isWithinAnyRoot('C:\\a-b', ['C:\\a'], WIN)).toBe(false);
+    expect(isWithinAnyRoot('/home/user2', ['/home/user'], POSIX)).toBe(false);
+  });
+
+  it('长路径前缀与裸根混比：两侧先剥前缀再判（边界不随路径长度漂移）', () => {
+    expect(isWithinAnyRoot('\\\\?\\C:\\proj\\a', ['C:\\proj'], WIN)).toBe(true);
+    expect(isWithinAnyRoot('C:\\proj\\a', ['\\\\?\\C:\\proj'], WIN)).toBe(true);
+  });
+
+  it('多根：命中任一即 true；全不命中 / 空白名单 → false', () => {
+    expect(isWithinAnyRoot('D:\\other\\x', ['C:\\proj', 'D:\\other'], WIN)).toBe(true);
+    expect(isWithinAnyRoot('E:\\x', ['C:\\proj', 'D:\\other'], WIN)).toBe(false);
+    expect(isWithinAnyRoot('C:\\proj\\a', [], WIN)).toBe(false);
   });
 });

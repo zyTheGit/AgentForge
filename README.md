@@ -147,10 +147,10 @@ aforge skill add find-skills --from D:\clones\vercel-labs-skills   # 源根
 aforge skill add my-skill --from .\drafts\my-skill                 # 技能目录本身
 ```
 
-**装完还不会生效**：`skill add` 只把文件拷进 `.agentforge\skills\`，要投影给各 Agent 还得在 `profile.yaml` 的 `skills.always` 里点名，然后 `sync`：
+`skill add` 除了把文件拷进 `.agentforge\skills\`，还会把技能名登记进**同一层** `profile.yaml` 的 `skills.always`（幂等，重复 add 不会写重名），所以装完直接 `sync` 就能投影：
 
 ```yaml
-# .agentforge\profile.yaml
+# .agentforge\profile.yaml（skill add 自动维护）
 skills:
   copy_mode: copy
   always:
@@ -159,6 +159,14 @@ skills:
 
 ```powershell
 aforge sync
+```
+
+注意：凡是会写 `profile.yaml` 的命令（`skill add`、`mcp add`、`template enable`）都是整份重新序列化，YAML 注释、空行和行内数组写法（`targets: [claude]`）会丢失，键顺序变成程序内部顺序——手写过的 `profile.yaml` 被这些命令改过后格式会变。
+
+只想拷文件、自己手工编排 `profile.yaml` 的话加 `--no-register`：
+
+```powershell
+aforge skill add find-skills --no-register
 ```
 
 投影落点（project scope，`SKILL.md` 正文）：
@@ -174,7 +182,9 @@ aforge sync
 - 目标 `skills\<name>` 已有内容 → 退出码 3，先手删该目录再装；
 - 源里的 symlink 一律跳过不跟随（防私钥等被读进 SoT），跳过项在输出的 `skipped` 里列出；
 - `skills.always` 点了名却没装 → `sync` 直接报错退出码 2；
+- 装到 user 层时注意 §5.3 合并语义：`merge.arrays: replace`（缺省）下 project 层自己写了 `skills.always` 就会整体覆盖 user 层那份；
 - 附属文件（脚本、参考资料）会拷进 SoT，但当前只有 `SKILL.md` 正文参与投影。
+
 
 ## 登记 MCP 服务器
 

@@ -11,63 +11,69 @@
  * 6. OneDrive 检测（§2.1.1 → warn）；
  * 7. 声明值与 detected 不一致（§4.1：声明优先，仅提示 → warn）；
  * 8. 现有 merge_json 投影损坏（硬项 error(3)，soft 项 warn——§8.2/§8.6）；
- * 9. profile.skills.on_demand 清单（信息项：MVP 只登记不物化，§4.2 注记）。
+ * 9. profile.skills.on_demand 清单（信息项：MVP 只登记不物化，§4.2 注记）；
+ * 10. pi 的 MCP 历史落点残留（`.pi\settings.json` 含 `mcpServers` → warn，只诊断不删）。
  *
  * 设计原则：
  * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题；
  * - 无持久副作用：除目录可写性探针（mkdirp + 临时文件 + 删除，§7.3-7 语义）
  *   外不写任何文件——探针创建的空目录与 sync 行为一致，无害；
- * - 渲染路径与 sync 共用（engine.renderRulesMd，单一事实源）；
+ * - 与 sync 共用 `sync-prepare.renderRulesMd`（不经 engine 门面）；
  * - 聚合退出码见 doctorExitCode（Permission 4 > Conflict 3 > 其他 error；仅 warn → 0）。
+ *
+ * 模块划分（本文件只留 runDoctorChecks 的检查项编排，各检查项实现在同目录）：
+ * - `check-types`：对外数据契约（DoctorCheckResult / DoctorReport）与退出码归属；
+ * - `check-config`：SoT 根解析 / 初始化 / 坏 YAML / 三层配置装配（后续检查的前置）；
+ * - `check-paths`：doctor 侧 plan ctx 构造、§9 第 1 条路径枚举、启用 target 的投影计划；
+ * - `check-writable`：SoT 根与目标目录可写性探针（唯一有写副作用的检查）；
+ * - `check-residuals`：事务残留（锁 / journal / 回滚失败备份）的级别与提示取舍；
+ * - `check-consistency`：渲染基准 / 模板解析 / on_demand / sync-meta / merge_json；
+ * - `check-projection-hash`：marker 区间三方比对（当前渲染 vs 记录 vs 磁盘）；
+ * - `check-environment`：declared vs detected / OneDrive / 断开的 symlink。
+ *
+ * 类型与 doctorExitCode 在此 re-export：既有调用方（commands/doctor、测试）继续从
+ * `./checks` 单点 import，拆分不改变对外导出面。
  */
-import { randomBytes } from 'node:crypto';
-import path from 'node:path';
-import { sha256Hex } from '../../infra/fsutil';
+
 import type { Host } from '../../infra/host';
-import type { SyncMeta } from '../../schema';
-import { type EffectiveConfig, resolveEffectiveConfig } from '../config/defaults';
-import { HABITS_FILE, loadHabits, loadProfile, PROFILE_FILE } from '../config/load';
-import type { EnvSnapshot, Scope } from '../env';
-import { AgentForgeError, ExitCode } from '../errors';
-import { resolveTemplate } from '../generate/resolver';
-import { renderedSectionHash, splitByMarkers } from '../markers';
+import type { EffectiveConfig } from '../config/defaults';
+import type { EnvSnapshot } from '../env';
+import { ExitCode } from '../errors';
+import type { OsContext } from '../paths';
 import {
-  detectOneDrive,
-  type OsContext,
-  resolveProjectSoT,
-  resolveUserSoT,
-  SKILLS_DIRNAME,
-} from '../paths';
-import { inspectSyncResiduals, renderRulesMd, type SyncResidual } from '../project/engine';
-import { projectorRegistry } from '../project/projectors/registry';
-import { readSyncMeta, SYNC_META_FILE } from '../project/sync-meta';
-import type { ProjectContext } from '../project/types';
+  checkInitialization,
+  checkYamlFiles,
+  type DoctorRoots,
+  existingSotDirs,
+  resolveConfigForDoctor,
+  resolveDoctorRoots,
+} from './check-config';
+import {
+  checkMergeJson,
+  checkSkillsOnDemand,
+  checkTemplates,
+  readSyncMetaForDoctor,
+  renderForDoctor,
+} from './check-consistency';
+import {
+  checkBrokenSymlinks,
+  checkDeclaredVsDetected,
+  checkOneDrive,
+  checkPiCodingAgentDir,
+} from './check-environment';
+import { buildPlanCtx, checkTargetPaths, collectEnabledPlans } from './check-paths';
+import { checkProjectionHashes } from './check-projection-hash';
+import { piLegacyMcpResults, residualResults } from './check-residuals';
+import { type DoctorCheckResult, type DoctorReport, doctorExitCode } from './check-types';
+import { checkSotWritable, checkTargetDirsWritable } from './check-writable';
 
-/** 单项检查结果级别（人类可读输出映射为 OK / WARN / FAIL，纯 ASCII）。 */
-export type DoctorLevel = 'ok' | 'warn' | 'error';
-
-/** 报告分组（人类可读输出按此分节）。 */
-export type DoctorSection = 'config' | 'paths' | 'consistency' | 'environment';
-
-/** 单项检查结果（--json 输出的原子单元；路径一律绝对路径字符串，§6.2）。 */
-export interface DoctorCheckResult {
-  readonly section: DoctorSection;
-  readonly level: DoctorLevel;
-  /** 检查项标识（如 initialization / yaml/user.profile.yaml / path/claude）。 */
-  readonly item: string;
-  /** 详情（可含 \n 多行）。 */
-  readonly detail: string;
-  /** error 级的退出码归属（2=配置 / 3=冲突 / 4=权限 / 1=UNC 等）；ok/warn 不设。 */
-  readonly code?: ExitCode;
-  /** 修复建议（error/warn 级附操作指引）。 */
-  readonly hint?: string;
-}
-
-/** doctor 诊断报告：全部检查项 + 聚合退出码。 */
-export interface DoctorReport {
-  readonly results: readonly DoctorCheckResult[];
-  readonly exitCode: number;
-}
+export {
+  type DoctorCheckResult,
+  type DoctorLevel,
+  type DoctorReport,
+  type DoctorSection,
+  doctorExitCode,
+} from './check-types';
 
 /** doctor 输入（host/os/cwd 由命令层注入；测试可注入 fake host 与任意平台）。 */
 export interface DoctorOptions {
@@ -78,728 +84,117 @@ export interface DoctorOptions {
 }
 
 /**
- * 聚合退出码（Spec §6.1 语义在 doctor 的映射，M7 任务定义）：
- * - 任一 error 级 Permission 类（code 4）→ 4；
- * - 否则任一 error 级 Conflict 类（code 3）→ 3；
- * - 否则任一其他 error（code 2 配置 / 1 UNC 等）→ 取最大值；
- * - 仅 warn / ok → 0。
- */
-export function doctorExitCode(results: readonly DoctorCheckResult[]): number {
-  let code: number = ExitCode.Success;
-  for (const result of results) {
-    if (result.level === 'error') {
-      const candidate = result.code ?? ExitCode.Config;
-      if (candidate > code) {
-        code = candidate;
-      }
-    }
-  }
-  return code;
-}
-
-/** 任意错误的退出码归属：AgentForgeError → 其 code；未知 → 2（配置域安全默认）。 */
-function toDoctorCode(err: unknown): ExitCode {
-  return err instanceof AgentForgeError ? err.code : ExitCode.Config;
-}
-
-/** 任意错误的 message（诊断条目 detail 用）。 */
-function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-/** AgentForgeError 的 hint（有则透传给检查条目）。 */
-function errHint(err: unknown): string | undefined {
-  return err instanceof AgentForgeError ? err.hint : undefined;
-}
-
-/** detected 快照（loose object）中取 node/python 的 manager 字段。 */
-function detectedManagerOf(
-  detected: Record<string, unknown>,
-  key: 'node' | 'python',
-): string | undefined {
-  const entry = detected[key];
-  if (typeof entry !== 'object' || entry === null) {
-    return undefined;
-  }
-  const manager = (entry as Record<string, unknown>).manager;
-  return typeof manager === 'string' ? manager : undefined;
-}
-
-/**
- * doctor 内部的 plan ctx 构造（与 engine.syncOnce 的 ctx 同构；dryRun: true 表诊断不写）。
- *
- * markerMode 必须注入（P2 修复）：缺失时 ProjectContext 按历史默认
- * `replace_between_markers` 处理，projector 的主规则动作恒为 merge_marker；而
- * 用户配置 `marker_mode: none` 时 sync 实际走整文件 write（types.mainRuleAction），
- * 两侧不一致会让 doctor 的 marker 区间比对（checkProjectionHash）在无 marker 的
- * 投影上误报"marker 被移除"。engine / status / init 三处 plan ctx 均已注入，此处对齐。
- */
-function buildPlanCtx(
-  os: OsContext,
-  scope: Scope,
-  rootDir: string,
-  renderedRulesMd: string,
-  config: EffectiveConfig,
-  env: EnvSnapshot,
-): ProjectContext {
-  return {
-    os,
-    scope,
-    rootDir,
-    renderedRulesMd,
-    habits: config.habits,
-    profile: config.profile,
-    skillsToMaterialize: [],
-    mcpServers: config.profile.mcp.servers ?? [],
-    dryRun: true,
-    lineEnding: config.profile.projection.line_ending,
-    markerBegin: config.profile.projection.marker_begin,
-    markerEnd: config.profile.projection.marker_end,
-    markerMode: config.profile.projection.marker_mode,
-    env,
-  };
-}
-
-interface ProbeResult {
-  readonly ok: boolean;
-  readonly error?: string;
-}
-
-/**
- * 目录可写性探测：mkdirp（§7.3-7 目录自动创建语义——sync 同样会创建）→
- * 写入探针文件 → 删除。任何**写入**失败均视为不可写（探针写入失败的场景，
- * 实际投影写入同样会失败）。
- *
- * P3 修复：
- * - 探针删除放进 finally——rm 失败或写入抛错时都不留残留文件；且 rm 自身失败
- *   不再改变可写判定（能写入即证明可写，清理失败只是垃圾文件）；
- * - 文件名加随机后缀（参照 fsutil.atomicWrite 的 randomBytes 做法）：仅用毫秒
- *   时间戳时并发 doctor 会撞名并互删对方探针，导致误判不可写。
- */
-async function probeWritable(host: Host, dir: string): Promise<ProbeResult> {
-  let probe: string | undefined;
-  try {
-    await host.mkdirp(dir);
-    probe = path.join(
-      dir,
-      `.agf-doctor-probe-${host.now().getTime()}-${randomBytes(6).toString('hex')}`,
-    );
-    await host.writeFile(probe, '');
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: errMessage(err) };
-  } finally {
-    if (probe !== undefined) {
-      try {
-        await host.rm(probe);
-      } catch {
-        // 清理失败不改变可写判定（随机后缀保证不会误伤并发 doctor 的探针）
-      }
-    }
-  }
-}
-
-/**
- * 单个投影文件的 marker 区间一致性检查（§9 第 3 条，M7）：
- * 三方比对——当前渲染 hash（A）、sync-meta 记录值（B）、投影区间实际 hash（C）：
- * - C ≠ B：区间与上次 sync 记录不一致 → warn（可能被手动修改）；
- * - C = B ≠ A：投影未被动过但 SoT 已变更 → warn（过期，未 sync）；
- * - C = B = A：一致 → ok；
- * - 文件不存在 / 无 marker / 读取失败 → warn（漂移或不可诊断）。
- */
-async function checkProjectionHash(
-  host: Host,
-  results: DoctorCheckResult[],
-  targetId: string,
-  filePath: string,
-  recordedHash: string,
-  currentHash: string,
-  markerBegin: string,
-  markerEnd: string,
-): Promise<void> {
-  const item = `projection-hash/${targetId}`;
-  if (!(await host.exists(filePath))) {
-    results.push({
-      section: 'consistency',
-      level: 'warn',
-      item,
-      detail: `投影文件不存在: ${filePath}`,
-      hint: '执行 aforge sync 重建投影',
-    });
-    return;
-  }
-  let content: string;
-  try {
-    content = await host.readFile(filePath);
-  } catch (err) {
-    results.push({
-      section: 'consistency',
-      level: 'warn',
-      item,
-      detail: `投影文件无法读取: ${filePath}\n${errMessage(err)}`,
-    });
-    return;
-  }
-  const split = splitByMarkers(content, markerBegin, markerEnd);
-  if (!split.hasMarkers) {
-    results.push({
-      section: 'consistency',
-      level: 'warn',
-      item,
-      detail: `投影文件无 marker 区间（可能被移除）: ${filePath}`,
-      hint: '执行 aforge sync 重新追加投影区间',
-    });
-    return;
-  }
-  const sectionHash = sha256Hex(split.inside);
-  if (sectionHash !== recordedHash) {
-    results.push({
-      section: 'consistency',
-      level: 'warn',
-      item,
-      detail: `hash 不一致（投影与上次 sync 记录不符，可能被手动修改）: ${filePath}`,
-      hint: '确认修改无需保留后执行 aforge sync --force 覆盖；否则请先恢复区间内容',
-    });
-  } else if (sectionHash !== currentHash) {
-    results.push({
-      section: 'consistency',
-      level: 'warn',
-      item,
-      detail: `投影可能过期或被修改（SoT 在上次 sync 后已变更）: ${filePath}`,
-      hint: '执行 aforge sync 更新投影',
-    });
-  } else {
-    results.push({
-      section: 'consistency',
-      level: 'ok',
-      item,
-      detail: `一致: ${filePath}`,
-    });
-  }
-}
-
-/**
  * 执行全部 doctor 检查（§9）。
  *
  * @returns 结构化报告（results + 聚合退出码）。本函数不打印、不因单项失败中断。
  */
-/**
- * 事务残留 → 诊断结果（§9；level/hint 的取舍见下）。
- *
- * `lock-live` 报 ok 而非 warn：另一个 sync 正在写入是**正常并发**，报警会诱导用户
- * 去删别人正在用的锁。`backup-failed` 的 hint 绝不能提"删掉即可"——那是回滚不完整
- * 时用户手上唯一的原文副本，必须先核对再由用户自己处置。
- */
-async function residualResults(
-  host: Host,
-  sotRoot: string,
-  os: OsContext,
-): Promise<DoctorCheckResult[]> {
-  const residuals = await inspectSyncResiduals(host, sotRoot, os);
-  if (residuals.length === 0) {
-    return [
-      { section: 'consistency', level: 'ok', item: 'residuals', detail: `无事务残留: ${sotRoot}` },
-    ];
-  }
-  return residuals.map((residual) => ({
-    section: 'consistency' as const,
-    level: residual.kind === 'lock-live' ? ('ok' as const) : ('warn' as const),
-    item: `residual/${residual.kind}`,
-    detail: `${residual.detail}\n  ${residual.path}`,
-    hint: residualHint(residual),
-  }));
-}
-
-/** 每类残留的可操作提示（`lock-live` 无需动作 → undefined）。 */
-function residualHint(residual: SyncResidual): string | undefined {
-  switch (residual.kind) {
-    case 'lock-live':
-      return undefined;
-    case 'lock-stale':
-      return '确认无 aforge 进程在运行后删除该锁目录；下次 sync 也会在超过陈旧阈值时自行抢占';
-    case 'journal-pending':
-      return '下次 aforge sync 会据此日志回滚上次被中断的写入，通常无需手工处理';
-    case 'backup-failed':
-      return '这是上次回滚未能恢复的文件的唯一备份副本：请先与当前投影文件逐一核对，确认无需恢复后再自行删除该目录';
-  }
-}
-
 export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport> {
   const results: DoctorCheckResult[] = [];
   const { host, env, os, cwd } = opts;
 
   // ---- 根目录解析（user 根不可解析（无用户目录 / UNC AGF_HOME）→ error）----
-  let userSoTRoot: string | undefined;
-  try {
-    userSoTRoot = resolveUserSoT(env, os);
-  } catch (err) {
-    results.push({
-      section: 'config',
-      level: 'error',
-      code: toDoctorCode(err),
-      item: 'user-sot-root',
-      detail: errMessage(err),
-      hint: errHint(err),
-    });
-  }
-  const projectSoTRoot = resolveProjectSoT(cwd, os);
-  // user 根不可解析时以 project 根占位（该层文件被加载两次，幂等无副作用）
-  const userRootForLoad = userSoTRoot ?? projectSoTRoot;
+  const roots = resolveDoctorRoots(results, env, os, cwd);
+  const { userSoTRoot, projectSoTRoot } = roots;
 
   // ---- 初始化检查（两层 SoT 是否有 profile/habits；全无 → error 并终止后续）----
-  const userInit =
-    userSoTRoot !== undefined &&
-    ((await host.exists(path.join(userSoTRoot, PROFILE_FILE))) ||
-      (await host.exists(path.join(userSoTRoot, HABITS_FILE))));
-  const projectInit =
-    (await host.exists(path.join(projectSoTRoot, PROFILE_FILE))) ||
-    (await host.exists(path.join(projectSoTRoot, HABITS_FILE)));
-  const initialized = userInit || projectInit;
-  results.push({
-    section: 'config',
-    level: initialized ? 'ok' : 'error',
-    code: initialized ? undefined : ExitCode.Config,
-    item: 'initialization',
-    detail: [
-      `user SoT    : ${userSoTRoot ?? '(unresolvable)'} ${userInit ? '(initialized)' : '(not initialized)'}`,
-      `project SoT : ${projectSoTRoot} ${projectInit ? '(initialized)' : '(not initialized)'}`,
-    ].join('\n'),
-    hint: initialized ? undefined : '先运行 aforge init 建立任一层 SoT',
-  });
-  if (!initialized) {
+  if (!(await checkInitialization(host, results, roots))) {
     return { results, exitCode: doctorExitCode(results) };
   }
 
   // ---- SoT 根可写性（只探测实际存在的层；不创建未初始化层）----
-  const sotDirs: string[] = [];
-  if (userSoTRoot !== undefined && (await host.exists(userSoTRoot))) {
-    sotDirs.push(userSoTRoot);
-  }
-  if (await host.exists(projectSoTRoot)) {
-    sotDirs.push(projectSoTRoot);
-  }
-  for (const dir of sotDirs) {
-    const probe = await probeWritable(host, dir);
-    results.push(
-      probe.ok
-        ? { section: 'paths', level: 'ok', item: 'writable', detail: `可写: ${dir}` }
-        : {
-            section: 'paths',
-            level: 'error',
-            code: ExitCode.Permission,
-            item: 'writable',
-            detail: `不可写: ${dir}${probe.error ? `（${probe.error}）` : ''}`,
-            hint: '检查目录写权限（必要时以管理员身份运行），或把 SoT 移到用户可写位置',
-          },
-    );
-  }
+  const sotDirs = await existingSotDirs(host, roots);
+  await checkSotWritable(host, results, sotDirs);
 
   // ---- 事务残留（锁 / 未提交 journal / 回滚失败保留的备份；只读诊断，不清理）----
   for (const dir of sotDirs) {
     results.push(...(await residualResults(host, dir, os)));
   }
 
+  // ---- 投影侧历史落点残留：pi 的 MCP 曾写在 .pi/settings.json（只诊断，不删）----
+  results.push(...(await piLegacyMcpResults(host, cwd, env.userProfile, os)));
+
   // ---- 坏 YAML 检查（§9：逐文件报告损坏的 habits / profile）----
-  const yamlChecks: ReadonlyArray<readonly [string, () => Promise<unknown>]> = [
-    [`user/${PROFILE_FILE}`, () => loadProfile(host, userRootForLoad)],
-    [`user/${HABITS_FILE}`, () => loadHabits(host, userRootForLoad)],
-    [`project/${PROFILE_FILE}`, () => loadProfile(host, projectSoTRoot)],
-    [`project/${HABITS_FILE}`, () => loadHabits(host, projectSoTRoot)],
-  ];
-  let yamlOk = true;
-  for (const [item, load] of yamlChecks) {
-    try {
-      await load();
-    } catch (err) {
-      yamlOk = false;
-      results.push({
-        section: 'config',
-        level: 'error',
-        code: toDoctorCode(err),
-        item: `yaml/${item}`,
-        detail: errMessage(err),
-        hint: errHint(err) ?? '修正该文件的 YAML 语法或字段结构后重试',
-      });
-    }
-  }
+  const yamlOk = await checkYamlFiles(host, results, roots);
 
   // ---- 三层配置装配（坏 YAML 时跳过——错误已在上面逐文件报告，避免重复）----
   let config: EffectiveConfig | undefined;
   if (yamlOk) {
-    try {
-      config = await resolveEffectiveConfig(env, userRootForLoad, projectSoTRoot, host);
-    } catch (err) {
-      results.push({
-        section: 'config',
-        level: 'error',
-        code: toDoctorCode(err),
-        item: 'effective-config',
-        detail: errMessage(err),
-        hint: errHint(err) ?? '按错误信息修正 profile.yaml / habits.yaml 的合并结果',
-      });
-    }
+    config = await resolveConfigForDoctor(host, results, env, roots);
   }
 
   if (config !== undefined) {
-    // ---- 当前 SoT 渲染（hash 基准；与 sync 共用 engine.renderRulesMd）----
-    let rendered: string | undefined;
-    try {
-      rendered = await renderRulesMd(
-        host,
-        userRootForLoad,
-        projectSoTRoot,
-        config.habits,
-        config.profile,
-      );
-    } catch (err) {
-      results.push({
-        section: 'consistency',
-        level: 'error',
-        code: toDoctorCode(err),
-        item: 'render',
-        detail: errMessage(err),
-        hint: errHint(err),
-      });
-    }
-
-    // ---- §9 第 1 条：各 target 解析后的绝对路径（project + user scope）----
-    for (const projector of projectorRegistry.list()) {
-      const projectPaths = projector
-        .plan(buildPlanCtx(os, 'project', cwd, rendered ?? '', config, env))
-        .items.map((i) => i.path);
-      const detailLines = [`project: ${projectPaths.join('; ')}`];
-      if (env.userProfile === undefined || env.userProfile === '') {
-        detailLines.push('user    : (user dir unresolvable)');
-      } else {
-        const userPaths = projector
-          .plan(buildPlanCtx(os, 'user', env.userProfile, rendered ?? '', config, env))
-          .items.map((i) => i.path);
-        detailLines.push(`user    : ${userPaths.join('; ')}`);
-      }
-      results.push({
-        section: 'paths',
-        level: 'ok',
-        item: `path/${projector.id}`,
-        detail: detailLines.join('\n'),
-      });
-    }
-
-    // ---- §9 第 5 条：未解析的 template id（sync 将失败，error(2)）----
-    const templateIds = config.profile.templates ?? [];
-    if (templateIds.length === 0) {
-      results.push({
-        section: 'consistency',
-        level: 'ok',
-        item: 'templates',
-        detail: 'profile.templates 未声明（渲染仅含 base/default）',
-      });
-    } else {
-      let unresolved = false;
-      for (const id of templateIds) {
-        try {
-          await resolveTemplate(id, {
-            host,
-            userSoTRoot: userRootForLoad,
-            projectSoTRoot,
-            storeRoot: path.join(userRootForLoad, 'store'),
-          });
-        } catch (err) {
-          unresolved = true;
-          results.push({
-            section: 'consistency',
-            level: 'error',
-            code: toDoctorCode(err),
-            item: `template/${id}`,
-            detail: errMessage(err),
-            hint: errHint(err),
-          });
-        }
-      }
-      if (!unresolved) {
-        results.push({
-          section: 'consistency',
-          level: 'ok',
-          item: 'templates',
-          detail: `全部 ${templateIds.length} 个模板 id 解析成功`,
-        });
-      }
-    }
-
-    // ---- profile.skills.on_demand：MVP 只登记不物化（Spec §4.2 注记）----
-    // 与 status 的展示口径一致（同一句 "declared only - not projected in MVP"），
-    // 让"声明了但不会被投影"这件事在 doctor 里也可见；纯信息项，恒 ok（不影响退出码）
-    const onDemandSkills = config.profile.skills.on_demand ?? [];
-    results.push({
-      section: 'config',
-      level: 'ok',
-      item: 'skills-on-demand',
-      detail:
-        onDemandSkills.length === 0
-          ? 'profile.skills.on_demand 未声明'
-          : `${onDemandSkills.join(', ')} (declared only - not projected in MVP)`,
-    });
-
-    // ---- sync-meta 读取（损坏 → error(2)；不存在 → 信息性 ok）----
-    const sotRoot = config.effectiveScope === 'project' ? projectSoTRoot : userRootForLoad;
-    let syncMeta: SyncMeta | null = null;
-    let syncMetaReadOk = true;
-    try {
-      syncMeta = await readSyncMeta(host, sotRoot);
-    } catch (err) {
-      syncMetaReadOk = false;
-      results.push({
-        section: 'consistency',
-        level: 'error',
-        code: toDoctorCode(err),
-        item: 'sync-meta',
-        detail: errMessage(err),
-        hint: errHint(err),
-      });
-    }
-    if (syncMetaReadOk) {
-      results.push(
-        syncMeta === null
-          ? {
-              section: 'consistency',
-              level: 'ok',
-              item: 'sync-meta',
-              detail: `尚未 sync（${path.join(sotRoot, SYNC_META_FILE)} 不存在）`,
-            }
-          : {
-              section: 'consistency',
-              level: 'ok',
-              item: 'sync-meta',
-              detail: `${path.join(sotRoot, SYNC_META_FILE)}（lastSyncAt: ${syncMeta.lastSyncAt}）`,
-            },
-      );
-    }
-
-    // ---- 有效 scope 的投影 rootDir（user scope 需要用户目录，§8.5）----
-    const rootDir = config.effectiveScope === 'project' ? cwd : env.userProfile;
-    if (rootDir === undefined || rootDir === '') {
-      results.push({
-        section: 'consistency',
-        level: 'error',
-        code: ExitCode.Config,
-        item: 'projection-root',
-        detail: 'user scope 投影需要用户目录（USERPROFILE 与 HOME 均未设置）',
-        hint: '设置 USERPROFILE（Windows）或 HOME 后重试',
-      });
-    } else {
-      const ctx = buildPlanCtx(os, config.effectiveScope, rootDir, rendered ?? '', config, env);
-
-      // ---- §9 第 3 条：当前渲染 hash vs 投影 marker 区间 hash（三方比对）----
-      const markerBegin = config.profile.projection.marker_begin;
-      const markerEnd = config.profile.projection.marker_end;
-      if (rendered !== undefined && syncMeta !== null) {
-        const currentHash = renderedSectionHash(rendered, markerBegin, markerEnd);
-        const recordedIds = Object.keys(syncMeta.targets);
-        if (recordedIds.length === 0) {
-          results.push({
-            section: 'consistency',
-            level: 'ok',
-            item: 'projection-hash',
-            detail: 'sync-meta 无投影记录（尚无成功 sync 的 target）',
-          });
-        }
-        for (const targetId of recordedIds) {
-          const projector = projectorRegistry.get(targetId);
-          const recorded = syncMeta.targets[targetId];
-          if (projector === undefined || recorded === undefined) {
-            results.push({
-              section: 'consistency',
-              level: 'warn',
-              item: `projection-hash/${targetId}`,
-              detail: 'sync-meta 记录了未知 target（可能由更新版本的 aforge 写入）',
-            });
-            continue;
-          }
-          for (const item of projector.plan(ctx).items) {
-            if (item.action !== 'merge_marker') {
-              continue; // 只比对 md marker 区间（§8.2-4 检测范围，与 sync 预检查一致）
-            }
-            await checkProjectionHash(
-              host,
-              results,
-              targetId,
-              item.path,
-              recorded.contentHash,
-              currentHash,
-              markerBegin,
-              markerEnd,
-            );
-          }
-        }
-      }
-
-      // ---- 有效 scope 启用 target 的投影计划（merge_json 检查与目标目录可写性共用）----
-      const enabledTargets = (config.profile.targets as readonly string[]).includes.bind(
-        config.profile.targets,
-      );
-      const enabledPlans = projectorRegistry
-        .list()
-        .filter((p) => enabledTargets(p.id))
-        .map((p) => ({ projector: p, plan: p.plan(ctx) }));
-
-      // ---- 现有 merge_json 投影损坏（硬项 error(3)；soft 项 warn，§8.2/§8.6）----
-      for (const { projector, plan } of enabledPlans) {
-        for (const item of plan.items) {
-          if (item.action !== 'merge_json') {
-            continue;
-          }
-          if (!(await host.exists(item.path))) {
-            continue;
-          }
-          try {
-            JSON.parse(await host.readFile(item.path));
-          } catch (err) {
-            const soft = item.soft === true;
-            results.push({
-              section: 'consistency',
-              level: soft ? 'warn' : 'error',
-              code: soft ? undefined : ExitCode.Conflict,
-              item: `merge-json/${projector.id}`,
-              detail: `现有 JSON 投影无法解析（sync 时将拒绝合并）: ${item.path}\n${errMessage(err)}`,
-              hint: '手动修复或删除该文件后重新执行 aforge sync（AgentForge 不会覆盖无法解析的内容）',
-            });
-          }
-        }
-      }
-
-      // ---- §9 第 2 条：目标目录可写性（mkdirp + 探针；不可写 → error(4)）----
-      const targetDirs = new Set<string>();
-      for (const { plan } of enabledPlans) {
-        for (const item of plan.items) {
-          targetDirs.add(path.dirname(item.path));
-        }
-      }
-      for (const dir of [...targetDirs].sort()) {
-        const probe = await probeWritable(host, dir);
-        results.push(
-          probe.ok
-            ? { section: 'paths', level: 'ok', item: 'writable', detail: `可写: ${dir}` }
-            : {
-                section: 'paths',
-                level: 'error',
-                code: ExitCode.Permission,
-                item: 'writable',
-                detail: `不可写: ${dir}${probe.error ? `（${probe.error}）` : ''}`,
-                hint: '检查目录写权限（必要时以管理员身份运行），或把项目移到用户可写位置',
-              },
-        );
-      }
-    }
-
-    // ---- 声明值与 detected 不一致提示（§4.1：声明优先，渲染不受影响，仅提示）----
-    const pairs: ReadonlyArray<readonly ['node' | 'python', string | undefined]> = [
-      ['node', config.habits.runtime.node?.manager],
-      ['python', config.habits.runtime.python?.manager],
-    ];
-    let mismatch = false;
-    for (const [key, declared] of pairs) {
-      if (declared === undefined) {
-        continue;
-      }
-      const detected = detectedManagerOf(config.habits.detected, key);
-      if (detected === undefined || detected === 'none') {
-        continue; // 未探测到（detected 无快照 / none）：不算不一致
-      }
-      if (declared !== detected) {
-        mismatch = true;
-        results.push({
-          section: 'environment',
-          level: 'warn',
-          item: `declared-vs-detected/${key}`,
-          detail: `habits 声明 ${key}.manager=${declared}，但 detected 快照为 ${detected}`,
-          hint: '声明字段优先于 detected（渲染不受影响）；如环境已变化可运行 aforge detect 刷新快照',
-        });
-      }
-    }
-    if (!mismatch) {
-      results.push({
-        section: 'environment',
-        level: 'ok',
-        item: 'declared-vs-detected',
-        detail: '声明的 node/python manager 与 detected 快照一致（或无可比项）',
-      });
-    }
+    await runConfigDependentChecks(host, results, env, os, cwd, roots, config);
   }
 
   // ---- OneDrive 检测（§2.1.1 → warn）----
-  if (env.userProfile !== undefined && env.userProfile !== '') {
-    if (detectOneDrive(env.userProfile, host)) {
-      results.push({
-        section: 'environment',
-        level: 'warn',
-        item: 'onedrive',
-        detail: `用户目录处于 OneDrive 同步范围: ${env.userProfile}`,
-        hint: '建议把 AGF_HOME 与项目目录移出 OneDrive（文件锁 / 占位符状态可能导致投影写入失败）',
-      });
-    } else {
-      results.push({
-        section: 'environment',
-        level: 'ok',
-        item: 'onedrive',
-        detail: '未检测到 OneDrive 同步（用户目录不在 OneDrive 范围内）',
-      });
-    }
-  }
+  checkOneDrive(results, env, host);
+
+  // ---- PI_CODING_AGENT_DIR 置位提示（§2.2 已知限制 → warn）----
+  checkPiCodingAgentDir(results, env);
 
   // ---- §9 symlink 失败检查：扫描 SoT skills/ 目录，检测断开的 symlink → warn ----
-  const skillsDirs: string[] = [];
-  if (userSoTRoot !== undefined) {
-    skillsDirs.push(path.join(userSoTRoot, SKILLS_DIRNAME));
-  }
-  skillsDirs.push(path.join(projectSoTRoot, SKILLS_DIRNAME));
-  const brokenSymlinks: string[] = [];
-  for (const dir of skillsDirs) {
-    let entries: string[];
-    try {
-      entries = await host.listDir(dir);
-    } catch {
-      continue; // 目录不存在 / 不可读：跳过
-    }
-    for (const name of entries) {
-      const entryPath = path.join(dir, name);
-      let lstatResult: { isSymbolicLink: boolean };
-      try {
-        lstatResult = await host.lstat(entryPath);
-      } catch {
-        continue; // lstat 失败（不应该发生，因为 listDir 已列出）：跳过
-      }
-      if (!lstatResult.isSymbolicLink) {
-        continue;
-      }
-      // 是 symlink，检查目标是否存在
-      let target: string;
-      try {
-        target = await host.readlink(entryPath);
-      } catch {
-        continue; // readlink 失败：跳过
-      }
-      // 检查 symlink 目标是否存在（用 exists，它会跟随 symlink）
-      const targetExists = await host.exists(entryPath);
-      if (!targetExists) {
-        brokenSymlinks.push(`${entryPath} -> ${target}`);
-      }
-    }
-  }
-  if (brokenSymlinks.length > 0) {
-    results.push({
-      section: 'environment',
-      level: 'warn',
-      item: 'broken-symlink',
-      detail: `发现 ${brokenSymlinks.length} 个断开的 symlink:\n${brokenSymlinks.join('\n')}`,
-      hint: '建议设置 skills.copy_mode: copy（避免 symlink 跨平台问题），或删除无效 symlink 后重新 skill add',
-    });
-  } else {
-    results.push({
-      section: 'environment',
-      level: 'ok',
-      item: 'broken-symlink',
-      detail: '未发现断开的 symlink（skills/ 目录）',
-    });
-  }
+  await checkBrokenSymlinks(host, results, userSoTRoot, projectSoTRoot);
 
   return { results, exitCode: doctorExitCode(results) };
+}
+
+/**
+ * 需要 EffectiveConfig 的检查项（渲染 / 路径 / 模板 / sync-meta / 投影 / detected）。
+ *
+ * 单独一个函数只为让 runDoctorChecks 的顶层流程保持在一屏内：装配失败时整块跳过，
+ * 与原先的 `if (config !== undefined) { ... }` 块语义、顺序完全一致。
+ */
+async function runConfigDependentChecks(
+  host: Host,
+  results: DoctorCheckResult[],
+  env: EnvSnapshot,
+  os: OsContext,
+  cwd: string,
+  roots: DoctorRoots,
+  config: EffectiveConfig,
+): Promise<void> {
+  // ---- 当前 SoT 渲染（hash 基准；与 sync 共用 sync-prepare.renderRulesMd，不经 engine 门面）----
+  const rendered = await renderForDoctor(host, results, roots, config);
+
+  // ---- §9 第 1 条：各 target 解析后的绝对路径（project + user scope）----
+  checkTargetPaths(results, os, cwd, rendered, config, env);
+
+  // ---- §9 第 5 条：未解析的 template id（sync 将失败，error(2)）----
+  await checkTemplates(host, results, roots, config);
+
+  // ---- profile.skills.on_demand：MVP 只登记不物化（Spec §4.2 注记）----
+  checkSkillsOnDemand(results, config);
+
+  // ---- sync-meta 读取（损坏 → error(2)；不存在 → 信息性 ok）----
+  const syncMeta = await readSyncMetaForDoctor(host, results, roots, config);
+
+  // ---- 有效 scope 的投影 rootDir（user scope 需要用户目录，§8.5）----
+  const rootDir = config.effectiveScope === 'project' ? cwd : env.userProfile;
+  if (rootDir === undefined || rootDir === '') {
+    results.push({
+      section: 'consistency',
+      level: 'error',
+      code: ExitCode.Config,
+      item: 'projection-root',
+      detail: 'user scope 投影需要用户目录（USERPROFILE 与 HOME 均未设置）',
+      hint: '设置 USERPROFILE（Windows）或 HOME 后重试',
+    });
+  } else {
+    const ctx = buildPlanCtx(os, config.effectiveScope, rootDir, rendered ?? '', config, env);
+
+    // ---- §9 第 3 条：当前渲染 hash vs 投影 marker 区间 hash（三方比对）----
+    await checkProjectionHashes(host, results, ctx, rendered, syncMeta);
+
+    // ---- 有效 scope 启用 target 的投影计划（merge_json 检查与目标目录可写性共用）----
+    const enabledPlans = collectEnabledPlans(ctx, config);
+
+    // ---- 现有 merge_json 投影损坏（硬项 error(3)；soft 项 warn，§8.2/§8.6）----
+    await checkMergeJson(host, results, enabledPlans);
+
+    // ---- §9 第 2 条：目标目录可写性（mkdirp + 探针；不可写 → error(4)）----
+    await checkTargetDirsWritable(host, results, enabledPlans);
+  }
+
+  // ---- 声明值与 detected 不一致提示（§4.1：声明优先，渲染不受影响，仅提示）----
+  checkDeclaredVsDetected(results, config);
 }
