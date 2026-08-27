@@ -180,18 +180,22 @@ aforge sync
 
 `aforge mcp add` 把声明写进目标层 `profile.yaml` 的 `mcp.servers`（同名 upsert，重复 add 即更新），`sync` 时再翻译成各 Agent 的原生 MCP 配置。
 
-交互录入（需要真实终端）：
+交互录入（需要真实终端）。以装 `npx -y @zythegit/jenkins-config-mcp` 为例：
 
 ```powershell
 aforge mcp add
-# name → transport（stdio/http/sse）→ command/args/env 或 url/headers
+#   name      : jenkins-config
+#   transport : stdio
+#   command   : npx
+#   args      : -y @zythegit/jenkins-config-mcp     ← 空格分隔，自动切成数组
+#   env       : 留空（需要凭据时填 JENKINS_URL=...,JENKINS_TOKEN=...）
 ```
 
 脚本化：从 stdin 读一个 JSON 声明（注意标志是 `--from-json`）：
 
 ```powershell
-# stdio：命令行启动的本地 server
-'{"name":"fs","transport":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","C:\\work"]}' |
+# stdio：npx 拉起的本地 server
+'{"name":"jenkins-config","transport":"stdio","command":"npx","args":["-y","@zythegit/jenkins-config-mcp"]}' |
   aforge mcp add --from-json
 
 # http：远端端点（带鉴权头）
@@ -199,7 +203,7 @@ aforge mcp add
   aforge mcp add --from-json
 
 # 写到用户层，让所有项目共享
-'{"name":"fs","transport":"stdio","command":"npx","args":["-y","mcp-fs"]}' |
+'{"name":"jenkins-config","transport":"stdio","command":"npx","args":["-y","@zythegit/jenkins-config-mcp"]}' |
   aforge mcp add --from-json --scope user
 
 aforge sync
@@ -213,6 +217,28 @@ aforge sync
 - codex → `.codex\config.toml` 的 `# BEGIN AGENTFORGE MCP` 标记段（merge_toml，段外 TOML 与注释原样保留）
 - claude → `.mcp.json` 的 `mcpServers` 键（merge_json）
 - pi → `.pi\settings.json` 的 `mcpServers` 键（merge_json，**soft 项**：写失败只报 warning，不算 sync 失败、不触发回滚）
+
+以上面的 jenkins-config 为例，`sync` 后 `.mcp.json` 里会多出：
+
+```json
+{
+  "mcpServers": {
+    "jenkins-config": {
+      "command": "npx",
+      "args": ["-y", "@zythegit/jenkins-config-mcp"]
+    }
+  }
+}
+```
+
+opencode 侧同一条声明会被译成 `{ "type": "local", "command": ["npx", "-y", "@zythegit/jenkins-config-mcp"], "enabled": true }`——各 target 的键名与形状不同，AgentForge 负责翻译，你只写一份声明。
+
+Windows 上 `command: "npx"` 可能起不来：部分客户端不经 shell 直接 spawn，而 `npx.cmd` 不是可执行文件。启动失败就把 `command` 换成 `cmd`、`args` 前面补 `/c` 重新 add（同名 upsert，直接覆盖旧声明）：
+
+```powershell
+'{"name":"jenkins-config","transport":"stdio","command":"cmd","args":["/c","npx","-y","@zythegit/jenkins-config-mcp"]}' |
+  aforge mcp add --from-json
+```
 
 `headers` / `env` 里的 token 会明文落在 `profile.yaml` 和投影出的配置文件里——项目层 SoT 通常进 git，敏感凭据建议放用户层（`--scope user`）或改用环境变量间接引用。
 
