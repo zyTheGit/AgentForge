@@ -2,12 +2,12 @@
  * projectors/mcp-payload 单测：`mcpServers` 映射构造（claude / pi 共享实现）。
  *
  * 覆盖 enabled=false 过滤、stdio 与 http/sse 两套字段形状、可选字段缺省时不产出键、
- * 空输入 → 空对象；并断言 claudeMcpPayload / piSettingsPayload 仍只在顶层键名上不同。
+ * 空输入 → 空对象；并断言 claudeMcpPayload / piMcpPayload 产出完全一致（同为 mcpServers 键）。
  */
 import { describe, expect, it } from 'vitest';
 import { claudeMcpPayload } from '../../../../src/core/project/projectors/claude';
 import { buildMcpServersObject } from '../../../../src/core/project/projectors/mcp-payload';
-import { piSettingsPayload } from '../../../../src/core/project/projectors/pi';
+import { piMcpPayload } from '../../../../src/core/project/projectors/pi';
 import { type McpServer, McpServerSchema } from '../../../../src/schema';
 
 /** 经 schema 解析构造完整形态（enabled 默认值由 schema 填充）。 */
@@ -88,11 +88,11 @@ describe('claude / pi 载荷复用同一实现（只差顶层键名）', () => {
     ];
     const expected = JSON.stringify({ mcpServers: buildMcpServersObject(servers) });
     expect(claudeMcpPayload(servers)).toBe(expected);
-    expect(piSettingsPayload(servers)).toBe(expected);
+    expect(piMcpPayload(servers)).toBe(expected);
   });
 
   it('空 servers → {"mcpServers":{}}（保留管理键声明）', () => {
     expect(claudeMcpPayload([])).toBe('{"mcpServers":{}}');
-    expect(piSettingsPayload([])).toBe('{"mcpServers":{}}');
+    expect(piMcpPayload([])).toBe('{"mcpServers":{}}');
   });
 });
