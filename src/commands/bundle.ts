@@ -14,7 +14,7 @@
  */
 import path from 'node:path';
 import type { Command } from 'commander';
-import { type BundleExportResult, exportBundle } from '../core/bundle/export';
+import { type BundleExportResult, exportBundle, redactedCountWarning } from '../core/bundle/export';
 import {
   BUNDLE_CONFLICT_POLICIES,
   type BundleConflictPolicy,
@@ -210,9 +210,14 @@ export function renderImport(result: BundleImportResult): string {
     );
   }
   if (result.manifest.warnings.length > 0) {
-    lines.push('', 'export-time warnings:');
-    for (const warning of result.manifest.warnings) {
-      lines.push(`      - ${warning}`);
+    // 被抹凭据那条由末尾的醒目块承担（连键名与要改的文件一起给），这里滤掉避免重复
+    const noise = redactedCountWarning(result.manifest.redacted.length);
+    const warnings = result.manifest.warnings.filter((w) => w !== noise);
+    if (warnings.length > 0) {
+      lines.push('', 'export-time warnings:');
+      for (const warning of warnings) {
+        lines.push(`      - ${warning}`);
+      }
     }
   }
   if (result.unlisted.length > 0) {

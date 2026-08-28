@@ -353,6 +353,10 @@ describe('bundle import', () => {
     const alert = lines.slice(alertAt).join('\n');
     expect(alert).toContain('mcp.servers[ctx7].headers.Authorization');
     expect(alert).toContain(path.join(OTHER_SOT, 'profile.yaml'));
+    // 同一件事只说一次：export-time warnings 里那条计数告警要被滤掉
+    expect(lines.filter((l) => l.includes('credential value(s) redacted'))).toEqual([]);
+    // 抹不到的凭据面这条不重复，仍要留在流水账里
+    expect(renderImport(result)).toContain('check command / args / url');
     // 纯 ASCII（Windows GBK 控制台安全，同 cli.ts 的约束）
     expect(/^[\x20-\x7e\n]*$/.test(alert)).toBe(true);
   });

@@ -55,6 +55,16 @@ import {
 } from './layout';
 import { redactProfileSecrets, stripDetected } from './redact';
 
+/**
+ * 「有 N 条凭据被抹」这条 manifest.warnings 文案的唯一出处。
+ * import 的人类可读输出会用同一个函数把它**过滤掉**——那边末尾已经有一整块醒目
+ * 告警（含键名与要改的文件），流水账里再重复一遍只会稀释它。做成函数而不是各写
+ * 一份字面量，是为了保证两边不会各自漂移。
+ */
+export function redactedCountWarning(count: number): string {
+  return `${count} credential value(s) redacted - set them again after import (see manifest.redacted)`;
+}
+
 /** export 上下文（host / cwd / os 注入，同命令层三件套）。 */
 export interface BundleExportContext {
   readonly host: Host;
@@ -274,9 +284,7 @@ export async function exportBundle(
   }
 
   if (redacted.length > 0) {
-    warnings.push(
-      `${redacted.length} credential value(s) redacted - set them again after import (see manifest.redacted)`,
-    );
+    warnings.push(redactedCountWarning(redacted.length));
   }
   for (const entry of skipped) {
     warnings.push(`skipped ${entry.reason}: ${entry.path} (not followed, Spec 10)`);
