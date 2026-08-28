@@ -29,7 +29,7 @@ import { readSyncMeta } from '../core/project/sync-meta';
 import type { ProjectContext } from '../core/project/types';
 import { listDirSafe } from '../infra/fsutil';
 import type { FileStat, Host } from '../infra/host';
-import { type CommandContext, defaultCommandContext, printJson } from './context';
+import { type CommandContext, defaultCommandContext, printJson, renderList } from './context';
 import { resolveJsonFlag } from './flags';
 
 /** 命令上下文（host/os/cwd 注入；测试可换 fake host 与任意平台）。 */
@@ -247,11 +247,6 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
   };
 }
 
-/** skill 名清单摘要（空清单 → `(none)`）。 */
-function skillListSummary(names: readonly string[]): string {
-  return names.length === 0 ? '(none)' : names.join(', ');
-}
-
 /** SoT 根描述行：`<绝对路径> (initialized|not initialized)`。 */
 function describeSoTRoot(root: string | null, initialized: boolean): string {
   if (root === null) {
@@ -292,8 +287,8 @@ export function formatStatus(result: StatusResult): string {
 
   lines.push('');
   lines.push('skills (profile.skills):');
-  const always = skillListSummary(result.alwaysSkills);
-  const onDemand = skillListSummary(result.onDemandSkills);
+  const always = renderList(result.alwaysSkills);
+  const onDemand = renderList(result.onDemandSkills);
   lines.push(`  always    : ${always} (materialized by sync)`);
   // MVP 决定：on_demand 只登记不物化（Spec §4.2 注记）——如实说明，避免用户
   // 以为声明后就会被投影
