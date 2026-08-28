@@ -1,12 +1,12 @@
 /**
  * aforge source 命令（Spec §6 命令表 / §7.6 Source 安装 / §7.8 Offline 降级矩阵）。
  *
- * `aforge source add <local路径|git url> [--ref <x>] [--id <id>] | list [--json]
- *            | remove <id> | update <id>`：
+ * `aforge source add <local路径|git url> [--ref <x>] [--id <id>] | list
+ *            | remove <id> | update <id>`（四条子命令均支持 `--json`，§6.2）：
  * - add：目标按 git/local 语义识别（url 协议 / git@ scp 语法 / .git 后缀 →
  *   git 源；其余按 local 路径登记，§7.6"登记路径"）；
  * - git add：缺 --ref → ConfigError(2)；AGF_OFFLINE=1 → OfflineError(5)；
- * - list：sources.json 全量（--json 机器可读输出，§6.2）；
+ * - list：sources.json 全量；
  * - remove：删登记 + 删 store\ 缓存；
  * - update：git fetch + checkout pinned commit（离线 → 5）。
  *
@@ -120,27 +120,38 @@ export function registerSourceCommand(program: Command): void {
     .description('register a source: local path or git url (git requires --ref)')
     .option('--ref <ref>', 'git ref to pin (tag / branch / commit; required for git sources)')
     .option('--id <id>', 'custom source id (default: derived from url/path basename)')
-    .action(async (target: string, options: { ref?: string; id?: string }, command: Command) => {
-      const result = await runSourceAdd(defaultCommandContext(), target, options);
-      if (resolveJsonFlag(command)) {
-        printJson(result);
-        return;
-      }
-      const s = result.source;
-      const lines: string[] = [`source added: ${s.id} (${s.type})`];
-      if (s.type === 'git') {
-        lines.push(
-          `  url    : ${s.url}`,
-          `  ref    : ${s.ref}`,
-          `  commit : ${s.commit}`,
-          `  store  : ${result.storeDir}`,
-        );
-      } else {
-        lines.push(`  path   : ${s.path}`);
-      }
-      lines.push(`  file   : ${result.file}`);
-      console.log(lines.join('\n'));
-    });
+    .option('--json', 'machine-readable output (Spec 6.2)')
+    .action(
+      async (
+        target: string,
+        options: { ref?: string; id?: string; json?: boolean },
+        command: Command,
+      ) => {
+        // 只把 add 语义相关的字段传下去：--json 是输出契约，不属于 addSource 的入参
+        const result = await runSourceAdd(defaultCommandContext(), target, {
+          ref: options.ref,
+          id: options.id,
+        });
+        if (resolveJsonFlag(command, options.json)) {
+          printJson(result);
+          return;
+        }
+        const s = result.source;
+        const lines: string[] = [`source added: ${s.id} (${s.type})`];
+        if (s.type === 'git') {
+          lines.push(
+            `  url    : ${s.url}`,
+            `  ref    : ${s.ref}`,
+            `  commit : ${s.commit}`,
+            `  store  : ${result.storeDir}`,
+          );
+        } else {
+          lines.push(`  path   : ${s.path}`);
+        }
+        lines.push(`  file   : ${result.file}`);
+        console.log(lines.join('\n'));
+      },
+    );
 
   cmd
     .command('list')
@@ -164,9 +175,10 @@ export function registerSourceCommand(program: Command): void {
   cmd
     .command('remove <id>')
     .description('remove a registered source (store cache is deleted too)')
-    .action(async (id: string, _options: unknown, command: Command) => {
+    .option('--json', 'machine-readable output (Spec 6.2)')
+    .action(async (id: string, options: { json?: boolean }, command: Command) => {
       const result = await runSourceRemove(defaultCommandContext(), id);
-      if (resolveJsonFlag(command)) {
+      if (resolveJsonFlag(command, options.json)) {
         printJson(result);
         return;
       }
@@ -181,9 +193,10 @@ export function registerSourceCommand(program: Command): void {
   cmd
     .command('update <id>')
     .description('re-fetch a git source and checkout its pinned commit')
-    .action(async (id: string, _options: unknown, command: Command) => {
+    .option('--json', 'machine-readable output (Spec 6.2)')
+    .action(async (id: string, options: { json?: boolean }, command: Command) => {
       const result = await runSourceUpdate(defaultCommandContext(), id);
-      if (resolveJsonFlag(command)) {
+      if (resolveJsonFlag(command, options.json)) {
         printJson(result);
         return;
       }

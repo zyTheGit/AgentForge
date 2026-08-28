@@ -1,12 +1,20 @@
 /**
- * 全局标志读取（Spec §6.2）。
+ * 命令行标志读取（Spec §6.2 `--json` / §3.1 `--scope`）。
  *
- * `--json` 是 **program 级**全局标志（`aforge --json status`），同时若干子命令
- * 仍各自声明 `--json` 以兼容 `aforge status --json` 这种既有写法。两种位置都要
- * 生效，故统一经 resolveJsonFlag 判定：先看子命令自身的解析结果，再沿 commander
- * 的 parent 链向上找（`aforge --json source list` 的标志挂在 program 上）。
+ * `--json` 是 **program 级**全局标志（`aforge --json status`），同时**每条**产出机器
+ * 可读结果的子命令都各自声明 `--json`，因此 `aforge status --json` 与
+ * `aforge --json status` 等价——两种位置都要生效，故统一经 resolveJsonFlag 判定：
+ * 先看子命令自身的解析结果，再沿 commander 的 parent 链向上找（`aforge --json
+ * source list` 的标志挂在 program 上）。子命令侧一律只读不改语义：`--json` 只切换
+ * 输出形态，绝不参与命令的业务入参。
+ *
+ * `--scope` 由 commander 交上来时只是裸字符串（`--scope <scope>` 不做枚举校验），
+ * 而下游 resolveWriteTargetLayer 的入参是 `Scope` 联合类型。校验 + 收窄这一步在
+ * 每个带 `--scope` 的子命令 action 里都一样，故收敛为 parseScopeOption。
  */
 import type { Command } from 'commander';
+import type { Scope } from '../core/env';
+import { ConfigError } from '../core/errors';
 
 /**
  * 本次调用是否要求机器可读输出（Spec §6.2 `--json`）。
@@ -26,4 +34,28 @@ export function resolveJsonFlag(command: Command | undefined, localJson?: boolea
     current = current.parent;
   }
   return false;
+}
+
+/**
+ * `--scope <scope>` 的字面量校验与类型收窄（project | user，Spec §3.1）。
+ *
+ * 未指定 → undefined（下游按「AGF_SCOPE > project 在用 > user 在用」的有效
+ * scope 语义自行解析，见 config/target-layer.resolveWriteTargetLayer）。
+ *
+ * @param raw commander 交上来的原始字符串（`--scope` 不做枚举校验）。
+ * @returns 合法的 Scope，或未指定时的 undefined。
+ * @throws ConfigError(2) 取值不是 project / user（拼错的 scope 绝不能静默退化成
+ *         「按有效 scope 解析」——那会把写入落到用户没指定的那一层）。
+ */
+export function parseScopeOption(raw: string | undefined): Scope | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw !== 'project' && raw !== 'user') {
+    throw new ConfigError(`非法 scope: ${raw}`, {
+      hint: '有效值: project, user',
+      details: { scope: raw },
+    });
+  }
+  return raw;
 }

@@ -35,12 +35,10 @@
  */
 import type { Command } from 'commander';
 import type { DetectedSnapshot } from '../core/detector/engine';
-import type { Scope } from '../core/env';
-import { ConfigError } from '../core/errors';
 import { assertTty, createClackPrompt, isCancelledError } from '../infra/prompt';
 import { VERSION } from '../version';
 import { defaultCommandContext, printJson } from './context';
-import { resolveJsonFlag } from './flags';
+import { parseScopeOption, resolveJsonFlag } from './flags';
 import { extractInitArtifacts, formatCancelledInitArtifacts } from './init-artifacts';
 import { type InitInteractiveResult, runInitInteractive } from './init-interactive';
 import { runInit } from './init-scaffold';
@@ -95,15 +93,7 @@ export function registerInitCommand(program: Command): void {
         command: Command,
       ) => {
         const json = resolveJsonFlag(command, options.json);
-        let scope: Scope | undefined;
-        if (options.scope !== undefined) {
-          if (options.scope !== 'project' && options.scope !== 'user') {
-            throw new ConfigError(`非法 scope: ${options.scope}`, {
-              hint: '有效值: project, user',
-            });
-          }
-          scope = options.scope;
-        }
+        const scope = parseScopeOption(options.scope);
 
         const baseCtx = defaultCommandContext();
 

@@ -24,7 +24,7 @@ import { type CreateLearningResult, createLearning } from '../core/learning/stor
 import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
 import type { LearningCategory } from '../schema';
 import { type CommandContext, defaultCommandContext, printJson } from './context';
-import { resolveJsonFlag } from './flags';
+import { parseScopeOption, resolveJsonFlag } from './flags';
 import { isInteractiveStdin, readStdinText } from './stdin';
 
 /** 命令上下文（host/os/cwd 注入；测试用真实临时目录 + env 覆盖 host）。 */
@@ -197,16 +197,7 @@ export function registerLearnCommand(program: Command): void {
         command: Command,
       ) => {
         const json = resolveJsonFlag(command, options.json);
-        if (
-          options.scope !== undefined &&
-          options.scope !== 'project' &&
-          options.scope !== 'user'
-        ) {
-          throw new ConfigError(`非法 scope: ${options.scope}`, {
-            hint: '有效值: project, user',
-          });
-        }
-        const scope = options.scope as Scope | undefined;
+        const scope = parseScopeOption(options.scope);
 
         // ---- 内容采集（§7.4-1：粘贴 / 文件 / stdin）----
         let stdinContent: string | undefined;

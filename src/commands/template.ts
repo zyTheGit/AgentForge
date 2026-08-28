@@ -1,7 +1,7 @@
 /**
  * aforge template 命令（Spec §6 命令表 / §7.6）。
  *
- * `aforge template list [--json] | enable <id> | disable <id>`：
+ * `aforge template list | enable <id> | disable <id>`（三条子命令均支持 `--json`，§6.2）：
  * - list：内置 base/default（恒可用，§3.4；渲染层第 4 层恒渲染）+ 两层 SoT
  *   templates\ + 各源 manifest.templates 清单；enabled = 是否在生效
  *   profile.templates（resolveEffectiveConfig 两层合并后）中；
@@ -91,9 +91,10 @@ export function registerTemplateCommand(program: Command): void {
   cmd
     .command('enable <id>')
     .description('enable a template (appends to profile.templates)')
-    .action(async (id: string, _options: unknown, command: Command) => {
+    .option('--json', 'machine-readable output (Spec 6.2)')
+    .action(async (id: string, options: { json?: boolean }, command: Command) => {
       const result = await runSetTemplateEnabled(defaultCommandContext(), id, true);
-      if (resolveJsonFlag(command)) {
+      if (resolveJsonFlag(command, options.json)) {
         printJson(result);
         return;
       }
@@ -111,9 +112,10 @@ export function registerTemplateCommand(program: Command): void {
   cmd
     .command('disable <id>')
     .description('disable a template (removes from profile.templates)')
-    .action(async (id: string, _options: unknown, command: Command) => {
+    .option('--json', 'machine-readable output (Spec 6.2)')
+    .action(async (id: string, options: { json?: boolean }, command: Command) => {
       const result = await runSetTemplateEnabled(defaultCommandContext(), id, false);
-      if (resolveJsonFlag(command)) {
+      if (resolveJsonFlag(command, options.json)) {
         printJson(result);
         return;
       }

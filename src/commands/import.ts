@@ -2,7 +2,7 @@
  * aforge import 命令（Spec §7.7 Import MVP，M9）：从既有 AGENTS.md / CLAUDE.md
  * 导入工具链声明与规则内容。
  *
- * `aforge import <path>`：
+ * `aforge import <path> [--json]`：
  * - 未初始化（effective scope 层 SoT 无 profile.yaml）→ ConfigError(2)；
  * - 文件不存在 / 不可读 / 文件名不是 AGENTS.md|CLAUDE.md → ConfigError(2)；
  * - 解析（纯函数，见 core/importer/importer）：
@@ -144,10 +144,11 @@ export function registerImportCommand(program: Command): void {
     .description(
       'import toolchain declarations and rule blocks from an existing AGENTS.md / CLAUDE.md',
     )
-    .action(async (pathArg: string, _options: unknown, command: Command) => {
+    .option('--json', 'machine-readable output (absolute paths) - Spec 6.2')
+    .action(async (pathArg: string, options: { json?: boolean }, command: Command) => {
       const result = await runImport(defaultCommandContext(), pathArg);
 
-      if (resolveJsonFlag(command)) {
+      if (resolveJsonFlag(command, options.json)) {
         // §6.2 机器可读输出（路径一律绝对路径）
         printJson(result);
         return;
