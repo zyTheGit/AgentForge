@@ -1,6 +1,7 @@
 /**
- * 配置加载单测（Spec §3.1/§3.2/§4 / §6.1 退出码 2）：
- * 不存在 → null；坏 YAML → ConfigError 附行列；校验失败 → ConfigError 附字段路径。
+ * 配置加载单测（Spec §3.1/§3.2/§4 / §6.1 退出码 2 与 4）：
+ * 不存在 → null；坏 YAML → ConfigError 附行列；校验失败 → ConfigError 附字段路径；
+ * 文件存在但打不开（EBUSY/EACCES/EPERM/EROFS）→ PermissionError(4)。
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -11,10 +12,10 @@ import {
   loadSourcesFile,
   loadYaml,
 } from '../../src/core/config/load';
-import { ConfigError, ExitCode } from '../../src/core/errors';
+import { ConfigError, ExitCode, PermissionError } from '../../src/core/errors';
 import type { ProfileInput } from '../../src/schema';
 import { HabitsSchema, ProfileSchema } from '../../src/schema';
-import { createFakeHost } from './test-utils';
+import { createFakeHost, errnoError } from './test-utils';
 
 const SOT = path.resolve('C:\\soT');
 const PROFILE_PATH = path.join(SOT, 'profile.yaml');
@@ -183,5 +184,61 @@ describe('loadJson / loadSourcesFile', () => {
     );
     const err = await expectConfigError(loadSourcesFile(host, SOT));
     expect(err.message).toMatch(/sources\.0/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 读取失败的 errno 映射（D-04：文件存在但打不开 → PermissionError(4)，不是 1）
+// ---------------------------------------------------------------------------
+
+describe('读取失败 → PermissionError(4)（不再退化为退出码 1 的裸 errno）', () => {
+  /** 文件存在（exists 为真）但 readFile 抛指定 errno 的 host。 */
+  function lockedFileHost(file: string, code: string) {
+    const host = createFakeHost();
+    host.files.set(file, 'version: 1\n');
+    return {
+      ...host,
+      async readFile(): Promise<string> {
+        throw errnoError(code, `${code}: cannot open ${file}`);
+      },
+    };
+  }
+
+  /**
+   * EBUSY 是 Windows 上「文件被编辑器 / 杀毒独占打开」的典型 errno。
+   * 修复前：裸 errno 冒到 main.ts → toExitCode 判为 Generic(1) + 裸堆栈，
+   * 与 skill remove / mcp remove 文档承诺的「不可读写 → 4」不符。
+   */
+  it('profile.yaml 被独占打开（EBUSY）→ PermissionError(4)，hint 可操作', async () => {
+    const host = lockedFileHost(PROFILE_PATH, 'EBUSY');
+    const err = await loadProfile(host, SOT).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PermissionError);
+    expect((err as PermissionError).code).toBe(ExitCode.Permission);
+    expect((err as PermissionError).message).toContain(PROFILE_PATH);
+    expect((err as PermissionError).hint).toContain('独占打开');
+  });
+
+  it('权限类 errno（EACCES / EPERM / EROFS）同样映射为 4（与写路径同源判据）', async () => {
+    for (const code of ['EACCES', 'EPERM', 'EROFS']) {
+      const host = lockedFileHost(HABITS_PATH, code);
+      await expect(loadHabits(host, SOT)).rejects.toMatchObject({
+        code: ExitCode.Permission,
+        name: 'PermissionError',
+      });
+    }
+  });
+
+  it('loadJson 走同一映射（sources.json 被占用 → 4）', async () => {
+    const host = lockedFileHost(SOURCES_PATH, 'EBUSY');
+    await expect(loadSourcesFile(host, SOT)).rejects.toMatchObject({
+      code: ExitCode.Permission,
+    });
+  });
+
+  it('非权限类 errno（EIO）原样上抛（不误判为权限问题）', async () => {
+    const host = lockedFileHost(PROFILE_PATH, 'EIO');
+    const err = await loadProfile(host, SOT).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(PermissionError);
+    expect((err as NodeJS.ErrnoException).code).toBe('EIO');
   });
 });
