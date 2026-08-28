@@ -138,13 +138,17 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       projectSoTRoot: PROJECT_SOT,
       initialized: { user: false, project: true },
       enabledTargets: ['claude'],
-      targets: [{ targetId: 'claude', paths: [CLAUDE_MD, CLAUDE_MCP] }],
+      targets: [
+        { targetId: 'claude', paths: [CLAUDE_MD, CLAUDE_MCP], skillInvokePrefix: '/' },
+        { targetId: 'codex', paths: [], skillInvokePrefix: '$' },
+      ],
       skippedTargets: ['future-target'],
       lastSyncAt: '2026-08-21T00:00:00.000Z',
       counts: { custom: 3, learnings: 5, templates: 2 },
       // Spec §4.2 skills.always / skills.on_demand（新增展示字段）
       alwaysSkills: ['code-review'],
       onDemandSkills: ['deep-research'],
+      autoCapture: { declared: 'off', effective: 'off', reason: null },
     });
     expect(text).toContain('aforge status');
     expect(text).toContain(USER_SOT);
@@ -159,6 +163,12 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
     // §4.2：always 由 sync 物化；on_demand 在 MVP 只登记不物化，status 需说明这点
     expect(text).toContain('always    : code-review (materialized by sync)');
     expect(text).toContain('on_demand : deep-research (declared only - not projected in MVP)');
+    // §6.1 / §8.8：技能调用前缀必须打印——codex 是 `$<name>`，其余三家 `/<name>`
+    expect(text).toContain('claude (invoke skills as /<name>):');
+    expect(text).toContain('codex (invoke skills as $<name>):');
+    // §7.4：auto_capture 生效档位（缺省 off，无降级原因行）
+    expect(text).toContain('auto_capture: off');
+    expect(text).not.toContain('## Learning Protocol');
     // biome-ignore lint/suspicious/noControlCharactersInRegex: 断言输出仅含 ASCII，字符类必须显式覆盖控制字符区间（\x00-\x1F）
     expect(text).toMatch(/^[\x00-\x7F]*$/);
   });
@@ -176,12 +186,55 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       counts: { custom: 0, learnings: 0, templates: 0 },
       alwaysSkills: [],
       onDemandSkills: [],
+      autoCapture: { declared: 'off', effective: 'off', reason: null },
     });
     expect(text).toContain('(unresolvable - see aforge doctor)');
     expect(text).toContain('last sync: (never - run aforge sync)');
     // 空清单 → (none)，不产生裸行
     expect(text).toContain('always    : (none)');
     expect(text).toContain('on_demand : (none)');
+  });
+
+  it('auto_capture 声明值与生效值不同时，打出箭头与降级原因（§7.4）', () => {
+    const text = formatStatus({
+      effectiveScope: 'project',
+      userSoTRoot: USER_SOT,
+      projectSoTRoot: PROJECT_SOT,
+      initialized: { user: false, project: true },
+      enabledTargets: [],
+      targets: [],
+      skippedTargets: [],
+      lastSyncAt: null,
+      counts: { custom: 0, learnings: 0, templates: 0 },
+      alwaysSkills: [],
+      onDemandSkills: [],
+      autoCapture: {
+        declared: 'hook',
+        effective: 'off',
+        reason: 'hook is not implemented in MVP - behaves as off',
+      },
+    });
+    expect(text).toContain('auto_capture: hook -> off');
+    expect(text).toContain('hook is not implemented in MVP - behaves as off');
+  });
+
+  it('auto_capture: prompt 时说明投影正文含 Learning Protocol 段（§5.2）', () => {
+    const text = formatStatus({
+      effectiveScope: 'project',
+      userSoTRoot: USER_SOT,
+      projectSoTRoot: PROJECT_SOT,
+      initialized: { user: false, project: true },
+      enabledTargets: [],
+      targets: [],
+      skippedTargets: [],
+      lastSyncAt: null,
+      counts: { custom: 0, learnings: 0, templates: 0 },
+      alwaysSkills: [],
+      onDemandSkills: [],
+      autoCapture: { declared: 'prompt', effective: 'prompt', reason: null },
+    });
+    expect(text).toContain('auto_capture: prompt');
+    expect(text).toContain('projected rules include a ## Learning Protocol section');
   });
 });
 

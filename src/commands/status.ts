@@ -5,7 +5,8 @@
  * - 两层 scope 与 SoT 根绝对路径 + 初始化状态；
  * - effective scope 与启用 targets 及各自将写入的绝对路径（§2.2：status
  *   必须打印实际将写入的绝对路径——取 projector.plan 的全部 items 路径，
- *   含 skills / mcp 配置等非 md 项）；
+ *   含 skills / mcp 配置等非 md 项），以及各 target 的**技能调用前缀**
+ *   （§6.1 / §8.8：codex 为 `$<name>`，其余三家为 `/<name>`）；
  * - 最近一次成功 sync 时间（effective scope 层 sync-meta.lastSyncAt；
  *   无记录 → never）；
  * - custom / learnings / templates 计数（两层合并、同名 / 同 id 去重——
@@ -23,6 +24,7 @@ import { resolveEffectiveConfig } from '../core/config/defaults';
 import { HABITS_FILE, PROFILE_FILE } from '../core/config/load';
 import { readEnv, type Scope } from '../core/env';
 import { ConfigError } from '../core/errors';
+import { type AutoCaptureState, resolveAutoCapture } from '../core/learning/auto-capture';
 import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
 import { projectorRegistry } from '../core/project/projectors/registry';
 import { readSyncMeta } from '../core/project/sync-meta';
@@ -35,10 +37,15 @@ import { resolveJsonFlag } from './flags';
 /** 命令上下文（host/os/cwd 注入；测试可换 fake host 与任意平台）。 */
 export type StatusCommandContext = CommandContext;
 
-/** 单个启用 target 的写入路径（plan items 全量）。 */
+/** 单个启用 target 的写入路径（plan items 全量）与技能调用前缀。 */
 export interface StatusTargetInfo {
   readonly targetId: string;
   readonly paths: readonly string[];
+  /**
+   * 该 target 里调用已装技能的前缀（§6.1 要求 status 打印；§8.8 实测表）：
+   * codex 为 `$`，opencode / claude / pi 为 `/`。
+   */
+  readonly skillInvokePrefix: string;
 }
 
 /** custom / learnings / templates 计数（两层合并去重）。 */
@@ -72,6 +79,17 @@ export interface StatusResult {
    * 在此展示，是为了让「声明了但不会被投影」这件事可见——否则该字段静默无效。
    */
   readonly onDemandSkills: readonly string[];
+  /**
+   * profile.learning.auto_capture 的声明值与生效值（§7.4）。
+   *
+   * 同样是"避免字段静默无效"：`hook` 档 MVP 未实现、CI 为真时三档一律降级为 off，
+   * 两种情况下 declared 与 effective 会不同，`reason` 说明为什么。
+   */
+  readonly autoCapture: Readonly<{
+    declared: string;
+    effective: string;
+    reason: string | null;
+  }>;
 }
 
 /** stat 失败（不存在 / 不可访问）→ 非文件。 */
@@ -218,7 +236,11 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
       skipped.push(targetId);
       continue;
     }
-    targets.push({ targetId, paths: projector.plan(planCtx).items.map((i) => i.path) });
+    targets.push({
+      targetId,
+      paths: projector.plan(planCtx).items.map((i) => i.path),
+      skillInvokePrefix: projector.skillInvokePrefix,
+    });
   }
 
   // ---- 最近 sync（effective scope 层；损坏 → ConfigError(2) fail-fast）----
@@ -232,6 +254,8 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     templates: await countTemplateFiles(host, userRootForLoad, projectSoTRoot),
   };
 
+  const autoCapture = resolveAutoCapture(config.profile, env);
+
   return {
     effectiveScope: config.effectiveScope,
     userSoTRoot,
@@ -244,7 +268,23 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     counts,
     alwaysSkills: config.profile.skills.always ?? [],
     onDemandSkills: config.profile.skills.on_demand ?? [],
+    autoCapture: {
+      declared: autoCapture.declared,
+      effective: autoCapture.effective,
+      reason: describeAutoCaptureReason(autoCapture),
+    },
   };
+}
+
+/** auto_capture 声明值与生效值不同的原因（相同 → null）。 */
+function describeAutoCaptureReason(state: AutoCaptureState): string | null {
+  if (state.ciDowngraded) {
+    return 'CI detected - downgraded to off (learnings are never written in CI)';
+  }
+  if (state.unimplemented) {
+    return 'hook is not implemented in MVP - behaves as off';
+  }
+  return null;
 }
 
 /** SoT 根描述行：`<绝对路径> (initialized|not initialized)`。 */
@@ -267,7 +307,9 @@ export function formatStatus(result: StatusResult): string {
 
   lines.push(`targets (${result.enabledTargets.length} enabled):`);
   for (const target of result.targets) {
-    lines.push(`  ${target.targetId}:`);
+    // 技能调用前缀（§6.1 / §8.8）：codex 是 `$<name>`，其余三家是 `/<name>`。
+    // 不打这一行，用户在 codex 里敲 `/name` 不展开，会以为投影没生效。
+    lines.push(`  ${target.targetId} (invoke skills as ${target.skillInvokePrefix}<name>):`);
     for (const file of target.paths) {
       lines.push(`    ${file}`);
     }
@@ -293,6 +335,20 @@ export function formatStatus(result: StatusResult): string {
   // MVP 决定：on_demand 只登记不物化（Spec §4.2 注记）——如实说明，避免用户
   // 以为声明后就会被投影
   lines.push(`  on_demand : ${onDemand} (declared only - not projected in MVP)`);
+
+  lines.push('');
+  lines.push('learning (profile.learning):');
+  // 声明值与生效值分开打：hook 未实现、CI 降级两种情况下二者不同，只打一个会骗人
+  const capture = result.autoCapture;
+  lines.push(
+    `  auto_capture: ${capture.declared}${capture.declared === capture.effective ? '' : ` -> ${capture.effective}`}`,
+  );
+  if (capture.reason !== null) {
+    lines.push(`                ${capture.reason}`);
+  }
+  if (capture.effective === 'prompt') {
+    lines.push('                projected rules include a ## Learning Protocol section');
+  }
 
   return lines.join('\n');
 }

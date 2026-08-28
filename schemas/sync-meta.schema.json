@@ -41,6 +41,33 @@
         },
         "required": ["contentHash", "writtenAt"]
       }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "contentHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "targetId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["path", "contentHash", "targetId"]
+      }
+    },
+    "mcpServers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": ["lastSyncAt", "os", "agentforgeVersion"],

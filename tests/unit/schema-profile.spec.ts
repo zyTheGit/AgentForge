@@ -19,6 +19,7 @@ describe('ProfileSchema 默认值（Spec §4.2）', () => {
     expect(data.projection.path_style).toBe('auto');
     expect(data.learning).toEqual({
       default_scope: 'project',
+      auto_capture: 'off',
       auto_promote: false,
       include_promoted_in_sync: true,
     });

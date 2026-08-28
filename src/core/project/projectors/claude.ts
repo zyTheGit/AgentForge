@@ -80,6 +80,9 @@ export function claudeMcpPayload(servers: readonly McpServer[]): string {
 export const claudeProjector: Projector = {
   id: 'claude',
 
+  /** §8.8 实测：`claude --help` 明写 "Skills still resolve via /skill-name"。 */
+  skillInvokePrefix: '/',
+
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];
 

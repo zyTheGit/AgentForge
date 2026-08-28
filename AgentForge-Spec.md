@@ -843,7 +843,7 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 - `profile.skills.copy_mode` 声明 `symlink` 时告警（已声明未实现，见 §4.2 / §12 Phase 2 → warn）。
 - 报告未解析的 template id、损坏的 YAML。
 - `skills.expose_as_command` 里的名字不在 `skills.always` 中 → 与"点名未装"同口径报错（§4.2）；project scope 且 target 含 codex 时报 `commands/codex-project-unsupported` warning（§8.8.4 → warn）。
-- `learning.auto_capture: hook` 且 target 含 opencode / pi 时报 `learning/hook-unsupported` warning（需在 target 侧装扩展，§7.4 → warn）；`CI` 为真时把三档一律降级为 `off` 并在报告里说明原因（非错误）。
+- `learning.auto_capture`（§7.4）报一条 `learning-auto-capture`：声明 `hook` → warn（**MVP 未实现任何 target 侧钩子写入**，行为等同 `off`；等 hook 落地后再按 target 细分成 `learning/hook-unsupported`）；`CI` 为真 → 三档一律降级为 `off`，报 `ok` 并在报告里说明原因（非错误）；`prompt` → `ok` 并说明投影正文含 `## Learning Protocol` 段。
 
 ---
 

@@ -12,20 +12,28 @@ import path from 'node:path';
 import type { Host } from '../../infra/host';
 import type { SyncMeta } from '../../schema';
 import type { EffectiveConfig } from '../config/defaults';
+import type { EnvSnapshot } from '../env';
 import { ExitCode } from '../errors';
 import { resolveTemplate } from '../generate/resolver';
+import { resolveAutoCapture } from '../learning/auto-capture';
 import { readSyncMeta, SYNC_META_FILE } from '../project/sync-meta';
 import { renderRulesMd } from '../project/sync-prepare';
 import type { DoctorRoots } from './check-config';
 import type { EnabledPlan } from './check-paths';
 import { type DoctorCheckResult, errHint, errMessage, toDoctorCode } from './check-types';
 
-/** 当前 SoT 渲染（hash 基准；与 sync 共用 sync-prepare.renderRulesMd）。失败 → error 并返回 undefined。 */
+/**
+ * 当前 SoT 渲染（hash 基准；与 sync 共用 sync-prepare.renderRulesMd）。失败 → error 并返回 undefined。
+ *
+ * @param env 环境快照：与 sync 取同一个 CI 值，`learning.auto_capture: prompt` 的
+ *   降级判定才不会在两侧分叉（否则 doctor 会把"少一段 Learning Protocol"误报成漂移）。
+ */
 export async function renderForDoctor(
   host: Host,
   results: DoctorCheckResult[],
   roots: DoctorRoots,
   config: EffectiveConfig,
+  env?: EnvSnapshot,
 ): Promise<string | undefined> {
   try {
     return await renderRulesMd(
@@ -34,6 +42,8 @@ export async function renderForDoctor(
       roots.projectSoTRoot,
       config.habits,
       config.profile,
+      undefined,
+      env,
     );
   } catch (err) {
     results.push({
@@ -142,6 +152,43 @@ export function checkSkillsCopyMode(results: DoctorCheckResult[], config: Effect
     level: 'ok',
     item: 'skills-copy-mode',
     detail: `profile.skills.copy_mode: ${copyMode}（skills 投影为实体 copy）`,
+  });
+}
+
+/**
+ * profile.learning.auto_capture：声明档位 vs 实际生效档位（Spec §7.4 / §9）。
+ *
+ * 两种"声明了但不生效"都必须说出来，口径同 skills-copy-mode：
+ * - `hook`：MVP 没有任何 target 侧钩子写入（§12 Phase 3）→ warn，行为等同 off；
+ * - `CI` 为真：三档一律降级为 off（§7.4 护栏 3 / §10）→ **不是错误**，报 ok 并说明
+ *   原因（CI 里 learnings 本就禁写，降级是预期行为，不该污染 doctor 的告警面）。
+ *
+ * 恒不影响退出码：投影结果本身是自洽的，只是与声明不符。
+ */
+export function checkLearningAutoCapture(
+  results: DoctorCheckResult[],
+  config: EffectiveConfig,
+  env: EnvSnapshot,
+): void {
+  const state = resolveAutoCapture(config.profile, env);
+  if (state.unimplemented) {
+    results.push({
+      section: 'config',
+      level: 'warn',
+      item: 'learning-auto-capture',
+      detail:
+        'profile.learning.auto_capture: hook 已声明，但 MVP 未实现 target 侧钩子写入（Spec §12 Phase 3）——当前行为等同 off',
+      hint: '需要确定性抓取请暂用 auto_capture: prompt（渲染 ## Learning Protocol 段），或改回 off 消除该告警',
+    });
+    return;
+  }
+  results.push({
+    section: 'config',
+    level: 'ok',
+    item: 'learning-auto-capture',
+    detail: state.ciDowngraded
+      ? `profile.learning.auto_capture: ${state.declared}（CI 为真 → 降级为 off，§7.4 护栏 3：CI 禁写 learnings）`
+      : `profile.learning.auto_capture: ${state.effective}${state.effective === 'prompt' ? '（投影正文含 ## Learning Protocol 段）' : ''}`,
   });
 }
 

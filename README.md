@@ -117,7 +117,7 @@ aforge import AGENTS.md    # 或 CLAUDE.md：识别工具链关键词 → habits
 | `aforge template list [--json]` / `enable <id>` / `disable <id>` | 管理规则模板 |
 | `aforge skill add <name> [--from src]` / `list [--json]` / `remove <name> [--scope s]` | 安装（实体拷贝）/列出/注销技能（`remove` 只改 profile，文件保留） |
 | `aforge mcp add [--scope s] [--from-json] [--json]` / `remove <name> [--scope s] [--json]` | 登记 / 移除 MCP 服务器声明（`--from-json` 从 stdin 读 JSON 声明） |
-| `aforge status [--json]` | SoT 概览：scope、目标路径、最近 sync、内容计数 |
+| `aforge status [--json]` | SoT 概览：scope、目标路径（含各 target 的技能调用前缀）、最近 sync、内容计数、`learning.auto_capture` 生效档位 |
 | `aforge doctor [--json]` | 体检：配置合法性、投影一致性、环境问题 |
 | `aforge import <path>` | 从既有 AGENTS.md / CLAUDE.md 导入工具链声明与素材 |
 | `aforge bundle export --out <dir>` / `import --from <dir>` | 把一层 SoT 打包搬走 / 落回（迁移、备份、换机器；见下文「迁移 SoT」） |
@@ -301,6 +301,25 @@ Windows 上 `command: "npx"` 可能起不来：部分客户端不经 shell 直�
 ```
 
 `headers` / `env` 里的 token 会明文落在 `profile.yaml` 和投影出的配置文件里——项目层 SoT 通常进 git，敏感凭据建议放用户层（`--scope user`）或改用环境变量间接引用。
+
+## 让 agent 自己记 learning（`learning.auto_capture`）
+
+缺省 `off`：learning 只能人工敲 `aforge learn`。想让 agent 在会话里主动沉淀，把项目或用户层 `profile.yaml` 改成：
+
+```yaml
+learning:
+  auto_capture: prompt
+```
+
+再 `aforge sync`，投影正文（marker 区间内）会多出一段固定的 `## Learning Protocol`，指示 agent 把达成的约定用 `aforge learn --file -` 写进 SoT。三点边界：
+
+- **概率性**：模型可能不执行——这一档只是把协议写进规则，不是钩子；
+- **只写 SoT，不投影**：agent 写完的条目仍要人工 `aforge promote` + `aforge sync` 才进投影；
+- **CI 里自动降级为 `off`**：`CI` 为真时不渲染该段（CI 环境本来就禁写 learnings），`aforge status` / `doctor` 会说明原因。
+
+`auto_capture: hook`（由 target 侧会话钩子确定性触发）**当前未实现**，行为等同 `off`，`aforge doctor` 会报一条 warn 而不是静默失效。
+
+把值改回 `off` 再 sync，该段随 marker 区间一并消失，marker 外的手写内容不受影响。
 
 ## 迁移 SoT（换机器 / 备份 / 复制到另一个项目）
 
