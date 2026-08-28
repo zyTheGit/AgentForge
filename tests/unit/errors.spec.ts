@@ -6,6 +6,7 @@ import {
   AgentForgeError,
   ConfigError,
   ConflictError,
+  describeFatal,
   ExitCode,
   GenericError,
   OfflineError,
@@ -104,5 +105,41 @@ describe('toExitCode', () => {
     expect(toExitCode(null)).toBe(1);
     expect(toExitCode(undefined)).toBe(1);
     expect(toExitCode({ weird: true })).toBe(1);
+  });
+});
+
+describe('describeFatal（错误输出首行标签）', () => {
+  it.each([
+    [new ConfigError('cfg'), 'configuration error (exit code 2)'],
+    [new ConflictError('conflict'), 'conflict (exit code 3)'],
+    [new PermissionError('perm'), 'permission error (exit code 4)'],
+    [new OfflineError('offline'), 'offline (exit code 5)'],
+    [new GenericError('generic'), 'error (exit code 1)'],
+  ])('可预期错误报出自己的归类与退出码，而不是 fallback', (err, expected) => {
+    expect(describeFatal(err, 'unexpected error')).toBe(expected);
+  });
+
+  it('可预期错误绝不写成 unexpected：用法错误不该被当成 CLI 崩了', () => {
+    expect(
+      describeFatal(new ConfigError('local 源无远程可更新'), 'unexpected error'),
+    ).not.toContain('unexpected');
+  });
+
+  it('非 AgentForgeError（真的意外）→ 沿用调用方给的 fallback', () => {
+    expect(describeFatal(new Error('plain'), 'unexpected error')).toBe('unexpected error');
+    expect(describeFatal('string error', 'uncaught exception')).toBe('uncaught exception');
+    expect(describeFatal(null, 'unhandled rejection')).toBe('unhandled rejection');
+  });
+
+  it('未登记的 code → 退化成泛化 error，仍带上真实退出码', () => {
+    expect(describeFatal(new AgentForgeError(99 as ExitCode, 'weird'), 'unexpected error')).toBe(
+      'error (exit code 99)',
+    );
+  });
+
+  it('传入 finalCode（退出码覆盖）→ 首行报最终退出码，而不是 error.code', () => {
+    const err = new ConflictError('部分投影失败且回滚未完成');
+    expect(describeFatal(err, 'unexpected error', 6)).toBe('error (exit code 6)');
+    expect(describeFatal(err, 'unexpected error', 4)).toBe('permission error (exit code 4)');
   });
 });

@@ -125,3 +125,34 @@ export function toExitCode(err: unknown): number {
   }
   return ExitCode.Generic;
 }
+
+/** 退出码的人类可读归类（Spec §6.1），用于错误输出首行。 */
+const EXIT_CODE_LABEL: Record<number, string> = {
+  [ExitCode.Generic]: 'error',
+  [ExitCode.Config]: 'configuration error',
+  [ExitCode.Conflict]: 'conflict',
+  [ExitCode.Permission]: 'permission error',
+  [ExitCode.Offline]: 'offline',
+};
+
+/**
+ * 错误输出首行的标签：`configuration error (exit code 2)`。
+ *
+ * AgentForgeError 全是**可预期**的失败（Spec §6.1 的 1/2/3/4/5），首行必须说出它属
+ * 于哪一类、退出码是几——不能一律写 `unexpected error`：那会把「local 源无远程可
+ * 更新」这类正常的用法错误说成 CLI 崩了，用户会去提 bug 而不是改命令。
+ *
+ * @param fallback 非 AgentForgeError（真的意外）时沿用的标签，由调用方按抛出路径给出
+ *                 （`unexpected error` / `uncaught exception` / `unhandled rejection`）。
+ * @param finalCode 进程**实际**要退出的码。存在退出码覆盖（sync 回滚未完成 → 6，见
+ *                  commands/sync.ts）时首行必须报这个码，否则首行说 3、进程退 6，
+ *                  脚本按首行判断就会走错分支。未登记的码（如 6）退化成泛化
+ *                  `error`，具体语义由后续那行 `exit code 6: rollback incomplete` 交代。
+ */
+export function describeFatal(err: unknown, fallback: string, finalCode?: number): string {
+  if (!(err instanceof AgentForgeError)) {
+    return fallback;
+  }
+  const code = finalCode ?? err.code;
+  return `${EXIT_CODE_LABEL[code] ?? 'error'} (exit code ${code})`;
+}

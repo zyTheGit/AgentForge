@@ -9,7 +9,7 @@
  */
 import { runCli } from './cli';
 import { EXIT_CODE_ROLLBACK_INCOMPLETE, getExitCodeOverride } from './commands/sync';
-import { AgentForgeError, toExitCode } from './core/errors';
+import { AgentForgeError, describeFatal, toExitCode } from './core/errors';
 import { getActiveSyncTransaction, rollbackActiveSyncTransactionSync } from './core/project/engine';
 import { isCancelledError } from './infra/prompt';
 
@@ -23,6 +23,10 @@ const EXIT_CODE_INTERRUPTED = 130;
  * - 未知错误 → 打印堆栈，退出码 1；
  * - 退出码覆盖（sync 回滚未完成 → 6，见 commands/sync.ts）优先于以上映射。
  *
+ * 首行标签经 describeFatal 决定：可预期的 AgentForgeError 报出自己的归类与**最终**
+ * 退出码（`configuration error (exit code 2)`），只有真的意外才落到调用方给的 kind 上。
+ * 首行的码必须与进程退出码一致，故先算出 finalCode 再输出。
+ *
  * 进程即将退出前先回滚进行中的 sync 事务：uncaughtException / unhandledRejection
  * 走的是这条路径而**不是** syncOnce 的 finally，不清理就退出会留下半新半旧的投影
  * ＋残留 journal ＋残留锁（要等心跳判定陈旧才能被抢占）。正常错误路径上事务已在
@@ -35,7 +39,9 @@ function reportFatal(kind: string, error: unknown): never {
     process.exit(error.exitCode);
   }
 
-  console.error(`aforge: ${kind}`);
+  const override = getExitCodeOverride(error);
+  const finalCode = override ?? toExitCode(error);
+  console.error(`aforge: ${describeFatal(error, kind, finalCode)}`);
   if (error instanceof AgentForgeError) {
     console.error(error.message);
     if (error.hint !== undefined) {
@@ -47,16 +53,14 @@ function reportFatal(kind: string, error: unknown): never {
     console.error(error);
   }
   rollbackInFlightSyncTransaction();
-  const override = getExitCodeOverride(error);
   if (override !== undefined) {
     console.error(
       override === EXIT_CODE_ROLLBACK_INCOMPLETE
         ? `exit code ${override}: rollback incomplete - see the file list above`
         : `exit code ${override}`,
     );
-    process.exit(override);
   }
-  process.exit(toExitCode(error));
+  process.exit(finalCode);
 }
 
 /**
