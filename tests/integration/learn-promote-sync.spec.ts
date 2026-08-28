@@ -214,6 +214,64 @@ describe('learn → promote → sync（进程内，真实 fs）', () => {
     }
   }, 30_000);
 
+  it('trigger 非空 → 该条投影带 **When:** 行；trigger 为空 → 正文原样（§4.3）', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS });
+    const withTrigger = '依赖变更必须同步锁文件。';
+    await writeFile(path.join(ws.root, 'a.md'), `${withTrigger}\n`, 'utf8');
+    await writeFile(path.join(ws.root, 'b.md'), `${LEARNING_CONTENT}\n`, 'utf8');
+
+    const ctx = { host: ws.host, cwd: ws.root, os: OS };
+    await runLearn(ctx, { file: 'a.md', id: 'with-trigger', trigger: 'when adding dependencies' });
+    await runLearn(ctx, { file: 'b.md', id: 'no-trigger' });
+    await runPromote(ctx, 'with-trigger');
+    await runPromote(ctx, 'no-trigger');
+
+    await runSync({ ...ctx, agentforgeVersion: VERSION });
+
+    const claude = await readFile(ws.claudeMd, 'utf8');
+    // trigger 非空：正文前加一行 **When:** <trigger>
+    expect(claude).toContain(`**When:** when adding dependencies\n\n${withTrigger}`);
+    // trigger 为空：不生成空的 **When:** 行（§4.3 只投影 content + trigger）
+    expect(claude).toContain(LEARNING_CONTENT);
+    expect(claude).not.toContain('**When:** \n');
+  }, 30_000);
+
+  it('promote_target=habits_note → habits.notes 落地，sync 后投影出现 ## Notes 段（§4.1）', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS });
+    const note = '团队约定：PR 必须双人评审。';
+    await writeFile(path.join(ws.root, 'notes.md'), `${note}\n`, 'utf8');
+
+    const ctx = { host: ws.host, cwd: ws.root, os: OS };
+    await runLearn(ctx, { file: 'notes.md', id: 'note-1' });
+
+    // learn 无 --promote-target 开关，直接改条目 YAML（用户手改 SoT 的等价路径）
+    const entryFile = path.join(ws.sotRoot, 'learnings', 'note-1.yaml');
+    const entryYaml = await readFile(entryFile, 'utf8');
+    expect(entryYaml).toContain('promote_target: custom_rule');
+    await writeFile(
+      entryFile,
+      entryYaml.replace('promote_target: custom_rule', 'promote_target: habits_note'),
+      'utf8',
+    );
+
+    const promoted = await runPromote(ctx, 'note-1');
+    expect(promoted.targetFile).toBe(path.join(ws.sotRoot, 'habits.yaml'));
+
+    // 写的是顶层 notes（正式字段），不再是 detected.promote_notes 自由键
+    const habits = parseYaml(await readFile(promoted.targetFile, 'utf8')) as {
+      notes?: string[];
+      detected?: Record<string, unknown>;
+    };
+    expect(habits.notes).toEqual([`note-1: ${note}`]);
+    expect(habits.detected?.promote_notes).toBeUndefined();
+
+    await runSync({ ...ctx, agentforgeVersion: VERSION });
+
+    const claude = await readFile(ws.claudeMd, 'utf8');
+    expect(claude).toContain('## Notes');
+    expect(claude).toContain(`note-1: ${note}`);
+  }, 30_000);
+
   /** profile.yaml 的 learning.auto_promote 打开（§4.2；init 落盘的是 false）。 */
   async function enableAutoPromote(): Promise<void> {
     const profileFile = path.join(ws.sotRoot, 'profile.yaml');

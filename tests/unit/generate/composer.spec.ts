@@ -173,6 +173,36 @@ describe('§5.2 四层优先级（输出自上而下）', () => {
   });
 });
 
+describe('habits.notes → ## Notes 段（§4.1）', () => {
+  it('notes 非空 → 紧随 ## Learnings 之后产出 ## Notes 段，条目空行分隔', async () => {
+    const habits = HabitsSchema.parse({ version: 1, notes: ['note-a: 第一条', 'note-b: 第二条'] });
+    const rules = await composeRules(
+      composeInput(habits, [], { promotedLearnings: ['learned thing'] }),
+    );
+
+    expect(rules).toContain('## Notes\n\nnote-a: 第一条\n\nnote-b: 第二条');
+    expect(rules.indexOf('## Learnings')).toBeLessThan(rules.indexOf('## Notes'));
+  });
+
+  it('notes 缺省 → 不产出 ## Notes 段', async () => {
+    const habits = HabitsSchema.parse({ version: 1 });
+    const rules = await composeRules(composeInput(habits, []));
+    expect(rules).not.toContain('## Notes');
+  });
+
+  it('旧键 detected.promote_notes 只读兼容：一并渲染，正式字段在前', async () => {
+    const habits = HabitsSchema.parse({
+      version: 1,
+      notes: ['new: 正式字段'],
+      detected: { promote_notes: ['old: 旧键', 123] },
+    });
+    const rules = await composeRules(composeInput(habits, []));
+    // 非字符串项被忽略，不渲染成 "123"
+    expect(rules).toContain('## Notes\n\nnew: 正式字段\n\nold: 旧键');
+    expect(rules).not.toContain('123');
+  });
+});
+
 describe('空变量省略小节（Spec §5.1，禁止编造 / "Not specified"）', () => {
   it('node.manager=none 且其余 runtime 条目为空 → 无 Node 行，整个 Toolchain 节省略', async () => {
     const habits = HabitsSchema.parse({
