@@ -20,7 +20,7 @@ import {
   SYNC_BACKUP_JOURNAL_FILE,
 } from './sync-artifacts';
 import { machineIdOf, type SyncLockHandle, userIdOf } from './sync-lock';
-import type { SyncRollbackEntry } from './sync-types';
+import type { SyncRollbackEntry, SyncWarning } from './sync-types';
 import { readExistingForBackup } from './writer';
 
 // ---------------------------------------------------------------------------
@@ -355,6 +355,28 @@ export async function recordWrite(tx: SyncTransaction, target: string): Promise<
 }
 
 /**
+ * 记录一次**删除**（Spec §7.6 prune）。
+ *
+ * 与 recordWrite 的区别只在 hash：文件已经不在盘上，读回必然失败，走 recordWrite
+ * 会白记一条 `写入后无法读回内容` 的降级原因。writtenHash 留 null 即「无复核基准」
+ * ——回滚时 detectPostWriteDrift 见文件不存在直接返回 undefined，备份原样写回。
+ *
+ * 调用方须先 backupTarget(tx, target) 再删（否则备份里没有这份原文可还）。
+ */
+export async function recordDelete(tx: SyncTransaction, target: string): Promise<void> {
+  if (!tx.writtenFiles.includes(target)) {
+    tx.writtenFiles.push(target);
+  }
+  const entry = tx.journal.entries.find((e) => e.path === target);
+  if (entry !== undefined) {
+    entry.written = true;
+    entry.writtenHash = null;
+  }
+  tx.writtenHashes.delete(target);
+  await persistJournal(tx);
+}
+
+/**
  * 删除落盘备份产物（逐个副本 + journal + 目录）。
  *
  * 逐文件删除而非只删目录：Host.rm 的 recursive 语义由实现决定（真实 host 递归，
@@ -393,4 +415,33 @@ export function detachTransaction(tx: SyncTransaction): void {
   if (activeTransaction === tx) {
     activeTransaction = null;
   }
+}
+
+/** transactionWarnings 的伪 targetId（不属于 ALL_TARGET_IDS，不参与 sync-meta 记账）。 */
+const TRANSACTION_WARNING_TARGET_ID = '(transaction)';
+
+/**
+ * 事务设施级警告文本（崩溃恢复降级 + 恢复阶段保留的备份目录）。
+ *
+ * 放在本模块而不是引擎里：它读的全是事务自身的状态（degradedReasons / 保留目录），
+ * 引擎只负责把结果塞进 SyncResult.transactionWarnings。
+ */
+export function transactionWarningsOf(
+  tx: SyncTransaction,
+  sotRoot: string,
+  recoveredPreservedDir: string | null,
+): SyncWarning[] {
+  const warnings: SyncWarning[] = tx.degradedReasons.map((reason) => ({
+    targetId: TRANSACTION_WARNING_TARGET_ID,
+    path: sotRoot,
+    message: `crash recovery disabled: ${reason}`,
+  }));
+  if (recoveredPreservedDir !== null) {
+    warnings.push({
+      targetId: TRANSACTION_WARNING_TARGET_ID,
+      path: recoveredPreservedDir,
+      message: '上次中断的 sync 有文件未能自动恢复，备份基准已保留在该目录，请人工核对',
+    });
+  }
+  return warnings;
 }

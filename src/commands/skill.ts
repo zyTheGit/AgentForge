@@ -309,14 +309,14 @@ export function registerSkillCommand(program: Command): void {
           `  always    : ${renderList(result.always)}`,
           `  skill dir : ${result.skillDir} (kept on disk)`,
           '',
-          // 诚实交代已知限制：sync 当前不 prune 已投影产物（prune 属后续独立交付），
-          // 所以这里绝不能写 "run aforge sync to drop it from your agents"；
+          // prune 已落地（Spec §7.6）：下次 sync 按 sync-meta 上一轮记账删这些产物。
           // 路径按本次写入的层从 projector 现算，不写死 project 级目录名
-          'note: removed from profile.yaml only. `aforge sync` does NOT prune already',
-          `      projected files yet - delete these by hand (${result.scope} level):`,
+          'note: removed from profile.yaml only. run `aforge sync` to drop the',
+          `      projected copies (${result.scope} level):`,
           ...projectedSkillDocPaths(ctx, readEnv(ctx.host), result.scope, result.name).map(
             (file) => `        ${file}`,
           ),
+          '      manually edited copies are kept and listed under `prune skipped`.',
         ].join('\n'),
       );
     });

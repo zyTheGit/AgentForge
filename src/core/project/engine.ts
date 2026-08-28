@@ -53,12 +53,17 @@
  * - skills 物化数据源（skillsToMaterialize）M8 skill add 接入；M6 引擎侧
  *   的 write 项 / 备份 / 回滚已就绪（skills copy 为实体 copy 非 symlink，§7.6）。
  *
+ * 差集清理（Spec §7.6，阶段 5.4）：全部 target 落定后按 sync-meta 上一轮记账
+ * （`artifacts` / `mcpServers`）删掉本轮不再产出的整文件产物、摘掉已从 SoT 移除的
+ * MCP server 键。只删记账里认领过且内容仍与记账一致的东西，实现见 `sync-prune`。
+ *
  * 模块划分（本文件只留 syncOnce 的阶段编排，各阶段实现在同目录）：
  * - `sync-types`：对外数据契约（SyncOptions / SyncResult / 失败汇总）；
  * - `sync-lock`：`.sync.lock\` 目录锁；`sync-prepare`：初始化检查 / 目标过滤 / 渲染；
  * - `sync-transaction`：备份与回滚；`sync-recovery`：崩溃恢复与备份保全；
  * - `sync-abort`：信号处理器用的同步回滚；`sync-verify`：冲突预检查与 sync-meta；
- * - `sync-residuals`：残留物盘点；`sync-gitignore`：生成物 .gitignore 段。
+ * - `sync-residuals`：残留物盘点；`sync-gitignore`：生成物 .gitignore 段；
+ * - `sync-prune`：上一轮投影产物的差集清理（§7.6）。
  *
  * 这些符号在此 re-export：既有调用方（命令层 / doctor / 测试）继续从 `./engine`
  * 单点 import，拆分不改变对外导出面。
@@ -73,7 +78,6 @@ import { readSkillsToMaterialize } from '../sources/skill';
 import { projectorRegistry } from './projectors/registry';
 import { buildGitignoreItem, GITIGNORE_MARKERS, GITIGNORE_TARGET_ID } from './sync-gitignore';
 import { acquireSyncLocks, releaseSyncLocks, resolveLockRoots } from './sync-lock';
-import { readSyncMeta } from './sync-meta';
 import {
   assertInitialized,
   filterTargets,
@@ -83,6 +87,7 @@ import {
   resolveMarkers,
   type TargetFailure,
 } from './sync-prepare';
+import { pruneStaleProjections } from './sync-prune';
 import { preserveBackupArtifacts, recoverPendingTransaction } from './sync-recovery';
 import {
   backupTarget,
@@ -93,6 +98,7 @@ import {
   recordWrite,
   rollbackWrites,
   type SyncTransaction,
+  transactionWarningsOf,
 } from './sync-transaction';
 import {
   ALL_TARGET_IDS,
@@ -106,6 +112,7 @@ import {
 import {
   assertNoMarkerConflicts,
   readBackSectionHash,
+  readSyncMetaBaseline,
   writeSyncMetaOnSuccess,
 } from './sync-verify';
 import type { ProjectContext } from './types';
@@ -128,6 +135,7 @@ export {
   withSotLock,
 } from './sync-lock';
 export { filterTargets, renderRulesMd } from './sync-prepare';
+export type { SyncPrunedEntry, SyncPruneSkip } from './sync-prune';
 export { inspectSyncResiduals, type SyncResidual, type SyncResidualKind } from './sync-residuals';
 export {
   type ActiveSyncTransactionSnapshot,
@@ -235,9 +243,10 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
       : undefined;
 
   // ---- 阶段 1.5：marker 区间冲突预检查（§8.2-4；--force 跳过；此刻零写入）----
+  // 上一轮记账在此读一次，冲突预检查与阶段 5.4 的 prune 共用（--force 下损坏容忍）
+  const previousMeta = await readSyncMetaBaseline(host, sotRoot, opts.force === true);
   if (opts.force !== true) {
-    const syncMeta = await readSyncMeta(host, sotRoot);
-    await assertNoMarkerConflicts(host, planned, syncMeta, ctx);
+    await assertNoMarkerConflicts(host, planned, previousMeta, ctx);
   }
 
   // ---- dry-run：返回完整计划，不 mkdirp / 不备份 / 不 apply / 不写 sync-meta ----
@@ -262,6 +271,9 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
           ? null
           : { targetId: GITIGNORE_TARGET_ID, items: [gitignoreItem], statuses: ['planned'] },
       recovered: [],
+      // dry-run 不报 prune 候选：差集要在本轮产物落定后才成立，而 dry-run 什么都不写
+      pruned: [],
+      pruneSkipped: [],
     };
   }
 
@@ -410,6 +422,9 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
       throw attachFailureReport(fail.error, report);
     }
 
+    // ---- 阶段 5.4：差集清理（§7.6）——产物已落定，仍在事务与锁内 ----
+    const prune = await pruneStaleProjections(tx, previousMeta, planned, ctx);
+
     // ---- 阶段 5.5：提交标记 —— 写 sync-meta 之前把 journal 标记为已提交 ----
     // 提交与 finally 删 journal 之间被强杀时，下次 sync 不得把已成功提交的投影当
     // 未完成事务回滚（子集 sync 不会重写被回滚的其他 target → 磁盘与 sync-meta 不一致）
@@ -426,6 +441,7 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
       planned,
       warnings,
       ctx.lineEnding,
+      prune,
     );
 
     return {
@@ -445,6 +461,8 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
       transactionWarnings: transactionWarningsOf(tx, sotRoot, recovery.preservedDir),
       gitignore: gitignoreResult,
       recovered,
+      pruned: prune.pruned,
+      pruneSkipped: prune.skipped,
     };
   } finally {
     if (tx !== undefined) {
@@ -458,27 +476,3 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     await releaseSyncLocks(host, locks);
   }
 }
-
-/** 事务设施级警告文本（崩溃恢复降级 + 恢复阶段保留的备份目录）。 */
-function transactionWarningsOf(
-  tx: SyncTransaction,
-  sotRoot: string,
-  recoveredPreservedDir: string | null,
-): SyncWarning[] {
-  const warnings: SyncWarning[] = tx.degradedReasons.map((reason) => ({
-    targetId: TRANSACTION_WARNING_TARGET_ID,
-    path: sotRoot,
-    message: `crash recovery disabled: ${reason}`,
-  }));
-  if (recoveredPreservedDir !== null) {
-    warnings.push({
-      targetId: TRANSACTION_WARNING_TARGET_ID,
-      path: recoveredPreservedDir,
-      message: '上次中断的 sync 有文件未能自动恢复，备份基准已保留在该目录，请人工核对',
-    });
-  }
-  return warnings;
-}
-
-/** transactionWarnings 的伪 targetId（不属于 ALL_TARGET_IDS，不参与 sync-meta 记账）。 */
-const TRANSACTION_WARNING_TARGET_ID = '(transaction)';

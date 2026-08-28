@@ -16,10 +16,10 @@
  *
  * `aforge mcp remove <name> [--scope project|user] [--json]`：
  * - 从目标层 profile.yaml 的 mcp.servers 摘掉该名字（**只改 SoT**）；
- * - 已知限制：`aforge sync` 当前**不 prune** 已投影的 MCP 键（§8.2 未知键一律
- *   保留），opencode / claude / pi 的 MCP 配置文件里那条声明要用户手工删除，命令
+ * - 投影侧清理：被摘掉的 server 键由**下一次 `aforge sync`** 从 opencode / claude /
+ *   pi 的 MCP 配置里摘除（Spec §7.6 prune，按 sync-meta 上一轮记账做差集），命令
  *   输出按本次写入的层（project / user 落点不同）逐条给出绝对路径；codex 走 marker
- *   段整段重写、下次 sync 自动带走，故不列（prune 属后续独立交付）；
+ *   段整段重写、本来就不会残留，故不列；
  * - 目标层没有该名字 → ConfigError(2)（不当成幂等成功：用户多半选错了层，
  *   另一层有同名时 hint 直接给出可复制的 `--scope <另一层>`）；
  * - 无 --force/--yes：本命令只改一行声明，且改动可由 profile.yaml 的 git 历史找回。
@@ -264,12 +264,10 @@ export function registerMcpCommand(program: Command): void {
           `  profile   : ${result.profileFile}`,
           `  servers   : ${renderList(result.servers.map((s) => s.name))}`,
           '',
-          // 诚实交代已知限制：sync 当前不 prune 已投影的 MCP 键（§8.2 未知键一律保留），
-          // 所以这里绝不能写 "run aforge sync to drop it from your agents"；文件清单按本次
-          // 写入的层解析（project / user 落点不同，见 mcpProjectionFiles）
-          'note: removed from profile.mcp.servers only. `aforge sync` does NOT prune',
-          `      already projected keys yet - delete the "${result.removed.name}" entry by`,
-          `      hand from these ${result.scope}-level files:`,
+          // prune 已落地（Spec §7.6）：下次 sync 按 sync-meta 上一轮记账摘掉该 server
+          // 键。文件清单按本次写入的层解析（project / user 落点不同，见 mcpProjectionFiles）
+          'note: removed from profile.mcp.servers only. run `aforge sync` to drop the',
+          `      "${result.removed.name}" entry from these ${result.scope}-level files:`,
           ...mcpProjectionFiles(ctx, readEnv(ctx.host), result.scope).map((f) => `        ${f}`),
         ].join('\n'),
       );

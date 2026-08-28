@@ -170,12 +170,17 @@ Detect/Declare Habits → Profile → Generate Rules (SoT)
       "contentHash": "sha256 hex",
       "writtenAt": "ISO-8601 datetime"
     }
-  }
+  },
+  "artifacts": [
+    { "path": "绝对路径", "contentHash": "sha256 hex", "targetId": "<targetId>" }
+  ],
+  "mcpServers": ["<serverName>"]
 }
 ```
 
 - 用户级与项目级 SoT 均包含 `sync-meta.json`。
 - `doctor` 通过比较 `contentHash` 与当前 SoT 渲染结果的 hash 来判断投影一致性。
+- `artifacts` / `mcpServers` 是 §7.6 prune 的删除白名单：前者记上一轮实际落盘的**整文件产物**（`write` 动作项，如各 target 的 `skills\<name>\SKILL.md`），后者记上一轮投影进各 MCP 配置的 server 名。两者**可选**：字段缺席（旧版本写的记录）与「记录为空数组」语义不同——缺席时该轮只记账、不清理。
 
 ### 3.4 发行包内置
 
@@ -549,18 +554,24 @@ mcp: []
 | source add local | 登记路径 |
 | source add git | clone 到 store，检出 pin，记录 commit |
 | skill add | **copy** 到 SoT skills 目录 + 登记进目标层 `profile.yaml` 的 `skills.always`（幂等，`--no-register` 关闭） |
-| skill remove | **只**从目标层 `profile.yaml` 的 `skills.always` 摘掉该名字（profile-only）；`skills\<name>\` **保留在磁盘上**，要重装先手工删目录（否则 `skill add` 撞「目标已存在」→ 退出码 3）；各 target 已投影的 `skills\<name>\SKILL.md` 也**保留**（见下「已知限制」）。该层未登记该名字 → 退出码 2 |
+| skill remove | **只**从目标层 `profile.yaml` 的 `skills.always` 摘掉该名字（profile-only）；`skills\<name>\` **保留在磁盘上**，要重装先手工删目录（否则 `skill add` 撞「目标已存在」→ 退出码 3）；各 target 已投影的 `skills\<name>\SKILL.md` 由下一次 `sync` 清理（见下「prune」）。该层未登记该名字 → 退出码 2 |
 | template enable | 只改 profile.templates |
 | 默认 | 不使用 symlink |
 
 **写 `profile.yaml` 的副作用**：`skill add`、`skill remove`、`mcp add`、`mcp remove`、`template enable` 均经 `editProfile` 回写整份文档（`stringifyYaml(整个对象)`），YAML 注释、空行与行内数组风格（`targets: [claude]`）会丢失，键顺序变为对象插入顺序。手写的 `profile.yaml` 在被这些命令改过后需按重排后的形态阅读。
 
-**已知限制：`sync` 暂不 prune 已投影产物**（`skill remove` / `mcp remove` 共有，后续独立交付）。两条 remove 都**只改 SoT**；再次 `aforge sync` 不会把上一次投影出去的东西收回：
+**prune：上一轮投影产物的差集清理。** 两条 remove 都**只改 SoT**，投影侧的清理由**下一次 `aforge sync`** 完成：在全部 target 落定之后、写 `sync-meta.json` 之前，按上一轮记账（`sync-meta.json` 的 `artifacts` / `mcpServers`，见 §3.3）算差集：
 
-- `skill remove <name>` 后，各 target 目录下的 `skills\<name>\SKILL.md`（`.claude` / `.opencode` / `.agents` / `.pi`）**全部保留**——投影只按 `skills.always` 写出应有产物，不比对上一轮的差集；
-- `mcp remove <name>` 后，`opencode.json` / `.mcp.json` / `.pi\mcp.json` 里那条 server 键**永久保留**——merge_json 遵循本节以外的 §8.2「未知键一律保留」原则，被删的键在新一轮投影里只是"没被写"，不是"要删掉"（sync 报 `unchanged, skipped`）；codex 的 `.codex\config.toml` 走 marker 段整段重写，不受此限制。
+- `skill remove <name>` 后，各 target 目录下的 `skills\<name>\SKILL.md`（`.claude` / `.opencode` / `.agents` / `.pi`）被**删除**——它们是 `write` 动作产出的整文件产物，整份归 AgentForge 所有；
+- `mcp remove <name>` 后，`opencode.json` / `.mcp.json` / `.pi\mcp.json` 里那条 server 键被**摘除**（文件本身与其余键保留）。这不违背 §8.2「未知键一律保留」：摘的只是记账里认领过的键；codex 的 `.codex\config.toml` 走 marker 段整段重写，本来就不残留。
 
-因此两条 remove 的命令输出**不**承诺 `aforge sync` 会带走产物，而是指名列出需手工删除的路径。prune 语义（含"上一轮 sync 写过、这一轮不该有"的差集判定与 sync-meta 记账）作为独立交付另行设计。
+三条硬约束：
+
+1. **只删记账里有的东西**：删除白名单来自上一轮记账，不扫描目录、不按通配符猜产物——用户自己放在 `.claude\skills\` 下的文件永不被碰；
+2. **改过的不删**：删文件前比对当前内容 hash 与记账值，不等则跳过并报进 `prune skipped`（人类输出与 `--json` 都有），不影响退出码。宁可残留，也不静默吞掉手工编辑；
+3. **子集 sync 只管本次的 target**：`--targets claude` 不清理 opencode 的产物，未参与 target 的记账原样保留。
+
+`artifacts` / `mcpServers` 字段缺席（旧版本写的 `sync-meta.json`）→ 该轮只记账不删，升级不会误删既有产物。`--dry-run` 不报 prune 候选（差集要在本轮产物落定后才成立）。清理在同一 `.sync.lock` 事务内执行，删除前先进备份，中途被强杀由下次 sync 按 journal 还原；删空的目录不回收。
 
 ### 7.7 Import（MVP 基础版）
 

@@ -687,26 +687,18 @@ describe('aforge learn/promote/source/skill（子进程端到端）', () => {
 });
 
 // ---------------------------------------------------------------------------
-// remove → sync：**现状锁定测试（characterization test）**
+// remove → sync：差集清理（Spec §7.6 prune）
 //
-// 断言的是「当前行为」而不是「期望行为」：`skill remove` / `mcp remove` 只改 SoT，
-// 而 sync 目前**不 prune** 已投影的产物（Spec §7.6「已知限制」：投影只写应有产物，
-// 不比对上一轮差集；MCP 侧还叠加 §8.2「未知键一律保留」）。
-//
-// 作用有两个：
-// 1. 缺口不会在无人察觉中变化——若某次改动让 sync 开始/停止清理产物，这里会红；
-// 2. 给未来的 prune 交付留翻转锚点。
-//
-// >>> prune 交付落地时，请把下面两个 "仍残留" 断言**翻转**为 "已被清理"，
-// >>> 并同步删除 Spec §7.6 / README 的「已知限制」段与两条 remove 命令输出里的
-// >>> "does NOT prune ..." 提示。<<<
+// `skill remove` / `mcp remove` 只改 SoT，投影产物的清理由下一次 sync 按 sync-meta
+// 的上一轮记账做差集完成：不再产出的整文件产物被删除，被摘掉的 MCP server 键从
+// merge_json 配置里摘除（§8.2 的「未知键保留」仍然成立——摘的是记账里认领过的键）。
 // ---------------------------------------------------------------------------
 
-describe('remove 后 sync 的产物残留（现状锁定，prune 落地时须翻转）', () => {
+describe('remove 后 sync 清理上一轮残留（§7.6 prune）', () => {
   let ws: Workspace;
 
   beforeEach(async () => {
-    ws = await createWorkspace('prune-gap');
+    ws = await createWorkspace('prune');
   });
 
   afterEach(async () => {
@@ -717,7 +709,8 @@ describe('remove 后 sync 的产物残留（现状锁定，prune 落地时须翻
     return { host: ws.host, cwd: ws.root, os: OS };
   }
 
-  it('skill remove → sync：SoT 已摘除，但各 agent 侧 skills/<name>/SKILL.md 仍残留', async () => {
+  /** vendor 源 + skill add pdf + 首轮 sync；返回实际落地的投影产物路径。 */
+  async function seedProjectedSkill(): Promise<string[]> {
     await runInit(ctx());
     const vendor = path.join(ws.root, 'vendor-src');
     await mkdir(path.join(vendor, 'skills', 'pdf'), { recursive: true });
@@ -726,29 +719,48 @@ describe('remove 后 sync 的产物残留（现状锁定，prune 落地时须翻
     await runSkillAdd(ctx(), 'pdf', 'vendor');
     await runSync({ ...ctx(), agentforgeVersion: VERSION });
 
-    // 第一次 sync 后实际落地的产物（target 集合随 detect 结果变化，故按实测取）
-    const candidates = ['.claude', '.opencode', '.agents', '.pi'].map((dir) =>
-      path.join(ws.root, dir, 'skills', 'pdf', 'SKILL.md'),
-    );
-    const projectedBefore = candidates.filter((p) => existsSync(p));
-    expect(projectedBefore.length).toBeGreaterThan(0);
+    // target 集合随 detect 结果变化，故按实测取
+    const projected = ['.claude', '.opencode', '.agents', '.pi']
+      .map((dir) => path.join(ws.root, dir, 'skills', 'pdf', 'SKILL.md'))
+      .filter((p) => existsSync(p));
+    expect(projected.length).toBeGreaterThan(0);
+    return projected;
+  }
 
-    // ① 正向断言：SoT 侧确实摘除了
+  it('skill remove → sync：各 agent 侧 skills/<name>/SKILL.md 被清理', async () => {
+    const projectedBefore = await seedProjectedSkill();
+
+    // ① SoT 侧摘除（remove 不删 SoT 磁盘上的 skill 目录，按设计保留）
     const removed = await runSkillRemove(ctx(), 'pdf');
     expect(removed.always).toEqual([]);
     const profile = parseYaml(await readFile(path.join(ws.sotRoot, 'profile.yaml'), 'utf8')) as {
       skills?: { always?: string[] };
     };
     expect(profile.skills?.always).toEqual([]);
-    // SoT 里的 skill 目录按设计保留（remove 不删磁盘）
     expect(existsSync(path.join(ws.sotRoot, 'skills', 'pdf', 'SKILL.md'))).toBe(true);
 
-    // ② 现状锁定：再 sync 一次，已投影的 SKILL.md 一个都没被清掉（当前已知限制）
-    await runSync({ ...ctx(), agentforgeVersion: VERSION });
-    expect(candidates.filter((p) => existsSync(p))).toEqual(projectedBefore);
+    // ② 再 sync 一次：上一轮记账里有、本轮不再产出 → 全部被清理
+    const synced = await runSync({ ...ctx(), agentforgeVersion: VERSION });
+    expect(projectedBefore.filter((p) => existsSync(p))).toEqual([]);
+    expect(synced.pruneSkipped).toEqual([]);
+    expect(new Set(synced.pruned.map((p) => p.path))).toEqual(new Set(projectedBefore));
   }, 60_000);
 
-  it('mcp remove → sync：SoT 已摘除，但各 agent 侧 MCP 配置里的键仍残留', async () => {
+  it('手工改过的产物不删，报进 pruneSkipped（只删内容与记账一致的文件）', async () => {
+    const projectedBefore = await seedProjectedSkill();
+    const edited = projectedBefore[0] as string;
+    await writeFile(edited, '# pdf skill（我手动加了一句）\n', 'utf8');
+
+    await runSkillRemove(ctx(), 'pdf');
+    const synced = await runSync({ ...ctx(), agentforgeVersion: VERSION });
+
+    // 手工改过的那份原样保留并报出来；其余照常清理
+    expect(existsSync(edited)).toBe(true);
+    expect(synced.pruneSkipped.map((s) => s.path)).toEqual([edited]);
+    expect(synced.pruned.map((p) => p.path)).not.toContain(edited);
+  }, 60_000);
+
+  it('mcp remove → sync：各 agent 侧 MCP 配置里的 server 键被摘除', async () => {
     await runInit(ctx());
     await runMcpAdd(ctx(), { name: 'jenkins-config', transport: 'stdio', command: 'npx' });
     await runSync({ ...ctx(), agentforgeVersion: VERSION });
@@ -767,10 +779,9 @@ describe('remove 后 sync 的产物残留（现状锁定，prune 落地时须翻
       }
       return hit;
     };
-    const beforeRemove = await containing();
-    expect(beforeRemove.length).toBeGreaterThan(0);
+    expect((await containing()).length).toBeGreaterThan(0);
 
-    // ① 正向断言：SoT 侧 mcp.servers 已摘除
+    // ① SoT 侧 mcp.servers 已摘除
     const removed = await runMcpRemove(ctx(), 'jenkins-config');
     expect(removed.servers).toEqual([]);
     const profile = parseYaml(await readFile(path.join(ws.sotRoot, 'profile.yaml'), 'utf8')) as {
@@ -778,8 +789,11 @@ describe('remove 后 sync 的产物残留（现状锁定，prune 落地时须翻
     };
     expect(profile.mcp?.servers).toEqual([]);
 
-    // ② 现状锁定：再 sync 一次，被删的 server 键仍在各投影文件里（§8.2 未知键保留）
-    await runSync({ ...ctx(), agentforgeVersion: VERSION });
-    expect(await containing()).toEqual(beforeRemove);
+    // ② 再 sync 一次：上一轮记账过的 server 键被摘掉（文件本身保留）
+    const synced = await runSync({ ...ctx(), agentforgeVersion: VERSION });
+    expect(await containing()).toEqual([]);
+    expect(synced.pruned.filter((p) => p.kind === 'mcp-server').map((p) => p.name)).toContain(
+      'jenkins-config',
+    );
   }, 60_000);
 });

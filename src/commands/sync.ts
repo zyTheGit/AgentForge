@@ -157,6 +157,24 @@ export function printSyncResult(result: SyncResult): void {
       lines.push(`  ${warning.message} (${warning.path})`);
     }
   }
+  if (result.pruned.length > 0) {
+    // §7.6 差集清理：上一轮投影过、本轮不该再存在的产物 / MCP server 键
+    lines.push('', 'pruned (no longer projected):');
+    for (const entry of result.pruned) {
+      lines.push(
+        entry.kind === 'mcp-server'
+          ? `  mcp server "${entry.name}" removed from ${entry.path}`
+          : `  deleted: ${entry.path}`,
+      );
+    }
+  }
+  if (result.pruneSkipped.length > 0) {
+    // 跳过不影响退出码：残留无害，静默吞掉用户手工改过的内容才有害
+    lines.push('', 'prune skipped (needs manual review):');
+    for (const entry of result.pruneSkipped) {
+      lines.push(`  ${entry.path}: ${entry.reason}`);
+    }
+  }
 
   const fileCount = result.targets.reduce((n, t) => n + t.items.length, 0);
   lines.push('');

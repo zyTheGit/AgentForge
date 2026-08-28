@@ -16,6 +16,7 @@ import { markerSectionHash, splitByMarkers } from '../markers';
 import type { OsContext } from '../paths';
 import { readSyncMeta, writeSyncMeta } from './sync-meta';
 import { type PlannedTarget, resolveMarkers } from './sync-prepare';
+import type { SyncPruneAccounting } from './sync-prune';
 import type { SyncOptions, SyncWarning } from './sync-types';
 import type { ProjectContext } from './types';
 import type { ProjectionMarkers } from './writer';
@@ -44,6 +45,7 @@ export async function writeSyncMetaOnSuccess(
   planned: readonly PlannedTarget[],
   warnings: readonly SyncWarning[],
   lineEnding: ProjectContext['lineEnding'],
+  accounting: SyncPruneAccounting,
 ): Promise<void> {
   const warnedTargets = new Set(warnings.map((w) => w.targetId));
   const existing = await readSyncMeta(host, sotRoot);
@@ -66,9 +68,33 @@ export async function writeSyncMetaOnSuccess(
       os: os.platform,
       agentforgeVersion: opts.agentforgeVersion,
       targets: targetsMeta,
+      artifacts: [...accounting.artifacts],
+      mcpServers: [...accounting.mcpServers],
     },
     lineEnding,
   );
+}
+
+/**
+ * 读取上一轮记账（marker 冲突预检查与 §7.6 prune 共用同一份，只读一次）。
+ *
+ * `--force` 下 sync-meta 损坏按「无基准」处理：该开关的既有语义就是跳过基准比对，
+ * 不该因为记账文件坏了而堵住用户的强制覆盖。非 force 路径仍照 sync-meta.ts 的契约
+ * fail-fast（ConfigError(2)，不静默丢基准）。
+ */
+export async function readSyncMetaBaseline(
+  host: Host,
+  sotRoot: string,
+  force: boolean,
+): Promise<SyncMeta | null> {
+  if (!force) {
+    return readSyncMeta(host, sotRoot);
+  }
+  try {
+    return await readSyncMeta(host, sotRoot);
+  } catch {
+    return null;
+  }
 }
 
 /**

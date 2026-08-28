@@ -174,10 +174,10 @@ function parseRemovedServer(entry: McpServerInput, profileFile: string): McpServ
  * 是为了绕过命令层直接调 core 的场景（其他核心模块 / 单测）也拿到同一契约——两处同义，
  * 谁都不能只留一份：只留命令层则 core 契约破口，只留 core 则退出码被锁冲突抢先。
  *
- * **已知限制**：本函数只改 SoT。`aforge sync` 当前不 prune 已投影的 MCP 键
- * （Spec §8.2「未知键一律保留」），`opencode.json` / `.mcp.json` / `.pi\mcp.json`
- * 里那条声明会留在原地，需用户手工删除（prune 属后续独立交付）；命令层输出据此
- * 给出手工清理指引，不承诺 sync 会带走。
+ * **投影侧的清理时机**：本函数只改 SoT。被摘掉的 server 键由**下一次 `aforge sync`**
+ * 从 `opencode.json` / `.mcp.json` / `.pi\mcp.json` 里摘除——sync 按 sync-meta 上一轮
+ * 记账的 `mcpServers` 做差集（Spec §7.6 prune），§8.2「未知键一律保留」仍然成立：
+ * 摘的只是记账里认领过的键。命令层输出据此指向 sync，并列出会被清理的文件。
  *
  * @param options.otherScopeHasServer 另一层是否登记了同名（命令层在**锁外**只读探测
  *        后传入）。仅用于「该层没登记」时把 hint 升级成可直接复制的 `--scope <另一层>`；
