@@ -22,7 +22,7 @@
 import type { Command } from 'commander';
 import { defaultHabits, windowsDefaultProfile } from '../core/config/defaults';
 import { resolveWriteTargetLayer, type TargetLayer } from '../core/config/target-layer';
-import { readEnv, type Scope } from '../core/env';
+import { type EnvSnapshot, readEnv, type Scope } from '../core/env';
 import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
 import { claudeSkillPath } from '../core/project/projectors/claude';
 import { codexSkillPath } from '../core/project/projectors/codex';
@@ -41,7 +41,13 @@ import {
   setSkillAlwaysLocked,
 } from '../core/sources/skill';
 import { HabitsSchema, ProfileSchema } from '../schema';
-import { type CommandContext, defaultCommandContext, printJson, renderList } from './context';
+import {
+  type CommandContext,
+  defaultCommandContext,
+  printJson,
+  projectionRootFor,
+  renderList,
+} from './context';
 import { parseScopeOption, resolveJsonFlag } from './flags';
 import { runSkillRemove } from './skill-remove';
 
@@ -158,18 +164,16 @@ function skillLine(item: SkillListItem): string {
  * projector 的签名要 ProjectContext，但这几个函数只读 os / scope / rootDir / env；
  * profile 与 habits 仅为满足类型用默认值填充（同 init -i 的 targetMainRulePaths），
  * 不参与路径计算，也不落盘。
+ *
+ * @param env 由调用方传入（命令层已读过一次），避免同一条命令里重复 readEnv。
  */
 function projectedSkillDocPaths(
   ctx: SkillCommandContext,
+  env: EnvSnapshot,
   scope: Scope,
   skillName: string,
 ): string[] {
-  const env = readEnv(ctx.host);
-  const home = env.userProfile;
-  // user scope 的投影基准根是用户目录；两层模型下走到这里必然已解析出 SoT，故
-  // 缺 USERPROFILE / HOME 只可能是极端环境——回落项目根，不让提示行反过来弄砸
-  // 一次已经成功的 remove
-  const rootDir = scope === 'project' || home === undefined || home === '' ? ctx.cwd : home;
+  const rootDir = projectionRootFor(ctx, env, scope);
   const profile = ProfileSchema.parse(windowsDefaultProfile());
   const planCtx: ProjectContext = {
     os: ctx.os,
@@ -310,7 +314,7 @@ export function registerSkillCommand(program: Command): void {
           // 路径按本次写入的层从 projector 现算，不写死 project 级目录名
           'note: removed from profile.yaml only. `aforge sync` does NOT prune already',
           `      projected files yet - delete these by hand (${result.scope} level):`,
-          ...projectedSkillDocPaths(ctx, result.scope, result.name).map(
+          ...projectedSkillDocPaths(ctx, readEnv(ctx.host), result.scope, result.name).map(
             (file) => `        ${file}`,
           ),
         ].join('\n'),

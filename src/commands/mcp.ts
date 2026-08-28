@@ -55,6 +55,7 @@ import {
   defaultCommandContext,
   otherScope,
   printJson,
+  projectionRootFor,
   renderList,
   sotRootFor,
 } from './context';
@@ -146,32 +147,39 @@ export async function runMcpRemove(
 /**
  * 本次写入层对应的、需要手工清理 MCP 键的投影文件绝对路径（逐条列给用户）。
  *
- * 为什么不直接调 projector 的 opencodeMcpPath / claudeMcpPath / piMcpPath：它们的入参是
- * 完整 ProjectContext（profile / habits / renderedRulesMd / marker 等），而 remove 这条
- * 路径从不装配投影上下文；只为算三个路径硬造一个假 ctx，比复用它们导出的**文件名 /
- * 目录段常量**更容易与实际落点失配。故这里只复刻「project → 项目根；user → 用户目录 +
- * 各 target 全局目录段」这一层基准判定，文件名与目录段全部取自 projector 常量。
+ * 为什么不像 skill remove 那样直接调 projector（那边用 opencodeSkillPath 等四个函数）：
+ * MCP 侧的落点判定只有「基准根 + 目录段 + 文件名」三段，projector 的
+ * opencodeMcpPath / claudeMcpPath / piMcpPath 里除此之外没有别的逻辑，而它们的入参是
+ * 完整 ProjectContext（profile / habits / renderedRulesMd / marker 等）——为三个常量拼接
+ * 造一个假 ctx 得不偿失。目录段与文件名全部取自 projector 导出的常量
+ * （OPENCODE_USER_DIR_SEGMENTS / PI_USER_DIR_SEGMENTS / *_MCP_FILENAME），
+ * 而 opencodeUserDir / piUserDir 本身就是 `join(rootDir, ...同一常量)`，所以两边同源。
+ *
+ * **残留风险**：将来某个 projector 像 codex 处理 CODEX_HOME 那样引入环境变量覆盖，
+ * 这里不会自动跟上（pi 的 PI_CODING_AGENT_DIR 已在 piMcpPath 的 JSDoc 里记为已知限制）。
+ * 真出现那种情况，就把本函数改成与 skill 侧一致的假 ctx + projector 调用。
  *
  * codex 不列：其 MCP 走 merge_toml 的 `# BEGIN/END AGENTFORGE MCP` 标记段**整段重写**，
  * 下次 sync 按 SoT 重算该段，摘掉的 server 自动消失，不需要用户动手。
  *
- * 用户目录取不到时（USERPROFILE / HOME 皆无、仅靠 AGF_HOME 定位 SoT）退化成 `~` 占位：
- * 这一行只是提示文案，不该让一次已经写盘成功的 remove 因为算不出提示而失败。
+ * 基准根走 context.projectionRootFor（与 skill remove 同一口径）：用户目录取不到时退化成
+ * `~` 占位，这一行只是提示文案，不该让一次已经写盘成功的 remove 因为算不出提示而失败。
  */
 function mcpProjectionFiles(ctx: McpCommandContext, env: EnvSnapshot, scope: Scope): string[] {
   const api = pathApiFor(ctx.os);
+  // 基准根与 skill remove 共用 projectionRootFor（project → 项目根 / user → 用户目录）
+  const root = projectionRootFor(ctx, env, scope);
   if (scope === 'project') {
     return [
-      api.join(ctx.cwd, OPENCODE_MCP_FILENAME),
-      api.join(ctx.cwd, CLAUDE_MCP_FILENAME),
-      api.join(ctx.cwd, PI_DIRNAME, PI_MCP_FILENAME),
+      api.join(root, OPENCODE_MCP_FILENAME),
+      api.join(root, CLAUDE_MCP_FILENAME),
+      api.join(root, PI_DIRNAME, PI_MCP_FILENAME),
     ];
   }
-  const home = env.userProfile === undefined || env.userProfile === '' ? '~' : env.userProfile;
   return [
-    api.join(home, ...OPENCODE_USER_DIR_SEGMENTS, OPENCODE_MCP_FILENAME),
-    api.join(home, CLAUDE_MCP_FILENAME),
-    api.join(home, ...PI_USER_DIR_SEGMENTS, PI_MCP_FILENAME),
+    api.join(root, ...OPENCODE_USER_DIR_SEGMENTS, OPENCODE_MCP_FILENAME),
+    api.join(root, CLAUDE_MCP_FILENAME),
+    api.join(root, ...PI_USER_DIR_SEGMENTS, PI_MCP_FILENAME),
   ];
 }
 

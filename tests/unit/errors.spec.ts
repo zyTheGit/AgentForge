@@ -142,4 +142,13 @@ describe('describeFatal（错误输出首行标签）', () => {
     expect(describeFatal(err, 'unexpected error', 6)).toBe('error (exit code 6)');
     expect(describeFatal(err, 'unexpected error', 4)).toBe('permission error (exit code 4)');
   });
+
+  it('意外错误也带上最终退出码：attachExitCodeOverride 不检查错误类型', () => {
+    expect(describeFatal(new Error('plain'), 'unexpected error', 6)).toBe(
+      'unexpected error (exit code 6)',
+    );
+    expect(describeFatal('string error', 'uncaught exception', 1)).toBe(
+      'uncaught exception (exit code 1)',
+    );
+  });
 });

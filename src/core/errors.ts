@@ -126,14 +126,29 @@ export function toExitCode(err: unknown): number {
   return ExitCode.Generic;
 }
 
-/** 退出码的人类可读归类（Spec §6.1），用于错误输出首行。 */
-const EXIT_CODE_LABEL: Record<number, string> = {
+/**
+ * 退出码的人类可读归类（Spec §6.1），用于错误输出首行。
+ *
+ * 类型刻意写成 `Record<Exclude<ExitCode, Success>, string>` 而不是
+ * `Record<number, string>`：ExitCode 里新增一个失败码时，这里漏加条目会**编译不过**，
+ * 不会静悄悄退化成泛化 `error`（severityOf 的 switch 有 default 兜底，卡不住这件事）。
+ * Success(0) 排除在外——成功路径不打错误首行。
+ *
+ * 表外的码（如 sync 回滚未完成的 6，定义在 commands/sync.ts、不属于 ExitCode）
+ * 按设计退化成 `error`，具体语义由输出末行的 `exit code 6: rollback incomplete` 交代。
+ */
+const EXIT_CODE_LABEL: Record<Exclude<ExitCode, typeof ExitCode.Success>, string> = {
   [ExitCode.Generic]: 'error',
   [ExitCode.Config]: 'configuration error',
   [ExitCode.Conflict]: 'conflict',
   [ExitCode.Permission]: 'permission error',
   [ExitCode.Offline]: 'offline',
 };
+
+/** 任意数值码 → 归类标签（表外的码退化成泛化 `error`）。 */
+function labelFor(code: number): string {
+  return (EXIT_CODE_LABEL as Record<number, string>)[code] ?? 'error';
+}
 
 /**
  * 错误输出首行的标签：`configuration error (exit code 2)`。
@@ -148,11 +163,15 @@ const EXIT_CODE_LABEL: Record<number, string> = {
  *                  commands/sync.ts）时首行必须报这个码，否则首行说 3、进程退 6，
  *                  脚本按首行判断就会走错分支。未登记的码（如 6）退化成泛化
  *                  `error`，具体语义由后续那行 `exit code 6: rollback incomplete` 交代。
+ *                  非 AgentForgeError 也要带上它：attachExitCodeOverride 与
+ *                  attachFailureReport 都不检查错误类型（engine.ts / sync.ts），意外错误
+ *                  同样可能被抬到 6，此时只打 `unexpected error` 会与退出码对不上。
+ *                  省略该参数时沿用 err.code（AgentForgeError）或只给 fallback。
  */
 export function describeFatal(err: unknown, fallback: string, finalCode?: number): string {
   if (!(err instanceof AgentForgeError)) {
-    return fallback;
+    return finalCode === undefined ? fallback : `${fallback} (exit code ${finalCode})`;
   }
   const code = finalCode ?? err.code;
-  return `${EXIT_CODE_LABEL[code] ?? 'error'} (exit code ${code})`;
+  return `${labelFor(code)} (exit code ${code})`;
 }

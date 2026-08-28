@@ -70,3 +70,20 @@ export function sotRootFor(ctx: CommandContext, env: EnvSnapshot, scope: Scope):
 export function otherScope(scope: Scope): Scope {
   return scope === 'project' ? 'user' : 'project';
 }
+
+/**
+ * 投影基准根（projector 的 `rootDir`）：project → 项目根；user → 用户目录。
+ *
+ * 供命令层复算「已投影产物在哪」的提示行用（两条 remove 的清理清单）。
+ *
+ * `userProfile` 缺失时退化成字面 `~`：走到这里意味着该层 SoT 已解析成功，即用户目录
+ * 必然存在，所以这是个实际不可达的兜底。它刻意**不**回落项目根——那会打出一条
+ * `<项目根>\.config\opencode\...` 这样看着像真路径的错路径，用户照着找不到只会更困惑；
+ * `~` 一眼就是占位符。skill / mcp 两侧共用这一个口径，避免同一场景两种兜底。
+ */
+export function projectionRootFor(ctx: CommandContext, env: EnvSnapshot, scope: Scope): string {
+  if (scope === 'project') {
+    return ctx.cwd;
+  }
+  return env.userProfile === undefined || env.userProfile === '' ? '~' : env.userProfile;
+}
