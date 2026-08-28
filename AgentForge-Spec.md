@@ -602,7 +602,43 @@ mcp: []
 | `template enable` | 正常执行（仅改 profile） |
 | `skill add` | 正常执行（从已缓存内容 copy） |
 | `import` | 正常执行（纯本地操作） |
+| `bundle export` | 正常执行（纯本地操作） |
+| `bundle import` | 正常执行（纯本地操作） |
 | `doctor` | 正常执行（本地诊断） |
+
+### 7.9 Bundle Export / Import（SoT 迁移）
+
+把**一层** SoT 打成可搬走的目录再落回另一层。与 §7.7 的 `import <path>`（从既有 AGENTS.md 抽工具链声明）是两条命令，语义不同，刻意分开命名。
+
+**产物布局**：`<out>\manifest.json`（自描述清单，schema 见 §4）+ `<out>\sot\...`（内容副本，路径与 SoT 内一一对应）。内容放在 `sot\` 子目录而非平铺，是为了让 manifest 与 SoT 里可能的同名文件不争位，且 import 侧能用整棵 `sot\` 树比对出「manifest 未登记的多余文件」。
+
+**Export 流程**
+
+1. 解析目标层（缺省按有效 scope，要求该层已 init，否则退出码 2）；守卫 `--out`：不得位于 SoT 内（2）、不得非空（3）。
+2. 顶层条目按名字分三类，**只看名字，名字即契约**：
+   - 带走：`habits.yaml` / `profile.yaml` / `sources.json` + `custom\` / `learnings\` / `templates\` / `skills\` / `mcp\`；
+   - 剔除并记入 `manifest.excluded`：`sync-meta.json`（`machine-state`）、`.sync.lock` 与 `.agf-backup*`（`transient`）、`store\`（`cache`）；
+   - 其余：报 `not-part-of-sot`，**既不带走也不静默丢弃**。
+3. 净化（只改内存里的解析对象，原 SoT 一字不动）：`habits.detected` 剔除（`--keep-detected` 保留）；`profile.mcp.servers[].env` / `.headers` 的**值**换成占位符，字段路径记入 `manifest.redacted`（`--no-redact` 原样导出）。被改写的文件在 manifest 里标 `transformed: true`。
+4. 落盘并逐个记 sha256（LF 规范化后计算，见 §3.3 同一规范），bundle 常经 git / 压缩包 / 网盘搬运，CRLF 被改写不该判成内容损坏。
+5. **symlink 一律不跟随**：遍历中遇到的 symlink 与目录环路记入 `skipped` 并产出 warning；顶层带走目录**自身**是 symlink 时同样跳过（否则链接目标整棵会被打进 bundle 搬到别的机器）。
+6. 非事务：写到一半失败会留下半个 bundle 目录。它是可丢弃产物（不是 SoT、不是投影），删掉重跑即可。
+
+**Import 流程（先全量校验，再一次性落盘）**
+
+1. 读 `manifest.json`：缺失 / 损坏 / schema 校验失败 → 2。
+2. 逐条校验 `files[].path`，两道守卫都针对**不可信** manifest（它是可手工编辑的普通文件，路径直接参与 `path.join`）：
+   - 形态：拒绝空段、`.`、`..`、绝对路径（含盘符与 UNC）；
+   - 布局：首段必须属于第 2 步的「带走」集合，且文件 / 目录角色不错位。被 export 剔除的条目**不接受反向导入**——`sync-meta.json` 记着另一台机器的绝对路径与 §7.6 prune 删除白名单，导进去会让下一次 sync 照着别人的账删本机文件。
+3. 逐个比对 sha256。问题一次性收集完再抛（坏包往往不止一处），任一条不通过 → 2 且**一个字节都没写**。
+4. 目标层不要求已 init（迁移的典型场景就是新机器上什么都没有），SoT 目录按需创建。若先 init 再 import，骨架 `profile.yaml` 会让 `skip` 策略把 bundle 里那份真配置挡在门外，那是更坏的默认。
+5. 持 SoT 事务锁（与 sync 同一把 `.sync.lock`）后、写第一个字节之前，再确认 `sotRoot` 到每个目标文件之间的每一段都不是 symlink，否则 → 2（与 export 的不跟随口径对称：目标磁盘上已有的 symlink 会让合法相对路径穿透写到链接目标）。
+6. 冲突策略（目标已存在同名文件）：缺省 `skip`（不动既有文件）；`overwrite` 替换；`rename` 把**来料**另存为 `<name>.imported`（被占用则 `.imported-2`…，上限 100 个后缀，耗尽 → 3）。`--on-conflict` 取值非法 → 2，绝不静默退化成 `skip`。
+7. manifest 未登记但存在于 `sot\` 的文件不导入，报进 `unlisted` 供核对。
+8. **不自动 sync**：填 SoT 与写别人的文件是两件风险等级不同的事，只提示下一步 `aforge detect && aforge sync`。
+9. 非事务：写入阶段失败（磁盘满 / 权限）会留下部分文件。校验前置已排掉「内容不对」这类可预见失败，重跑同一条命令即可续写。
+
+**已知取舍**：`habits.yaml` / `profile.yaml` 经「解析 → 改写 → 重新序列化」往返，**YAML 注释会丢**（同 §7.6 `skill add` 写 profile 的代价）；`--no-redact --keep-detected` 时两份走原文直拷，注释保留。内容一律按 UTF-8 文本处理（同 §7.6 skill copy 约定），二进制附属文件不在支持范围内。redact 只覆盖 §4.2 约定承载密钥的 `env` / `headers` 两处，`command` / `args` / `url` 里的内联凭据形状不可知、不做猜测抹除，改为在 warnings 里提示人工复核。
 
 ---
 
