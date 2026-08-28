@@ -115,8 +115,8 @@ aforge import AGENTS.md    # 或 CLAUDE.md：识别工具链关键词 → habits
 | `aforge source add <path\|git-url> [--ref r] [--id id]` | 登记规则/模板/技能来源（local 或 git） |
 | `aforge source list [--json]` / `remove <id>` / `update <id>` | 管理已登记来源（update 离线报错） |
 | `aforge template list [--json]` / `enable <id>` / `disable <id>` | 管理规则模板 |
-| `aforge skill add <name> [--from src]` / `list [--json]` | 安装（实体拷贝）/列出技能 |
-| `aforge mcp add [--scope s] [--from-json] [--json]` | 登记 MCP 服务器声明（`--from-json` 从 stdin 读 JSON 声明） |
+| `aforge skill add <name> [--from src]` / `list [--json]` / `remove <name> [--scope s]` | 安装（实体拷贝）/列出/注销技能（`remove` 只改 profile，文件保留） |
+| `aforge mcp add [--scope s] [--from-json] [--json]` / `remove <name> [--scope s] [--json]` | 登记 / 移除 MCP 服务器声明（`--from-json` 从 stdin 读 JSON 声明） |
 | `aforge status [--json]` | SoT 概览：scope、目标路径、最近 sync、内容计数 |
 | `aforge doctor [--json]` | 体检：配置合法性、投影一致性、环境问题 |
 | `aforge import <path>` | 从既有 AGENTS.md / CLAUDE.md 导入工具链声明与素材 |
@@ -161,7 +161,7 @@ skills:
 aforge sync
 ```
 
-注意：凡是会写 `profile.yaml` 的命令（`skill add`、`mcp add`、`template enable`）都是整份重新序列化，YAML 注释、空行和行内数组写法（`targets: [claude]`）会丢失，键顺序变成程序内部顺序——手写过的 `profile.yaml` 被这些命令改过后格式会变。
+注意：凡是会写 `profile.yaml` 的命令（`skill add`、`skill remove`、`mcp add`、`mcp remove`、`template enable`）都是整份重新序列化，YAML 注释、空行和行内数组写法（`targets: [claude]`）会丢失，键顺序变成程序内部顺序——手写过的 `profile.yaml` 被这些命令改过后格式会变。
 
 只想拷文件、自己手工编排 `profile.yaml` 的话加 `--no-register`：
 
@@ -185,6 +185,29 @@ aforge skill add find-skills --no-register
 - 装到 user 层时注意 §5.3 合并语义：`merge.arrays: replace`（缺省）下 project 层自己写了 `skills.always` 就会整体覆盖 user 层那份；
 - 附属文件（脚本、参考资料）会拷进 SoT，但当前只有 `SKILL.md` 正文参与投影。
 
+不想再让某个技能被投影时用 `skill remove`——它**只**把名字从该层 `profile.yaml` 的 `skills.always` 摘掉，`skills\<name>\` 目录原样留在磁盘上：
+
+```powershell
+aforge skill remove find-skills
+# skill removed: find-skills (profile only)
+#   scope     : project
+#   profile   : D:\proj\.agentforge\profile.yaml
+#   always    : pdf-tools
+#   skill dir : D:\proj\.agentforge\skills\find-skills (kept on disk)
+#
+# note: removed from profile.yaml only. `aforge sync` does NOT prune already
+#       projected files yet - delete these by hand (project level):
+#         D:\proj\.opencode\skills\find-skills\SKILL.md
+#         D:\proj\.agents\skills\find-skills\SKILL.md
+#         D:\proj\.claude\skills\find-skills\SKILL.md
+#         D:\proj\.pi\skills\find-skills\SKILL.md
+```
+
+- **已知限制：`aforge sync` 暂不 prune 已投影产物。** 摘除只作用于 SoT，再跑一次 `sync` **不会**删掉之前投影出去的 `.claude\skills\<name>\SKILL.md`（`.opencode` / `.agents` / `.pi` 同理）——投影只写"应该有的产物"，不比对上一轮的差集。要彻底清干净，按命令输出提示手工删除那几个目录。prune 语义属**后续独立交付**，见 Spec §7.6「已知限制」；
+- `--scope project|user` 指定改哪一层（缺省同 `add`：AGF_SCOPE > project 在用 > user 在用）；两层都登记了同名技能时要各删一次；
+- 该层 `skills.always` 里没有这个名字 → 退出码 2（不当成幂等成功，多半是层选错了）。错误提示会说明目录是否还在盘上；如果另一层登记了同名，提示会直接给出可复制的 `--scope <另一层>`；
+- 摘完 `always` 只剩空数组时那一行显示 `(none)`；注意 `merge.arrays: replace` 下空数组**仍会覆盖** user 层，要让 user 层的同名技能重新生效得手工删掉 project 层的整个 `skills.always` 键；
+- 要腾空间 / 想重装，删完登记后手工删除 `skills\<name>\`（`skill add` 遇到已存在且非空的目录会报退出码 3）。
 
 ## 登记 MCP 服务器
 
@@ -220,6 +243,30 @@ aforge sync
 ```
 
 必填字段：`name` + `transport`；`stdio` 必须给 `command`，`http` / `sse` 必须给 `url`，否则退出码 2。声明里带 `"enabled": false` 的 server 不投影，但保留在 `profile.yaml` 里。
+
+不想再用某个 server 时用 `mcp remove` 把声明从该层 `mcp.servers` 里摘掉：
+
+```powershell
+aforge mcp remove jenkins-config
+# mcp server removed: jenkins-config
+#   transport : stdio
+#   scope     : project
+#   profile   : D:\proj\.agentforge\profile.yaml
+#   servers   : ctx7
+#
+# note: removed from profile.mcp.servers only. `aforge sync` does NOT prune
+#       already projected keys yet - delete the "jenkins-config" entry by
+#       hand from these project-level files:
+#         D:\proj\opencode.json
+#         D:\proj\.mcp.json
+#         D:\proj\.pi\mcp.json
+```
+
+- **已知限制：`aforge sync` 暂不 prune 已投影的 MCP 键。** 被删的 server 在 `opencode.json` / `.mcp.json` / `.pi\mcp.json` 里会**永久保留**——merge_json 遵循「未知键一律保留」（Spec §8.2），被删的键在下一轮投影里只是"没被写"而不是"要删掉"，`sync` 甚至会把这些文件报成 `unchanged, skipped`。按命令输出提示手工删掉那几个键。例外：codex 的 `.codex\config.toml` 走 marker 段整段重写，会自动跟上。prune 语义属**后续独立交付**，见 Spec §7.6「已知限制」；
+- `--scope project|user` 指定改哪一层（缺省同 `add`）；`--json`（或 `aforge --json mcp remove <name>`）输出机器可读结果，含被删条目 `removed` 与该层剩余 `servers`；
+- 该层没有这个名字 → 退出码 2，错误消息会列出该层现有的 server 名；如果另一层登记了同名，提示会直接给出可复制的 `--scope <另一层>`；
+- 摘掉最后一条后 `servers` 一行显示 `(none)`；
+- 只想临时停用而保留配置的话，别用 remove——把声明里的 `enabled` 改成 `false` 重新 `add`（同名 upsert）即可。
 
 投影落点（project scope）：
 

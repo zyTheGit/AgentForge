@@ -306,7 +306,7 @@ extensions: object
 
 **`skills.on_demand`（MVP 决定）：** 只登记不物化——`sync` 仅投影 `skills.always`；`on_demand` 清单由 `aforge status` 展示并标注"declared only - not projected in MVP"。按需装载属 Phase 2。
 
-**`skills.always` 的维护方：** 除手写外，`aforge skill add` 会把装入的技能名自动登记进**同一层** `profile.yaml` 的 `skills.always`（幂等，`--no-register` 关闭，见 §7.6）；该回写会重排整份 `profile.yaml` 的格式并丢弃注释（§7.6"写 `profile.yaml` 的副作用"）。
+**`skills.always` 的维护方：** 除手写外，`aforge skill add` 会把装入的技能名自动登记进**同一层** `profile.yaml` 的 `skills.always`（幂等，`--no-register` 关闭，见 §7.6）；`aforge skill remove <name>` 是其逆操作，只把名字从**同一层**的 `skills.always` 摘掉（profile-only：`skills\<name>\` 目录与已投影产物都不动，见 §7.6）。两者的回写都会重排整份 `profile.yaml` 的格式并丢弃注释（§7.6"写 `profile.yaml` 的副作用"）。
 
 **Windows 安装默认值：**
 
@@ -414,6 +414,8 @@ mcp: []
 
 项目 SoT > 用户 SoT > 源 store（安装时已 copy，以 SoT 为准）。
 
+**与 `skills.always` 合并的交互**：`merge.arrays: replace`（缺省）下 project 层的 `skills.always` 整体覆盖 user 层。因此把 project 层 `always` 里最后一个名字 `aforge skill remove` 掉之后，该数组变为空数组 `[]`——它仍然**参与并覆盖**合并，user 层的同名 skill 不会因此重新生效；要让 user 层重新生效，需从 project 层 `profile.yaml` 里删掉整个 `skills.always` 键（手工编辑）。
+
 ### 5.4 Handlebars 模板规则
 
 - 使用 Handlebars（Mustache 超集），支持 `#if`、`#each`、`#unless` 等条件/遍历语法。
@@ -435,8 +437,8 @@ mcp: []
 | `aforge learnings list\|show\|edit\|rm` | 管理 learnings |
 | `aforge source add\|list\|remove\|update` | 模板/skill 源 |
 | `aforge template list\|enable\|disable` | 模板 |
-| `aforge skill add [--from <源名\|路径>] [--no-register]\|list` | Skill（`add` 默认登记进 `skills.always`，`--no-register` 关闭） |
-| `aforge mcp add` | MCP 描述加入 SoT（交互录入，或 `--from-json` 从 stdin 读 JSON 声明） |
+| `aforge skill add [--from <源名\|路径>] [--no-register]\|list\|remove <name> [--scope project\|user]` | Skill（`add` 默认登记进 `skills.always`，`--no-register` 关闭；`remove` **只**摘 `skills.always`，磁盘目录保留，见 §7.6） |
+| `aforge mcp add\|remove <name> [--scope project\|user]` | MCP 描述加入 / 移出 SoT（`add` 交互录入，或 `--from-json` 从 stdin 读 JSON 声明；`remove` 从目标层 `mcp.servers` 摘掉该名字，不存在 → 退出码 2） |
 | `aforge status` | 状态与路径 |
 | `aforge doctor` | 诊断 |
 | `aforge import <path>` | 导入现有规则（MVP 基础版） |
@@ -459,7 +461,7 @@ mcp: []
 ### 6.2 全局标志
 
 - `--json`：机器可读输出（路径为绝对路径字符串）。注册在 program 级，`aforge --json <cmd>` 与 `aforge <cmd> --json` 等价（各子命令同时保留自己的 `--json` 以兼容既有用法）。
-  - 覆盖命令（当前实际）：`init`、`sync`、`status`、`doctor`、`detect`、`learn`、`learnings list|show|edit|rm`、`promote`、`import`、`source add|list|remove|update`、`template list|enable|disable`、`skill add|list`、`mcp add`。
+  - 覆盖命令（当前实际）：`init`、`sync`、`status`、`doctor`、`detect`、`learn`、`learnings list|show|edit|rm`、`promote`、`import`、`source add|list|remove|update`、`template list|enable|disable`、`skill add|list|remove`、`mcp add|remove`。
   - `learnings show|edit` 的 JSON 体在条目字段之外另带 `scope`、`file` 与 `content`（条目 YAML 原文）；`learnings rm` 为 `{ id, file, scope }`。
   - `mcp add` 的**输入**标志为 `--from-json`（从 stdin 读 JSON 声明）；`--json` 在该命令下与全局契约一致，表示机器可读**输出**。
 
@@ -533,10 +535,18 @@ mcp: []
 | source add local | 登记路径 |
 | source add git | clone 到 store，检出 pin，记录 commit |
 | skill add | **copy** 到 SoT skills 目录 + 登记进目标层 `profile.yaml` 的 `skills.always`（幂等，`--no-register` 关闭） |
+| skill remove | **只**从目标层 `profile.yaml` 的 `skills.always` 摘掉该名字（profile-only）；`skills\<name>\` **保留在磁盘上**，要重装先手工删目录（否则 `skill add` 撞「目标已存在」→ 退出码 3）；各 target 已投影的 `skills\<name>\SKILL.md` 也**保留**（见下「已知限制」）。该层未登记该名字 → 退出码 2 |
 | template enable | 只改 profile.templates |
 | 默认 | 不使用 symlink |
 
-**写 `profile.yaml` 的副作用**：`skill add`、`mcp add`、`template enable` 均经 `editProfile` 回写整份文档（`stringifyYaml(整个对象)`），YAML 注释、空行与行内数组风格（`targets: [claude]`）会丢失，键顺序变为对象插入顺序。手写的 `profile.yaml` 在被这些命令改过后需按重排后的形态阅读。
+**写 `profile.yaml` 的副作用**：`skill add`、`skill remove`、`mcp add`、`mcp remove`、`template enable` 均经 `editProfile` 回写整份文档（`stringifyYaml(整个对象)`），YAML 注释、空行与行内数组风格（`targets: [claude]`）会丢失，键顺序变为对象插入顺序。手写的 `profile.yaml` 在被这些命令改过后需按重排后的形态阅读。
+
+**已知限制：`sync` 暂不 prune 已投影产物**（`skill remove` / `mcp remove` 共有，后续独立交付）。两条 remove 都**只改 SoT**；再次 `aforge sync` 不会把上一次投影出去的东西收回：
+
+- `skill remove <name>` 后，各 target 目录下的 `skills\<name>\SKILL.md`（`.claude` / `.opencode` / `.agents` / `.pi`）**全部保留**——投影只按 `skills.always` 写出应有产物，不比对上一轮的差集；
+- `mcp remove <name>` 后，`opencode.json` / `.mcp.json` / `.pi\mcp.json` 里那条 server 键**永久保留**——merge_json 遵循本节以外的 §8.2「未知键一律保留」原则，被删的键在新一轮投影里只是"没被写"，不是"要删掉"（sync 报 `unchanged, skipped`）；codex 的 `.codex\config.toml` 走 marker 段整段重写，不受此限制。
+
+因此两条 remove 的命令输出**不**承诺 `aforge sync` 会带走产物，而是指名列出需手工删除的路径。prune 语义（含"上一轮 sync 写过、这一轮不该有"的差集判定与 sync-meta 记账）作为独立交付另行设计。
 
 ### 7.7 Import（MVP 基础版）
 
