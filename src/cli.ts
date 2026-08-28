@@ -6,6 +6,7 @@
  * - 纯 ASCII 描述：避免 Windows GBK 控制台（chcp 936）下非 ASCII 字符乱码。
  */
 import { Command } from 'commander';
+import { registerBundleCommand } from './commands/bundle';
 import { registerDetectCommand } from './commands/detect';
 import { registerDoctorCommand } from './commands/doctor';
 import { registerImportCommand } from './commands/import';
@@ -53,6 +54,9 @@ export function buildProgram(): Command {
 
   // ---- M9 区块：import（Spec §7.7 MVP 基础版）----
   registerImportCommand(program);
+
+  // ---- bundle 区块：SoT 导出 / 导入（迁移；与上面的 import 语义不同，见 commands/bundle）----
+  registerBundleCommand(program);
 
   // 无子命令 → 输出简短帮助，退出码 0（Spec §6.1）
   program.action((_options, command) => {
