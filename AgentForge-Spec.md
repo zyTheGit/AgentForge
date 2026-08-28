@@ -517,6 +517,13 @@ mcp: []
 
 写入层由 scope 决定，优先级：`--scope` > `profile.learning.default_scope`（§4.2，缺省 `project`）。
 
+**`learning.auto_promote`（§4.2，缺省 `false`）**：为真时第 3 步落盘后立刻在同一次命令内跑一遍 §7.5 promote（产物写入条目所在层，等价于不带 `--to` 的 `aforge promote <id>`），第 4 步的提示改为提示 `aforge sync`。三点边界：
+
+- **仍不投影**：promote 只写 SoT 的 `custom/` 或 `skills/`，进 agent 侧投影依旧要 `aforge sync`——第 3 条"不自动进入投影"不受影响；
+- **不回滚 learn**：promote 失败（目标文件已存在 → 3 / 无写权限 → 4）时条目**保留**且仍为 `promoted: false`，命令先打印 `learning created` 再按 promote 的退出码失败，用户处理掉冲突后 `aforge promote <id>` 续跑即可；
+- `aforge learn --no-auto-promote` 单次关掉（不改配置）。
+
+
 ### 7.5 Promote
 
 1. 校验 id。
