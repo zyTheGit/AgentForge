@@ -215,6 +215,31 @@ describe('runDoctorChecks — 未解析模板（§9 第 5 条）', () => {
   });
 });
 
+describe('runDoctorChecks — skills.copy_mode 已声明未实现（§4.2 注记 / §12 Phase 2）', () => {
+  it('copy_mode: symlink → skills-copy-mode warn，且不影响退出码', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(
+      host,
+      'version: 1\nscope: project\ntargets: [claude]\nskills:\n  copy_mode: symlink\n',
+    );
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'skills-copy-mode');
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain('symlink');
+    expect(r.hint).toContain('copy');
+    // 投影结果本身是正确的（恒实体 copy），只是与声明不符 → warn 不参与 §6.1 码聚合
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('copy_mode 未声明（schema 默认 copy）→ skills-copy-mode ok', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host);
+    const r = resultOf(await runDoctorChecks(doctorOpts(host)), 'skills-copy-mode');
+    expect(r.level).toBe('ok');
+    expect(r.detail).toContain('copy');
+  });
+});
+
 describe('runDoctorChecks — OneDrive（§2.1.1）', () => {
   it('用户目录在 OneDrive 下 → onedrive warn（不影响退出码）', async () => {
     const odHome = path.resolve('/home/OneDrive/u');
