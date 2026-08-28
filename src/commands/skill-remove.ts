@@ -124,9 +124,10 @@ function skillNotRegisteredError(
  * skill 目录可能被用户手工改过（§5.3 已安装 skill 以 SoT 为准），而"从投影里去掉
  * 一个 skill"只需要 profile 不再点到它；真要腾空间，删目录是一次显式的人工操作。
  *
- * **已知限制**：摘除只作用于 SoT。`aforge sync` 当前不 prune 已投影的产物，各
- * agent 目录下的 `skills\<name>\SKILL.md` 会留在原地（Spec §7.6「已知限制」；
- * prune 属后续独立交付）。命令输出因此明确要求用户手工清理，不承诺 sync 会带走。
+ * **投影侧的清理时机**：摘除只作用于 SoT。各 agent 目录下的 `skills\<name>\SKILL.md`
+ * 由**下一次 `aforge sync`** 删除——sync 按 sync-meta 上一轮记账的 `artifacts` 做差集
+ * （Spec §7.6 prune），且只删内容仍与记账一致的那些；手工改过的产物保留并报进
+ * `prune skipped`。命令输出据此指向 sync，并列出会被清理的路径。
  *
  * 锁边界：名字校验 / 目标层解析 / 路径拼接 / 两次只读探测都在锁外，
  * 「读 profile → 判存在 → 改 → 校验 → 写」整段在一次 withSotLock 内，故内层走

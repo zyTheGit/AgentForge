@@ -12,6 +12,7 @@ import type { Host } from '../../infra/host';
 import type { EnvSnapshot, Scope } from '../env';
 import type { OsContext } from '../paths';
 import { projectorRegistry } from './projectors/registry';
+import type { SyncPrunedEntry, SyncPruneSkip } from './sync-prune';
 import type { ProjectionPlanItem, Projector } from './types';
 
 /** Spec §4.2 targets 全集（--targets 合法性校验基准）。 */
@@ -94,6 +95,16 @@ export interface SyncResult {
    * 在本次 sync 取锁后、备份阶段之前执行——命令层据此提示用户曾发生崩溃恢复。
    */
   readonly recovered: readonly SyncRollbackEntry[];
+  /**
+   * 本次清理掉的上一轮残留（Spec §7.6 prune）：不再产出的整文件产物、
+   * 以及从 MCP 配置里摘掉的 server 键。dry-run 恒为空数组（见 syncOnce）。
+   */
+  readonly pruned: readonly SyncPrunedEntry[];
+  /**
+   * 该清理但被跳过的项：内容与记账不一致（疑似手工修改）、读写失败等。
+   * 跳过不影响退出码——残留无害，静默吞掉用户的手工编辑才有害。
+   */
+  readonly pruneSkipped: readonly SyncPruneSkip[];
 }
 
 /** 回滚明细：单文件恢复结果（失败收集 error，不中断其余恢复）。 */

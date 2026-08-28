@@ -195,15 +195,16 @@ aforge skill remove find-skills
 #   always    : pdf-tools
 #   skill dir : D:\proj\.agentforge\skills\find-skills (kept on disk)
 #
-# note: removed from profile.yaml only. `aforge sync` does NOT prune already
-#       projected files yet - delete these by hand (project level):
+# note: removed from profile.yaml only. run `aforge sync` to drop the
+#       projected copies (project level):
 #         D:\proj\.opencode\skills\find-skills\SKILL.md
 #         D:\proj\.agents\skills\find-skills\SKILL.md
 #         D:\proj\.claude\skills\find-skills\SKILL.md
 #         D:\proj\.pi\skills\find-skills\SKILL.md
+#       manually edited copies are kept and listed under `prune skipped`.
 ```
 
-- **已知限制：`aforge sync` 暂不 prune 已投影产物。** 摘除只作用于 SoT，再跑一次 `sync` **不会**删掉之前投影出去的 `.claude\skills\<name>\SKILL.md`（`.opencode` / `.agents` / `.pi` 同理）——投影只写"应该有的产物"，不比对上一轮的差集。要彻底清干净，按命令输出提示手工删除那几个目录。prune 语义属**后续独立交付**，见 Spec §7.6「已知限制」；
+- **投影产物由下一次 `aforge sync` 清理。** 摘除只作用于 SoT；再跑一次 `sync` 会按上一轮记账（`sync-meta.json` 的 `artifacts`）删掉 `.claude\skills\<name>\SKILL.md`（`.opencode` / `.agents` / `.pi` 同理），并在输出的 `pruned` 里列出。只删内容仍与记账一致的文件——手工改过的那份会保留并报进 `prune skipped`，详见 Spec §7.6；
 - `--scope project|user` 指定改哪一层（缺省同 `add`：AGF_SCOPE > project 在用 > user 在用）；两层都登记了同名技能时要各删一次；
 - 该层 `skills.always` 里没有这个名字 → 退出码 2（不当成幂等成功，多半是层选错了）。错误提示会说明目录是否还在盘上；如果另一层登记了同名，提示会直接给出可复制的 `--scope <另一层>`；
 - 摘完 `always` 只剩空数组时那一行显示 `(none)`；注意 `merge.arrays: replace` 下空数组**仍会覆盖** user 层，要让 user 层的同名技能重新生效得手工删掉 project 层的整个 `skills.always` 键；
@@ -254,15 +255,14 @@ aforge mcp remove jenkins-config
 #   profile   : D:\proj\.agentforge\profile.yaml
 #   servers   : ctx7
 #
-# note: removed from profile.mcp.servers only. `aforge sync` does NOT prune
-#       already projected keys yet - delete the "jenkins-config" entry by
-#       hand from these project-level files:
+# note: removed from profile.mcp.servers only. run `aforge sync` to drop the
+#       "jenkins-config" entry from these project-level files:
 #         D:\proj\opencode.json
 #         D:\proj\.mcp.json
 #         D:\proj\.pi\mcp.json
 ```
 
-- **已知限制：`aforge sync` 暂不 prune 已投影的 MCP 键。** 被删的 server 在 `opencode.json` / `.mcp.json` / `.pi\mcp.json` 里会**永久保留**——merge_json 遵循「未知键一律保留」（Spec §8.2），被删的键在下一轮投影里只是"没被写"而不是"要删掉"，`sync` 甚至会把这些文件报成 `unchanged, skipped`。按命令输出提示手工删掉那几个键。例外：codex 的 `.codex\config.toml` 走 marker 段整段重写，会自动跟上。prune 语义属**后续独立交付**，见 Spec §7.6「已知限制」；
+- **投影里的 server 键由下一次 `aforge sync` 摘除。** `sync` 按上一轮记账（`sync-meta.json` 的 `mcpServers`）算差集，把被删的 server 从 `opencode.json` / `.mcp.json` / `.pi\mcp.json` 里摘掉，文件本身与其余键原样保留。这不违背 merge_json 的「未知键一律保留」（Spec §8.2）——摘的只是记账里认领过的键；codex 的 `.codex\config.toml` 走 marker 段整段重写，本来就会自动跟上。详见 Spec §7.6；
 - `--scope project|user` 指定改哪一层（缺省同 `add`）；`--json`（或 `aforge --json mcp remove <name>`）输出机器可读结果，含被删条目 `removed` 与该层剩余 `servers`；
 - 该层没有这个名字 → 退出码 2，错误消息会列出该层现有的 server 名；如果另一层登记了同名，提示会直接给出可复制的 `--scope <另一层>`；
 - 摘掉最后一条后 `servers` 一行显示 `(none)`；
