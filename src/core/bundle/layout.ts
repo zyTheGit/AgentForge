@@ -125,6 +125,18 @@ async function lstatOrUndefined(host: Host, p: string): Promise<FileStat | undef
 }
 
 /**
+ * 该路径本身是不是 symlink（**不跟随**，路径不存在 → false）。
+ *
+ * collectTree 只对遍历到的**子项**判 symlink，传入的 root 本身不检查。所以
+ * 「顶层 CARRY_DIR 自己就是 symlink」（export）与「SoT 里的中间目录是 symlink」
+ * （import）这两处都得由调用方在进入递归 / 写盘之前单独问一次，否则同一条
+ * 「symlink 一律不跟随」的边界会在两端各漏一个口子。
+ */
+export async function isSymlinkPath(host: Host, p: string): Promise<boolean> {
+  return (await lstatOrUndefined(host, p))?.isSymbolicLink === true;
+}
+
+/**
  * 递归列举目录下的文件（不落盘、不读内容）。
  *
  * 判类型用 **lstat**：symlink 一律跳过并记入 `skipped`。SoT 里的 symlink 可能指向
@@ -201,4 +213,40 @@ export function assertSafeBundlePath(p: string): string {
     });
   }
   return posix;
+}
+
+/**
+ * bundle 内相对路径是否落在 SoT 约定布局内（import 侧的第二道守卫）。
+ *
+ * 只防越界（assertSafeBundlePath）不够：`sync-meta.json` 是形态完全合法的相对路径，
+ * 但它是**本机状态**——export 明确把它按 `machine-state` 剔除，因为里面记着上一轮
+ * 投影的绝对路径，而 §7.6 prune 拿这份记账当**删除白名单**。放一份别的机器的
+ * sync-meta.json 进 SoT，下一次 `aforge sync` 就会照着别人的账去删本机文件。
+ * `.sync.lock\` / `.agf-backup*` 同理：前者会让后续命令误判「锁被他人持有」，
+ * 后者是事务残留，导入后只会污染回滚现场。
+ *
+ * 判定只看首段（顶层条目名），与 export 的 classifySotEntry 同一张表——两端用同
+ * 一个分类函数，才不会出现「导出不带、导入却收」的不对称。
+ *
+ * @param rel 已经过 assertSafeBundlePath 的 posix 相对路径。
+ * @throws ConfigError(2) 首段不属于 CARRY_FILES / CARRY_DIRS，或文件与目录角色错位。
+ */
+export function assertBundlePathInLayout(rel: string): void {
+  const segments = rel.split('/');
+  const head = segments[0] ?? rel;
+  const entry = classifySotEntry(head);
+  let why: string | undefined;
+  if (entry.kind === 'excluded') {
+    why = `顶层条目 ${head} 归类为 ${entry.reason}`;
+  } else if (entry.kind === 'file' && segments.length > 1) {
+    why = `${head} 是顶层文件，不能当目录用`;
+  } else if (entry.kind === 'dir' && segments.length === 1) {
+    why = `${head} 是顶层目录，不能当文件用`;
+  }
+  if (why !== undefined) {
+    throw new ConfigError(`bundle 内路径不属于 SoT 约定布局: ${rel}（${why}）`, {
+      hint: `可导入的顶层条目仅限 ${[...CARRY_FILES, ...CARRY_DIRS].join(' / ')}；本机状态与事务残留不参与迁移`,
+      details: { path: rel, head },
+    });
+  }
 }

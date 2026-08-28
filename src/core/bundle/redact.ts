@@ -56,10 +56,9 @@ function redactRecord(
 }
 
 /** 单个 server 的净化（env / headers 两处凭据面）。 */
-function redactServer(server: McpServerInput, index: number, hits: string[]): McpServerInput {
-  // 路径里优先用 name（用户在 profile.yaml 里认得出来），缺名时退回下标
-  const label = server.name === '' ? `#${index}` : server.name;
-  const prefix = `mcp.servers[${label}]`;
+function redactServer(server: McpServerInput, hits: string[]): McpServerInput {
+  // name 由 McpServerSchema 约束为非空串，可直接当路径标签用（用户在 profile.yaml 里认得出来）
+  const prefix = `mcp.servers[${server.name}]`;
   const env = redactRecord(server.env, `${prefix}.env`, hits);
   const headers = redactRecord(server.headers, `${prefix}.headers`, hits);
   const next: McpServerInput = { ...server };
@@ -85,7 +84,7 @@ export function redactProfileSecrets(profile: ProfileInput): RedactResult {
     return { profile, redacted: [] };
   }
   const hits: string[] = [];
-  const nextServers = servers.map((server, index) => redactServer(server, index, hits));
+  const nextServers = servers.map((server) => redactServer(server, hits));
   if (hits.length === 0) {
     return { profile, redacted: [] };
   }

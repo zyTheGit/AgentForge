@@ -50,6 +50,7 @@ import {
   BUNDLE_MANIFEST_FILE,
   classifySotEntry,
   collectTree,
+  isSymlinkPath,
   type SkippedTreeEntry,
 } from './layout';
 import { redactProfileSecrets, stripDetected } from './redact';
@@ -111,6 +112,7 @@ async function emitHabits(
   acc: WriteAcc,
   sotRoot: string,
   keepDetected: boolean,
+  warnings: string[],
 ): Promise<void> {
   const file = path.join(sotRoot, HABITS_FILE);
   if (!(await ctx.host.exists(file))) {
@@ -124,6 +126,9 @@ async function emitHabits(
   // 而不是被打进 bundle 等到 import 后的第一次 sync 才炸
   const raw = await loadHabits(ctx.host, sotRoot);
   if (raw === null) {
+    // exists() 已过一道，走到这里说明读的时候文件没了（并发删除）。静默 return 会
+    // 让 bundle 既不含 habits.yaml、也不在 excluded 里留痕，用户无从知道少带了什么
+    warnings.push(`${HABITS_FILE} vanished while reading - not carried, re-run the export`);
     return;
   }
   const { habits, changed } = stripDetected(raw);
@@ -136,6 +141,7 @@ async function emitProfile(
   acc: WriteAcc,
   sotRoot: string,
   redact: boolean,
+  warnings: string[],
 ): Promise<string[]> {
   const file = path.join(sotRoot, PROFILE_FILE);
   if (!(await ctx.host.exists(file))) {
@@ -147,10 +153,19 @@ async function emitProfile(
   }
   const raw = await loadProfile(ctx.host, sotRoot);
   if (raw === null) {
+    warnings.push(`${PROFILE_FILE} vanished while reading - not carried, re-run the export`);
     return [];
   }
   const { profile, redacted } = redactProfileSecrets(raw);
   await emit(acc, PROFILE_FILE, serializeYamlDoc(profile), redacted.length > 0);
+  // redact 只覆盖 env / headers（§4.2 约定承载密钥的两处）。凭据也常内联在
+  // `command` / `args` / `url` 里（`--token xxx`、`https://user:pass@host`），
+  // 那些位置形状不可知、抹不了，只能提醒用户自己过一遍
+  if ((profile.mcp?.servers ?? []).length > 0) {
+    warnings.push(
+      'redact covers mcp.servers[].env / .headers only - check command / args / url for inline credentials',
+    );
+  }
   return redacted;
 }
 
@@ -226,8 +241,8 @@ export async function exportBundle(
   const warnings: string[] = [];
   const skipped: SkippedTreeEntry[] = [];
 
-  await emitHabits(ctx, acc, layer.sotRoot, options.keepDetected === true);
-  const redacted = await emitProfile(ctx, acc, layer.sotRoot, options.redact !== false);
+  await emitHabits(ctx, acc, layer.sotRoot, options.keepDetected === true, warnings);
+  const redacted = await emitProfile(ctx, acc, layer.sotRoot, options.redact !== false, warnings);
   await emitSources(ctx, acc, layer.sotRoot, warnings);
 
   for (const name of [...(await listDirSafe(ctx.host, layer.sotRoot))].sort()) {
@@ -239,7 +254,14 @@ export async function exportBundle(
     if (entry.kind === 'file') {
       continue; // 三个顶层文件已由上面的 emit* 处理（含净化改写）
     }
-    const listing = await collectTree(ctx.host, ctx.os, path.join(layer.sotRoot, name), name);
+    const dir = path.join(layer.sotRoot, name);
+    // 顶层目录**自己**是 symlink 时 collectTree 不会拦（它只判子项），必须在这里
+    // 挡掉：`skills` → `~/somewhere-else` 会把链接目标整棵打进 bundle 搬到别的机器
+    if (await isSymlinkPath(ctx.host, dir)) {
+      skipped.push({ path: dir, reason: 'symlink' });
+      continue;
+    }
+    const listing = await collectTree(ctx.host, ctx.os, dir, name);
     skipped.push(...listing.skipped);
     for (const rel of listing.files) {
       await emit(

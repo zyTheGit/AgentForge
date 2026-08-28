@@ -101,6 +101,16 @@ function bundleFile(rel: string, outDir = OUT_DIR): string {
   return path.join(outDir, BUNDLE_CONTENT_DIR, ...rel.split('/'));
 }
 
+/** 把若干路径伪装成 symlink（fake host 的 lstat 默认恒为 false）。 */
+function markSymlinks(host: DirAwareHost, links: readonly string[]): void {
+  const real = host.lstat.bind(host);
+  const set = new Set(links);
+  host.lstat = async (p: string) => {
+    const stat = await real(p);
+    return set.has(p) ? { ...stat, isSymbolicLink: true } : stat;
+  };
+}
+
 describe('bundle export', () => {
   it('carries user content and leaves machine state behind', async () => {
     const host = seed();
@@ -188,6 +198,28 @@ describe('bundle export', () => {
       code: 2,
     });
   });
+
+  it('does not follow a top-level carry dir that is itself a symlink', async () => {
+    const host = seed();
+    const skillsDir = path.join(PROJECT_SOT, 'skills');
+    markSymlinks(host, [skillsDir]);
+
+    const result = await runBundleExport(ctxFor(host), { out: OUT_DIR });
+
+    // collectTree 只判子项，顶层目录自己是 symlink 得由 export 挡掉，否则链接目标整棵被打包
+    expect(result.manifest.files.map((f) => f.path)).not.toContain('skills/pdf/SKILL.md');
+    expect(result.skipped).toEqual([{ path: skillsDir, reason: 'symlink' }]);
+    expect(result.manifest.warnings.some((w) => w.includes('skipped symlink'))).toBe(true);
+  });
+
+  it('warns about credential surfaces redact cannot reach', async () => {
+    const host = seed();
+    const result = await runBundleExport(ctxFor(host), { out: OUT_DIR });
+
+    expect(result.manifest.warnings.some((w) => w.includes('check command / args / url'))).toBe(
+      true,
+    );
+  });
 });
 
 describe('bundle import', () => {
@@ -233,6 +265,34 @@ describe('bundle import', () => {
     await expect(
       runBundleImport(ctxFor(host, OTHER_ROOT), { from: OUT_DIR }),
     ).rejects.toMatchObject({ code: 2 });
+  });
+
+  it('rejects machine state smuggled in through the manifest (exit 2)', async () => {
+    const host = await exported();
+    const manifestFile = path.join(OUT_DIR, BUNDLE_MANIFEST_FILE);
+    const manifest = JSON.parse(host.files.get(manifestFile) as string);
+    // 形态完全合法的相对路径，但 sync-meta.json 是本机状态：导进去会变成下一轮 prune 的删除白名单
+    const smuggled = '{"version":1}';
+    manifest.files = [{ path: 'sync-meta.json', sha256: sha256Hex(smuggled), transformed: false }];
+    host.files.set(manifestFile, JSON.stringify(manifest));
+    host.files.set(bundleFile('sync-meta.json'), smuggled);
+
+    await expect(
+      runBundleImport(ctxFor(host, OTHER_ROOT), { from: OUT_DIR }),
+    ).rejects.toMatchObject({ code: 2 });
+    expect(host.files.has(path.join(OTHER_SOT, 'sync-meta.json'))).toBe(false);
+  });
+
+  it('refuses to write through a symlink already sitting in the target SoT (exit 2)', async () => {
+    const host = await exported();
+    markSymlinks(host, [path.join(OTHER_SOT, 'custom')]);
+    host.files.set(path.join(OTHER_SOT, 'custom', 'placeholder'), 'x\n');
+
+    await expect(
+      runBundleImport(ctxFor(host, OTHER_ROOT), { from: OUT_DIR }),
+    ).rejects.toMatchObject({ code: 2 });
+    // 与 verifyFiles 同一个契约：抛错时一个字节都没写
+    expect(host.files.has(path.join(OTHER_SOT, 'habits.yaml'))).toBe(false);
   });
 
   it('honours the conflict policy (skip default / overwrite / rename)', async () => {

@@ -5,8 +5,10 @@
  * 1. 读 manifest.json（schema 校验，坏包 → ConfigError(2)）；
  * 2. 逐条校验 `files[].path` 的合法性（layout.assertSafeBundlePath 拒绝 `..` /
  *    绝对路径 / 盘符——manifest 是可手工编辑的文件，路径直接参与 join，不校验
- *    就能往 SoT 之外写盘）与 sha256（LF 规范化后比对）；
- * 3. 任一条不通过 → 抛错且**一个字节都没写**；全通过后才进入写入阶段。
+ *    就能往 SoT 之外写盘；layout.assertBundlePathInLayout 再拒掉形态合法但不属于
+ *    SoT 约定布局的条目，如 sync-meta.json 这类本机状态）与 sha256（LF 规范化后比对）；
+ * 3. 任一条不通过 → 抛错且**一个字节都没写**；全通过后才进入写入阶段，
+ *    写入前再确认目标路径链上没有 symlink（assertNoSymlinkOnWritePath）。
  *
  * 与 export 不同，import **会覆盖用户现有 SoT 文件**，所以：
  * - 默认冲突策略是 `skip`（不动既有文件），`overwrite` / `rename` 必须显式指定；
@@ -32,10 +34,12 @@ import { ConfigError, ConflictError } from '../errors';
 import { type OsContext, resolveProjectSoT, resolveUserSoT } from '../paths';
 import { withSotLock } from '../project/sync-lock';
 import {
+  assertBundlePathInLayout,
   assertSafeBundlePath,
   BUNDLE_CONTENT_DIR,
   BUNDLE_MANIFEST_FILE,
   collectTree,
+  isSymlinkPath,
 } from './layout';
 
 /** 冲突策略（目标已存在同名文件时）。 */
@@ -125,6 +129,7 @@ async function verifyFiles(
   const problems: string[] = [];
   for (const entry of manifest.files) {
     const rel = assertSafeBundlePath(entry.path);
+    assertBundlePathInLayout(rel);
     const file = path.join(contentDir, ...rel.split('/'));
     if (!(await host.exists(file))) {
       problems.push(`${rel}: 文件缺失（manifest 已登记）`);
@@ -195,6 +200,51 @@ async function writeOne(
   return { path: file.rel, target, action: 'written' };
 }
 
+/**
+ * 落盘前的 symlink 守卫：`sotRoot` 到目标文件之间的每一段都不能是 symlink。
+ *
+ * assertSafeBundlePath 只管 manifest 里写的路径形态，管不了**目标磁盘上已有的**
+ * 结构：若 SoT 里的 `skills` 已经是一条指向别处的 symlink，`custom/x.md` 这种
+ * 完全合法的相对路径也会被 mkdirp / atomicWrite 穿透着写到链接目标去。export 侧
+ * 对 symlink 的口径是「一律不跟随」，import 侧必须对称，否则同一条边界只守了一半。
+ *
+ * 与 verifyFiles 一样在**写第一个字节之前**把所有问题收集完再抛：走到写入阶段
+ * 才发现要中断，就破坏了「先全量校验，再一次性落盘」的契约。
+ *
+ * @throws ConfigError(2) 路径链上存在 symlink。
+ */
+async function assertNoSymlinkOnWritePath(
+  host: Host,
+  sotRoot: string,
+  files: readonly VerifiedFile[],
+): Promise<void> {
+  const checked = new Set<string>();
+  const problems: string[] = [];
+  for (const file of files) {
+    const segments = file.rel.split('/');
+    let current = sotRoot;
+    for (const segment of segments) {
+      current = path.join(current, segment);
+      if (checked.has(current)) {
+        continue;
+      }
+      checked.add(current);
+      if (await isSymlinkPath(host, current)) {
+        problems.push(`${current}（导入 ${file.rel} 时会穿透到链接目标）`);
+      }
+    }
+  }
+  if (problems.length > 0) {
+    throw new ConfigError(
+      `目标 SoT 的路径上存在 symlink，拒绝写入:\n${problems.map((p) => `  - ${p}`).join('\n')}`,
+      {
+        hint: '把这些 symlink 换成真实目录（或改用 --scope 落到另一层）后重试；bundle 不跟随 symlink 写盘',
+        details: { sotRoot, problems },
+      },
+    );
+  }
+}
+
 /** 目标层 SoT 根（不要求已 init：新机器上目录本来就不存在，见文件头）。 */
 function resolveTargetSoT(ctx: BundleImportContext, scope: Scope): string {
   return scope === 'project'
@@ -232,6 +282,7 @@ export async function importBundle(
   // 锁目录用 mkdir 原语，父目录（SoT 根）必须先存在
   await mkdirp(ctx.host, sotRoot);
   const entries = await withSotLock(ctx.host, sotRoot, ctx.os, async () => {
+    await assertNoSymlinkOnWritePath(ctx.host, sotRoot, verified);
     const written: ImportedEntry[] = [];
     for (const file of verified) {
       written.push(await writeOne(ctx.host, sotRoot, file, policy));

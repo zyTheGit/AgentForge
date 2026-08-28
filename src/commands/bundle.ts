@@ -88,6 +88,25 @@ export function parseConflictPolicy(raw: string | undefined): BundleConflictPoli
   return raw as BundleConflictPolicy;
 }
 
+/**
+ * 人类可读输出里逐条列举的上限。
+ *
+ * 一份真实 SoT 有几百个文件，全量铺开会把 scope / warnings / next 这些真正要看的
+ * 行冲出屏幕。超出部分折叠成一行计数并指向 `--json`——机器口径本来就是全量的。
+ */
+const RENDER_ITEM_LIMIT = 20;
+
+/** 逐条列举，超过 RENDER_ITEM_LIMIT 时折叠尾部（indent 为每行前缀）。 */
+function pushCapped(lines: string[], items: readonly string[], indent: string): void {
+  for (const item of items.slice(0, RENDER_ITEM_LIMIT)) {
+    lines.push(`${indent}${item}`);
+  }
+  const rest = items.length - RENDER_ITEM_LIMIT;
+  if (rest > 0) {
+    lines.push(`${indent}... and ${rest} more (use --json for the full list)`);
+  }
+}
+
 /** export 的人类可读输出。 */
 function renderExport(result: BundleExportResult): string {
   const m = result.manifest;
@@ -98,20 +117,26 @@ function renderExport(result: BundleExportResult): string {
     `  content   : ${result.contentDir}`,
     `  files     : ${m.files.length} file(s) carried`,
   ];
-  for (const file of m.files) {
-    lines.push(`    - ${file.path}${file.transformed ? '  [transformed]' : ''}`);
-  }
+  pushCapped(
+    lines,
+    m.files.map((file) => `- ${file.path}${file.transformed ? '  [transformed]' : ''}`),
+    '    ',
+  );
   if (m.excluded.length > 0) {
     lines.push(`  excluded  : ${m.excluded.length} entry(ies) left behind`);
-    for (const entry of m.excluded) {
-      lines.push(`    - ${entry.path} (${entry.reason})`);
-    }
+    pushCapped(
+      lines,
+      m.excluded.map((entry) => `- ${entry.path} (${entry.reason})`),
+      '    ',
+    );
   }
   if (m.redacted.length > 0) {
     lines.push(`  redacted  : ${m.redacted.length} credential value(s) replaced by a placeholder`);
-    for (const key of m.redacted) {
-      lines.push(`    - ${key}`);
-    }
+    pushCapped(
+      lines,
+      m.redacted.map((key) => `- ${key}`),
+      '    ',
+    );
   }
   if (m.warnings.length > 0) {
     lines.push('  warnings  :');
@@ -142,9 +167,11 @@ function renderImport(result: BundleImportResult): string {
     `  skipped   : ${counts.skipped}`,
     `  renamed   : ${counts.renamed}`,
   ];
-  for (const entry of result.entries) {
-    lines.push(`    - ${entry.path} [${entry.action}] -> ${entry.target}`);
-  }
+  pushCapped(
+    lines,
+    result.entries.map((entry) => `- ${entry.path} [${entry.action}] -> ${entry.target}`),
+    '    ',
+  );
   if (counts.skipped > 0 && result.onConflict === 'skip') {
     lines.push(
       '',
