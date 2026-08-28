@@ -109,7 +109,7 @@ aforge import AGENTS.md    # 或 CLAUDE.md：识别工具链关键词 → habits
 | `aforge init [--scope project\|user] [--json]` | 非交互初始化（探测快照 + 骨架落盘） |
 | `aforge detect [--json]` | 探测本机工具链（node/python/包管理器/shell/已有规则文件），无副作用 |
 | `aforge sync [--targets a,b] [--dry-run] [--force] [--json]` | 渲染 SoT 并投影到目标 Agent |
-| `aforge learn [--scope s] [--file f\|'-'] [--id id]` | 记录一条 learning（不投影） |
+| `aforge learn [--scope s] [--file f\|'-'] [--id id] [--no-auto-promote]` | 记录一条 learning（不投影；`learning.auto_promote: true` 时顺手 promote，`--no-auto-promote` 单次关掉） |
 | `aforge promote <id> [--to user] [--yes]` | 将 learning 升级为 custom 规则或 skill |
 | `aforge learnings list [--json]` / `show <id>` / `edit <id>` / `rm <id>` | 管理两层 SoT 的 learning 条目 |
 | `aforge source add <path\|git-url> [--ref r] [--id id]` | 登记规则/模板/技能来源（local 或 git） |
@@ -358,7 +358,7 @@ Windows 上 `command: "npx"` 可能起不来：部分客户端不经 shell 直�
 ## 已知限制
 
 - **并发安全**：多进程并发执行 `aforge sync` 或 `aforge source add` 等行为未定义。建议避免并发操作同一 SoT 目录（`.agentforge/`）。如需自动化调度，请确保串行执行。
-- **Symlink 支持**：`skills/` 目录默认使用实体拷贝（`copy_mode: copy`），不使用 symlink。跨平台场景（尤其 Windows）symlink 可能失败，doctor 会检测并提示。
+- **Symlink 支持**：`skills/` 目录恒使用实体拷贝，不使用 symlink。`profile.skills.copy_mode` 虽然接受 `symlink`，但 MVP 忽略该值（symlink 属 Phase 2）——声明 `symlink` 时 `aforge doctor` 会告警提示"当前恒为实体 copy"，投影结果不受影响；`skills/` 下已存在的断开 symlink 也会被 doctor 检出。
 
 ## macOS / Linux 旁注
 

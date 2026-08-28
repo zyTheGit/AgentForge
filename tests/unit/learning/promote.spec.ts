@@ -218,7 +218,7 @@ describe('promoteLearning', () => {
     expect(host.files.get(result.targetFile)).toBe('# 技能说明');
   });
 
-  it('promote_target=habits_note → 追加到目标层 habits.yaml 的 detected.promote_notes（无 habits 时创建）', async () => {
+  it('promote_target=habits_note → 追加到目标层 habits.yaml 的顶层 notes（无 habits 时创建）', async () => {
     const host = createHost();
     await seed(host, { content: '习惯性规则', id: 'note-1', promoteTarget: 'habits_note' });
 
@@ -230,7 +230,9 @@ describe('promoteLearning', () => {
 
     const habits = parseYaml(host.files.get(result.targetFile) ?? '');
     expect(habits.version).toBe(1);
-    expect(habits.detected.promote_notes).toEqual(['note-1: 习惯性规则']);
+    expect(habits.notes).toEqual(['note-1: 习惯性规则']);
+    // 不再写 detected 下的自由键（§4.1：detected 是探测器只读快照）
+    expect(habits.detected?.promote_notes).toBeUndefined();
   });
 
   it('habits_note 第二次追加：notes 数组累积不覆盖', async () => {
@@ -241,7 +243,7 @@ describe('promoteLearning', () => {
     await promoteLearning({ host, env: envFor(), os: OS, cwd: PROJECT_ROOT }, 'note-b');
 
     const habits = parseYaml(host.files.get(path.join(PROJECT_SOT, 'habits.yaml')) ?? '');
-    expect(habits.detected.promote_notes).toEqual(['note-a: 第一条', 'note-b: 第二条']);
+    expect(habits.notes).toEqual(['note-a: 第一条', 'note-b: 第二条']);
   });
 
   it('project 层优先于 user 层查找同 id 条目', async () => {
@@ -320,7 +322,7 @@ describe('promoteLearning', () => {
     expect(result.targetFile).toBe(path.join(USER_SOT, 'habits.yaml'));
     expect(host.mkdirpCalls).toContain(USER_SOT);
     const habits = parseYaml(host.files.get(result.targetFile) ?? '');
-    expect(habits.detected.promote_notes).toEqual(['note-user: 习惯规则']);
+    expect(habits.notes).toEqual(['note-user: 习惯规则']);
   });
 });
 

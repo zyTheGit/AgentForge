@@ -231,11 +231,14 @@ ai:
   style: string
   verification: [test, lint, typecheck, build, format]
   forbid: [string]
+notes: [string]           # 自由文本沉淀（promote habits_note 的落点，渲染为 ## Notes 段）
 detected: object          # 探测器只读快照
 extensions: object        # 用户扩展键
 ```
 
 **规则：** 声明字段优先于 `detected`。生成规则时不得在模板中硬编码个人工具名，只能通过变量注入。
+
+**`notes`：** `aforge promote <id>` 在 `promote_target: habits_note` 时追加到此数组（§7.5），投影时渲染成 `## Notes` 段，紧随 `## Learnings` 之后。属内容型数组，两层合并走 `merge.arrays`（§4.2）。早期版本曾写 `detected.promote_notes` 自由键且渲染层不消费（等于 promote 完永远进不了投影）；现在正式落点是 `notes`，旧键只做**读兼容**（一并渲染）而不自动搬迁——迁移是显式动作，把旧键内容挪进 `notes` 后该兼容分支自然失效。
 
 ### 4.2 profile.yaml
 
@@ -309,6 +312,8 @@ extensions: object
 
 **`projection.gitignore_generated`：** `true` 且 effective scope 为 `project` 时，`sync` 成功后把全部落在项目根内的投影产物写入项目 `.gitignore`，包在 `# BEGIN AGENTFORGE` / `# END AGENTFORGE` 标记段内（`.gitignore` 不支持 HTML 注释，故不复用 `marker_begin/end`）；段外用户条目原样保留，段内每次全量重算 → 幂等。项目根之外的产物（user scope 投影、`CODEX_HOME` 覆盖）不写入。该写入与投影产物同属一个事务（同一 `.sync.lock` + 备份/回滚），失败按硬项处理；不计入 `sync-meta.targets`。
 
+**`skills.copy_mode`（MVP 决定）：** `symlink` 属 Phase 2（§12）——schema 仍接受该取值（避免既有 profile 直接加载失败），但 MVP **忽略它、恒为实体 copy**：`skill add` 与四个 projector 都只做实体拷贝。声明 `symlink` 时 `aforge doctor` 报 `skills-copy-mode` warn（仅提示，不影响退出码与投影结果），改回 `copy` 即可消除该告警。
+
 **`skills.on_demand`（MVP 决定）：** 只登记不物化——`sync` 仅投影 `skills.always`；`on_demand` 清单由 `aforge status` 展示并标注"declared only - not projected in MVP"。按需装载属 Phase 2。
 
 **`skills.always` 的维护方：** 除手写外，`aforge skill add` 会把装入的技能名自动登记进**同一层** `profile.yaml` 的 `skills.always`（幂等，`--no-register` 关闭，见 §7.6）；`aforge skill remove <name>` 是其逆操作，只把名字从**同一层**的 `skills.always` 摘掉（profile-only：`skills\<name>\` 目录与已投影产物都不动，见 §7.6）。两者的回写都会重排整份 `profile.yaml` 的格式并丢弃注释（§7.6"写 `profile.yaml` 的副作用"）。
@@ -348,6 +353,8 @@ promote_target: custom_rule | skill | habits_note
 ```
 
 文件名不得包含 Windows 非法字符：`<>:"/\|?*`。
+
+**字段的投影口径：** `content` 与 `trigger` 进投影——`trigger` 非空时在该条正文前渲染一行 `**When:** <trigger>`（§5.2 第 ② 层的 `## Learnings` 段内）。`confidence` 与 `category` 是**管理维度**，供 `aforge learnings list` 展示与人工判断，不参与投影，也不做阈值过滤。
 
 ### 4.4 sources.json
 
@@ -522,10 +529,17 @@ mcp: []
 
 写入层由 scope 决定，优先级：`--scope` > `profile.learning.default_scope`（§4.2，缺省 `project`）。
 
+**`learning.auto_promote`（§4.2，缺省 `false`）**：为真时第 3 步落盘后立刻在同一次命令内跑一遍 §7.5 promote（产物写入条目所在层，等价于不带 `--to` 的 `aforge promote <id>`），第 4 步的提示改为提示 `aforge sync`。三点边界：
+
+- **仍不投影**：promote 只写 SoT 的 `custom/` 或 `skills/`，进 agent 侧投影依旧要 `aforge sync`——第 3 条"不自动进入投影"不受影响；
+- **不回滚 learn**：promote 失败（目标文件已存在 → 3 / 无写权限 → 4）时条目**保留**且仍为 `promoted: false`，命令先打印 `learning created` 再按 promote 的退出码失败，用户处理掉冲突后 `aforge promote <id>` 续跑即可；
+- `aforge learn --no-auto-promote` 单次关掉（不改配置）。
+
+
 ### 7.5 Promote
 
 1. 校验 id。
-2. 写入 `custom/` 或 `skills/`（按 `promote_target`）。
+2. 写入 `custom/`、`skills/` 或 `habits.yaml` 的 `notes`（按 `promote_target`，§4.1）。
 3. 标记 `promoted: true`。
 4. 可选立即 sync。
 
@@ -684,7 +698,8 @@ interface Projector {
 - 打印各 target 解析后的绝对路径。
 - 检查目录可写；不可写 → 退出码 4。
 - 比较 SoT content hash 与投影 marker 内 hash。
-- 检测 symlink 失败记录，提示改用 copy。
+- 检测 `skills/` 下断开的 symlink（MVP 投影恒为实体 copy，此类 symlink 来自手工创建或历史遗留 → warn）。
+- `profile.skills.copy_mode` 声明 `symlink` 时告警（已声明未实现，见 §4.2 / §12 Phase 2 → warn）。
 - 报告未解析的 template id、损坏的 YAML。
 
 ---

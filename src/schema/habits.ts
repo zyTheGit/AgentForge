@@ -111,6 +111,16 @@ export const HabitsSchema = z.object({
       forbid: z.array(z.string()).optional(),
     })
     .default({}),
+  /**
+   * 自由文本沉淀（Spec §4.1 notes）：promote(habits_note) 的正式落点，
+   * 由 composer 渲染成 `## Notes` 段。
+   *
+   * 为什么是顶层数组而不是 detected 下的键：`detected` 按 §4.1 是"探测器只读快照"，
+   * 往里塞用户沉淀会让 declared/detected 的边界失效（声明字段优先于 detected 这条
+   * 规则对它无从适用），也让 doctor 的 declared-vs-detected 比对多出噪声。
+   * 内容型数组 → 合并走 merge.arrays（append/replace），与 templates 等一致。
+   */
+  notes: z.array(z.string()).optional(),
   /** 探测器只读快照（Spec §4.1）：passthrough，键结构由探测器自定。 */
   detected: z.looseObject({}).default({}),
   /** 用户扩展键（Spec §4.1）：passthrough。 */

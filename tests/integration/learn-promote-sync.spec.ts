@@ -213,6 +213,155 @@ describe('learn → promote → sync（进程内，真实 fs）', () => {
       expect(split.inside).toContain(LEARNING_CONTENT);
     }
   }, 30_000);
+
+  it('trigger 非空 → 该条投影带 **When:** 行；trigger 为空 → 正文原样（§4.3）', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS });
+    const withTrigger = '依赖变更必须同步锁文件。';
+    await writeFile(path.join(ws.root, 'a.md'), `${withTrigger}\n`, 'utf8');
+    await writeFile(path.join(ws.root, 'b.md'), `${LEARNING_CONTENT}\n`, 'utf8');
+
+    const ctx = { host: ws.host, cwd: ws.root, os: OS };
+    await runLearn(ctx, { file: 'a.md', id: 'with-trigger', trigger: 'when adding dependencies' });
+    await runLearn(ctx, { file: 'b.md', id: 'no-trigger' });
+    await runPromote(ctx, 'with-trigger');
+    await runPromote(ctx, 'no-trigger');
+
+    await runSync({ ...ctx, agentforgeVersion: VERSION });
+
+    const claude = await readFile(ws.claudeMd, 'utf8');
+    // trigger 非空：正文前加一行 **When:** <trigger>
+    expect(claude).toContain(`**When:** when adding dependencies\n\n${withTrigger}`);
+    // trigger 为空：不生成空的 **When:** 行（§4.3 只投影 content + trigger）
+    expect(claude).toContain(LEARNING_CONTENT);
+    expect(claude).not.toContain('**When:** \n');
+  }, 30_000);
+
+  it('promote_target=habits_note → habits.notes 落地，sync 后投影出现 ## Notes 段（§4.1）', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS });
+    const note = '团队约定：PR 必须双人评审。';
+    await writeFile(path.join(ws.root, 'notes.md'), `${note}\n`, 'utf8');
+
+    const ctx = { host: ws.host, cwd: ws.root, os: OS };
+    await runLearn(ctx, { file: 'notes.md', id: 'note-1' });
+
+    // learn 无 --promote-target 开关，直接改条目 YAML（用户手改 SoT 的等价路径）
+    const entryFile = path.join(ws.sotRoot, 'learnings', 'note-1.yaml');
+    const entryYaml = await readFile(entryFile, 'utf8');
+    expect(entryYaml).toContain('promote_target: custom_rule');
+    await writeFile(
+      entryFile,
+      entryYaml.replace('promote_target: custom_rule', 'promote_target: habits_note'),
+      'utf8',
+    );
+
+    const promoted = await runPromote(ctx, 'note-1');
+    expect(promoted.targetFile).toBe(path.join(ws.sotRoot, 'habits.yaml'));
+
+    // 写的是顶层 notes（正式字段），不再是 detected.promote_notes 自由键
+    const habits = parseYaml(await readFile(promoted.targetFile, 'utf8')) as {
+      notes?: string[];
+      detected?: Record<string, unknown>;
+    };
+    expect(habits.notes).toEqual([`note-1: ${note}`]);
+    expect(habits.detected?.promote_notes).toBeUndefined();
+
+    await runSync({ ...ctx, agentforgeVersion: VERSION });
+
+    const claude = await readFile(ws.claudeMd, 'utf8');
+    expect(claude).toContain('## Notes');
+    expect(claude).toContain(`note-1: ${note}`);
+  }, 30_000);
+
+  /** profile.yaml 的 learning.auto_promote 打开（§4.2；init 落盘的是 false）。 */
+  async function enableAutoPromote(): Promise<void> {
+    const profileFile = path.join(ws.sotRoot, 'profile.yaml');
+    const before = await readFile(profileFile, 'utf8');
+    expect(before).toContain('auto_promote: false');
+    await writeFile(
+      profileFile,
+      before.replace('auto_promote: false', 'auto_promote: true'),
+      'utf8',
+    );
+  }
+
+  it('auto_promote: true → learn 一步到位：custom/<id>.md 落地 + 条目 promoted:true（§4.2）', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS });
+    await enableAutoPromote();
+
+    const learned = await runLearn(
+      { host: ws.host, cwd: ws.root, os: OS },
+      { content: `${LEARNING_CONTENT}\n`, id: 'auto-rule', category: 'tooling' },
+    );
+
+    expect(learned.autoPromote?.ok).toBe(true);
+    const promoted = learned.autoPromote?.ok === true ? learned.autoPromote.result : null;
+    expect(promoted?.targetFile).toBe(path.join(ws.sotRoot, 'custom', 'auto-rule.md'));
+    expect(await readFile(path.join(ws.sotRoot, 'custom', 'auto-rule.md'), 'utf8')).toBe(
+      `${LEARNING_CONTENT}\n`,
+    );
+
+    // 条目已被标记（learn 返回的 learning 是 promote 前的快照，磁盘才是最终态）
+    const entry = parseYaml(
+      await readFile(path.join(ws.sotRoot, 'learnings', 'auto-rule.yaml'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(entry.promoted).toBe(true);
+    expect(typeof entry.promoted_at).toBe('string');
+
+    // 仍不投影：进 CLAUDE.md 依旧要 sync（§7.4-3 未被破坏）
+    expect(existsSync(ws.claudeMd)).toBe(false);
+    await runSync({ host: ws.host, cwd: ws.root, os: OS, agentforgeVersion: VERSION });
+    expect(await readFile(ws.claudeMd, 'utf8')).toContain(LEARNING_CONTENT);
+  }, 30_000);
+
+  it('auto_promote: true + autoPromote:false 覆盖（--no-auto-promote）→ 只落条目不 promote', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS });
+    await enableAutoPromote();
+
+    const learned = await runLearn(
+      { host: ws.host, cwd: ws.root, os: OS },
+      { content: `${LEARNING_CONTENT}\n`, id: 'no-auto', autoPromote: false },
+    );
+
+    expect(learned.autoPromote).toBeUndefined();
+    expect(existsSync(path.join(ws.sotRoot, 'custom', 'no-auto.md'))).toBe(false);
+    const entry = parseYaml(
+      await readFile(path.join(ws.sotRoot, 'learnings', 'no-auto.yaml'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(entry.promoted).toBe(false);
+  }, 30_000);
+
+  it('auto_promote 失败（目标文件已存在 → 3）：条目仍创建且 promoted:false，可续跑 promote', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS });
+    await enableAutoPromote();
+
+    // 预置同名产物 → promote 侧的 ConflictError(3)
+    await mkdir(path.join(ws.sotRoot, 'custom'), { recursive: true });
+    const targetFile = path.join(ws.sotRoot, 'custom', 'clash.md');
+    await writeFile(targetFile, '手写的既有规则\n', 'utf8');
+
+    const learned = await runLearn(
+      { host: ws.host, cwd: ws.root, os: OS },
+      { content: `${LEARNING_CONTENT}\n`, id: 'clash' },
+    );
+
+    // learn 本身不失败：条目落盘（这是 runLearn 不把 promote 异常抛出去的理由）
+    expect(learned.autoPromote?.ok).toBe(false);
+    const error = learned.autoPromote?.ok === false ? learned.autoPromote.error : null;
+    expect(toExitCode(error)).toBe(3);
+    expect(await readFile(targetFile, 'utf8')).toBe('手写的既有规则\n');
+
+    const entryFile = path.join(ws.sotRoot, 'learnings', 'clash.yaml');
+    expect(existsSync(entryFile)).toBe(true);
+    expect((parseYaml(await readFile(entryFile, 'utf8')) as { promoted: boolean }).promoted).toBe(
+      false,
+    );
+
+    // 处理掉冲突后手动续跑 promote 即可（可重试性）
+    await rm(targetFile);
+    const retried = await runPromote({ host: ws.host, cwd: ws.root, os: OS }, 'clash');
+    expect(retried.targetFile).toBe(targetFile);
+    expect(await readFile(targetFile, 'utf8')).toBe(`${LEARNING_CONTENT}\n`);
+  }, 30_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -474,6 +623,33 @@ describe('aforge learn/promote/source/skill（子进程端到端）', () => {
     const agents = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
     expect(agents).toContain('## Learnings');
     expect(agents).toContain(LEARNING_CONTENT);
+  }, 120_000);
+
+  it('learning.auto_promote: true → learn 一条命令产出 custom/；--no-auto-promote 单次关掉', async () => {
+    const root = path.join(base, 'proj');
+    mkdirSync(root);
+    expect(runCli(['init'], root).status).toBe(0);
+
+    // init 落盘的是 auto_promote: false，改成 true（§4.2）
+    const profileFile = path.join(root, '.agentforge', 'profile.yaml');
+    const profile = readFileSync(profileFile, 'utf8');
+    expect(profile).toContain('auto_promote: false');
+    await writeFile(profileFile, profile.replace('auto_promote: false', 'auto_promote: true'));
+
+    const auto = runCli(['learn', '--file', '-', '--id', 'cli-auto'], root, {
+      input: `${LEARNING_CONTENT}\n`,
+    });
+    expect(auto.status).toBe(0);
+    expect(auto.stdout).toContain('learning created: cli-auto');
+    expect(auto.stdout).toContain('learning.auto_promote=true');
+    expect(existsSync(path.join(root, '.agentforge', 'custom', 'cli-auto.md'))).toBe(true);
+
+    const off = runCli(['learn', '--file', '-', '--id', 'cli-off', '--no-auto-promote'], root, {
+      input: `${LEARNING_CONTENT} 第二条\n`,
+    });
+    expect(off.status).toBe(0);
+    expect(off.stdout).toContain('aforge promote cli-off');
+    expect(existsSync(path.join(root, '.agentforge', 'custom', 'cli-off.md'))).toBe(false);
   }, 120_000);
 
   it('source add local + skill add：SoT skills/ 落地实体文件（§11.2.6）', async () => {

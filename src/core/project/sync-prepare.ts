@@ -132,6 +132,11 @@ async function readCustomContents(
  * 读取两层 SoT 的 promoted learnings（§5.2 第 ② 层；M8 learn/promote 接入）。
  * 同 id project 覆盖 user（§5.3 同名优先级精神）；按 created_at 稳定排序；
  * profile.learning.include_promoted_in_sync=false 时输出空（§4.2）。
+ *
+ * 出口是**渲染就绪的字符串**：trigger 非空时前置一行 `**When:** <trigger>`（§4.3
+ * 的 trigger 是"何时应用此规则"，不进投影等于采集了却不影响任何输出）。拼接放在
+ * 这里而不是 composer：composer 只吃字符串、不引入 Learning schema 依赖，§4.3
+ * 字段演化牵动不到渲染层。
  */
 async function readPromotedLearnings(
   host: Host,
@@ -153,7 +158,13 @@ async function readPromotedLearnings(
     .sort((a, b) =>
       a.created_at === b.created_at ? (a.id < b.id ? -1 : 1) : a.created_at < b.created_at ? -1 : 1,
     )
-    .map((l) => l.content);
+    .map(renderLearningBody);
+}
+
+/** 单条 promoted learning 的投影正文：trigger 非空 → `**When:** …` + 空行 + content。 */
+function renderLearningBody(learning: Learning): string {
+  const trigger = learning.trigger.trim();
+  return trigger === '' ? learning.content : `**When:** ${trigger}\n\n${learning.content}`;
 }
 
 /**

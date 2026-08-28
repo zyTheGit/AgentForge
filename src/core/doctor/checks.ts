@@ -12,7 +12,8 @@
  * 7. 声明值与 detected 不一致（§4.1：声明优先，仅提示 → warn）；
  * 8. 现有 merge_json 投影损坏（硬项 error(3)，soft 项 warn——§8.2/§8.6）；
  * 9. profile.skills.on_demand 清单（信息项：MVP 只登记不物化，§4.2 注记）；
- * 10. pi 的 MCP 历史落点残留（`.pi\settings.json` 含 `mcpServers` → warn，只诊断不删）。
+ * 10. pi 的 MCP 历史落点残留（`.pi\settings.json` 含 `mcpServers` → warn，只诊断不删）；
+ * 11. profile.skills.copy_mode 声明 `symlink`（已声明未实现 → warn，§4.2 注记 / §12 Phase 2）。
  *
  * 设计原则：
  * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题；
@@ -27,7 +28,7 @@
  * - `check-paths`：doctor 侧 plan ctx 构造、§9 第 1 条路径枚举、启用 target 的投影计划；
  * - `check-writable`：SoT 根与目标目录可写性探针（唯一有写副作用的检查）；
  * - `check-residuals`：事务残留（锁 / journal / 回滚失败备份）的级别与提示取舍；
- * - `check-consistency`：渲染基准 / 模板解析 / on_demand / sync-meta / merge_json；
+ * - `check-consistency`：渲染基准 / 模板解析 / on_demand / copy_mode / sync-meta / merge_json；
  * - `check-projection-hash`：marker 区间三方比对（当前渲染 vs 记录 vs 磁盘）；
  * - `check-environment`：declared vs detected / OneDrive / 断开的 symlink。
  *
@@ -50,6 +51,7 @@ import {
 } from './check-config';
 import {
   checkMergeJson,
+  checkSkillsCopyMode,
   checkSkillsOnDemand,
   checkTemplates,
   readSyncMetaForDoctor,
@@ -164,6 +166,9 @@ async function runConfigDependentChecks(
 
   // ---- profile.skills.on_demand：MVP 只登记不物化（Spec §4.2 注记）----
   checkSkillsOnDemand(results, config);
+
+  // ---- profile.skills.copy_mode：symlink 已声明未实现（§4.2 注记 / §12 Phase 2）----
+  checkSkillsCopyMode(results, config);
 
   // ---- sync-meta 读取（损坏 → error(2)；不存在 → 信息性 ok）----
   const syncMeta = await readSyncMetaForDoctor(host, results, roots, config);

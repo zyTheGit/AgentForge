@@ -114,6 +114,38 @@ export function checkSkillsOnDemand(results: DoctorCheckResult[], config: Effect
 }
 
 /**
+ * profile.skills.copy_mode：`symlink` 已声明未实现（Spec §4.2 注记 / §12 Phase 2）。
+ *
+ * 为什么是 warn 而不是让 schema 拒绝：`CopyMode` enum 从 M1 起就收 `symlink`，
+ * 改成拒绝会让既有写了该值的 profile 直接加载失败（ConfigError(2)），是破坏性变更。
+ * 但静默接受同样不行——用户以为配了就生效，实际 `skill add` 与四个 projector 恒做
+ * 实体 copy。折中：照旧接受，由 doctor 明说"声明了但当前不生效"。
+ *
+ * 恒不影响退出码（warn 不参与 §6.1 的码计算），因为投影结果本身是正确的，
+ * 只是与声明不符；与 skills-on-demand 同属"声明 vs 实际"的信息类落点。
+ */
+export function checkSkillsCopyMode(results: DoctorCheckResult[], config: EffectiveConfig): void {
+  const copyMode = config.profile.skills.copy_mode;
+  if (copyMode === 'symlink') {
+    results.push({
+      section: 'config',
+      level: 'warn',
+      item: 'skills-copy-mode',
+      detail:
+        'profile.skills.copy_mode: symlink 已声明，但 MVP 恒为实体 copy（Spec §12 Phase 2）——当前投影行为不受影响',
+      hint: '改为 skills.copy_mode: copy 可消除该告警；symlink 支持属 Phase 2',
+    });
+    return;
+  }
+  results.push({
+    section: 'config',
+    level: 'ok',
+    item: 'skills-copy-mode',
+    detail: `profile.skills.copy_mode: ${copyMode}（skills 投影为实体 copy）`,
+  });
+}
+
+/**
  * sync-meta 读取（损坏 → error(2)；不存在 → 信息性 ok）。
  *
  * @returns 记录内容；损坏与"尚未 sync"都返回 null——调用方只用它判断有无基准可比，
