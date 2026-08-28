@@ -13,17 +13,53 @@
  *   profile.yaml 的 mcp.servers（同名 upsert：重复 add = 更新配置）；
  * - transport 条件校验（stdio 需 command / http(sse) 需 url）在
  *   core/sources/mcp.addMcpServer 写入前执行。
+ *
+ * `aforge mcp remove <name> [--scope project|user] [--json]`：
+ * - 从目标层 profile.yaml 的 mcp.servers 摘掉该名字（**只改 SoT**）；
+ * - 已知限制：`aforge sync` 当前**不 prune** 已投影的 MCP 键（§8.2 未知键一律
+ *   保留），opencode / claude / pi 的 MCP 配置文件里那条声明要用户手工删除，命令
+ *   输出按本次写入的层（project / user 落点不同）逐条给出绝对路径；codex 走 marker
+ *   段整段重写、下次 sync 自动带走，故不列（prune 属后续独立交付）；
+ * - 目标层没有该名字 → ConfigError(2)（不当成幂等成功：用户多半选错了层，
+ *   另一层有同名时 hint 直接给出可复制的 `--scope <另一层>`）；
+ * - 无 --force/--yes：本命令只改一行声明，且改动可由 profile.yaml 的 git 历史找回。
+ *
+ * 拆分后的模块清单（对外导出面不变，采集侧的符号在文件末尾原样 re-export）：
+ * - 本文件：add / remove 的核心逻辑 + 两个子命令的注册与输出渲染；
+ * - commands/mcp-prompt.ts：交互问答与 --from-json 的 stdin 解析（输入采集）。
  */
 
-import { cancel, intro, isCancel, outro, select, text } from '@clack/prompts';
+import { cancel, intro, outro } from '@clack/prompts';
 import type { Command } from 'commander';
+import { loadProfile } from '../core/config/load';
 import { resolveWriteTargetLayer } from '../core/config/target-layer';
-import { readEnv, type Scope } from '../core/env';
+import { type EnvSnapshot, readEnv, type Scope } from '../core/env';
 import { ConfigError } from '../core/errors';
-import { type AddMcpServerResult, addMcpServer } from '../core/sources/mcp';
-import { type McpServerInput, McpServerSchema } from '../schema';
-import { type CommandContext, defaultCommandContext, printJson } from './context';
-import { resolveJsonFlag } from './flags';
+import { pathApiFor } from '../core/paths';
+import { CLAUDE_MCP_FILENAME } from '../core/project/projectors/claude';
+import {
+  OPENCODE_MCP_FILENAME,
+  OPENCODE_USER_DIR_SEGMENTS,
+} from '../core/project/projectors/opencode';
+import { PI_DIRNAME, PI_MCP_FILENAME, PI_USER_DIR_SEGMENTS } from '../core/project/projectors/pi';
+import { withSotLock } from '../core/project/sync-lock';
+import {
+  type AddMcpServerResult,
+  addMcpServer,
+  type RemoveMcpServerResult,
+  removeMcpServerLocked,
+} from '../core/sources/mcp';
+import type { McpServerInput } from '../schema';
+import {
+  type CommandContext,
+  defaultCommandContext,
+  otherScope,
+  printJson,
+  renderList,
+  sotRootFor,
+} from './context';
+import { parseScopeOption, resolveJsonFlag } from './flags';
+import { parseMcpServerJson, promptServer } from './mcp-prompt';
 import { isInteractiveStdin, readStdinText } from './stdin';
 
 /** 命令上下文。 */
@@ -40,126 +76,115 @@ export async function runMcpAdd(
   return addMcpServer(ctx.host, targetLayer, server);
 }
 
-/** "K=V,K=V" → record（空段忽略；M8 简单实现：不支持值内逗号/引号转义）。 */
-function parseKvList(raw: string): Record<string, string> | undefined {
-  const trimmed = raw.trim();
-  if (trimmed === '') {
-    return undefined;
-  }
-  const record: Record<string, string> = {};
-  for (const pair of trimmed
-    .split(',')
-    .map((p) => p.trim())
-    .filter((p) => p !== '')) {
-    const eq = pair.indexOf('=');
-    if (eq <= 0) {
-      throw new ConfigError(`KEY=VAL 形式不合法: ${pair}`, {
-        hint: '示例: FOO=bar,BAZ=qux（键非空、含一个 =）',
-        details: { pair },
-      });
-    }
-    record[pair.slice(0, eq)] = pair.slice(eq + 1);
-  }
-  return record;
+/** remove 结果：core 的摘除结果 + 实际写入的那一层（供输出与脚本判层）。 */
+export interface McpRemoveResult extends RemoveMcpServerResult {
+  readonly scope: Scope;
 }
 
-/** 解析 --from-json stdin 的原始文本 → McpServerInput。@throws ConfigError(2)。 */
-export function parseMcpServerJson(raw: string): McpServerInput {
-  let value: unknown;
+/**
+ * 另一层的 mcp.servers 里是否有这个名字（供「层选错了」的 hint 给出具体 --scope 值）。
+ *
+ * 只读探测，任何失败一律按 false：另一层 profile.yaml 损坏 / 不可读**不该**让本层
+ * 一次合法的 remove 失败，最坏结果只是 hint 退化成泛化措辞。
+ */
+async function otherLayerHasServer(
+  ctx: McpCommandContext,
+  otherSotRoot: string,
+  name: string,
+): Promise<boolean> {
   try {
-    value = JSON.parse(raw);
-  } catch (err) {
-    throw new ConfigError(`--from-json 输入不是合法 JSON: ${(err as Error).message}`, {
-      hint: '示例: {"name":"fs","transport":"stdio","command":"npx","args":["-y","mcp-fs"]}',
-    });
+    const servers = (await loadProfile(ctx.host, otherSotRoot))?.mcp?.servers ?? [];
+    return servers.some((s) => s.name === name);
+  } catch {
+    return false;
   }
-  const result = McpServerSchema.safeParse(value);
-  if (!result.success) {
-    const issues = result.error.issues;
-    const lines = issues.map(
-      (i) =>
-        `  - ${i.path.filter((p) => typeof p !== 'symbol').join('.') || '(root)'}: ${i.message}`,
-    );
-    throw new ConfigError(
-      `--from-json 输入不符合 MCP server 声明（§4.2），共 ${issues.length} 处问题:\n${lines.join('\n')}`,
-      {
-        hint: '必填 name/transport；stdio 需 command，http/sse 需 url',
-        details: { issues },
-      },
-    );
-  }
-  return result.data;
 }
 
-/** 交互采集（TTY）。取消 → null。 */
-async function promptServer(): Promise<McpServerInput | null> {
-  const name = await text({ message: 'MCP server name（profile.mcp.servers 中的键）' });
-  if (isCancel(name) || name.trim() === '') {
-    return null;
-  }
-  const transport = await select({
-    message: 'Transport',
-    options: [
-      { value: 'stdio' as const, label: 'stdio（command + args）' },
-      { value: 'http' as const, label: 'http（url）' },
-      { value: 'sse' as const, label: 'sse（url）' },
-    ],
-  });
-  if (isCancel(transport)) {
-    return null;
+/**
+ * remove 核心逻辑（可注入、不打印）。
+ *
+ * 目标层解析与「另一层是否有同名」的探测都在锁外（只读），「读 profile → 判存在 →
+ * 改 → 校验 → 写」整段在一次 withSotLock 内，因此锁内调用的是 removeMcpServerLocked
+ * （自取锁的变体会撞自己刚建的锁目录，`.sync.lock` 是非递归目录锁）。
+ *
+ * 另一层的探测是**无条件**做的（哪怕本次会成功）：它的唯一用途是失败分支的 hint，
+ * 而失败判据在锁内的 mutate 里才知道，那里是同步纯函数、不能 await。代价是一次小
+ * 文件读，换来「层选错了」这个最常见误用能直接给出可复制的 `--scope` 值。
+ *
+ * 空名判据落在**取锁之前**（与 runSkillRemove 先 validateSkillName 再 withSotLock 同位）：
+ * 非法名恒得退出码 2（Spec §6.1「配置校验 → 2」），不会被锁冲突的 ConflictError(3)
+ * 抢先，也不为一次必然失败的调用先建一遍锁目录。core 的 removeMcpServerLocked 里
+ * 同一判据保留作兜底——绕过命令层直接调 core 的调用方仍受保护，分工见该函数 JSDoc。
+ *
+ * @throws ConfigError(2) 名字为空（锁外判定，恒优先于 3）/ scope 层未 init /
+ *         该层未登记该名字 / profile.yaml 损坏。
+ * @throws ConflictError(3) 取不到 SoT 事务锁（另一个 aforge 正在写同一 SoT）。
+ * @throws PermissionError(4) SoT 根不可写（锁目录建不出来）/ profile.yaml 读不出来。
+ */
+export async function runMcpRemove(
+  ctx: McpCommandContext,
+  name: string,
+  options: { scope?: Scope } = {},
+): Promise<McpRemoveResult> {
+  if (name.trim() === '') {
+    throw new ConfigError('MCP server 名不能为空', {
+      hint: '用法: aforge mcp remove <name>；运行 aforge status 查看已登记的 server',
+      details: { name },
+    });
   }
 
-  const server: McpServerInput = { name: name.trim(), transport };
-  if (transport === 'stdio') {
-    const command = await text({ message: 'Command（如 npx / uvx / node）' });
-    if (isCancel(command) || command.trim() === '') {
-      return null;
-    }
-    server.command = command.trim();
-    const argsRaw = await text({ message: 'Args（空格分隔，可留空）', placeholder: '-y mcp-fs' });
-    if (isCancel(argsRaw)) {
-      return null;
-    }
-    const args = argsRaw
-      .trim()
-      .split(/\s+/)
-      .filter((a) => a !== '');
-    if (args.length > 0) {
-      server.args = args;
-    }
-    const envRaw = await text({
-      message: 'Env（KEY=VAL 逗号分隔，可留空）',
-      placeholder: 'FOO=bar',
-    });
-    if (isCancel(envRaw)) {
-      return null;
-    }
-    const env = parseKvList(envRaw);
-    if (env !== undefined) {
-      server.env = env;
-    }
-  } else {
-    const url = await text({ message: 'URL（http(s) 端点）' });
-    if (isCancel(url) || url.trim() === '') {
-      return null;
-    }
-    server.url = url.trim();
-    const headersRaw = await text({ message: 'Headers（KEY=VAL 逗号分隔，可留空）' });
-    if (isCancel(headersRaw)) {
-      return null;
-    }
-    const headers = parseKvList(headersRaw);
-    if (headers !== undefined) {
-      server.headers = headers;
-    }
-  }
-  return server;
+  const env = readEnv(ctx.host);
+  const targetLayer = await resolveWriteTargetLayer(ctx.host, env, ctx.os, ctx.cwd, options.scope);
+  const otherSotRoot = sotRootFor(ctx, env, otherScope(targetLayer.scope));
+  const otherScopeHasServer = await otherLayerHasServer(ctx, otherSotRoot, name);
+  return withSotLock(ctx.host, targetLayer.sotRoot, ctx.os, async () => ({
+    ...(await removeMcpServerLocked(ctx.host, targetLayer, name, { otherScopeHasServer })),
+    scope: targetLayer.scope,
+  }));
 }
+
+/**
+ * 本次写入层对应的、需要手工清理 MCP 键的投影文件绝对路径（逐条列给用户）。
+ *
+ * 为什么不直接调 projector 的 opencodeMcpPath / claudeMcpPath / piMcpPath：它们的入参是
+ * 完整 ProjectContext（profile / habits / renderedRulesMd / marker 等），而 remove 这条
+ * 路径从不装配投影上下文；只为算三个路径硬造一个假 ctx，比复用它们导出的**文件名 /
+ * 目录段常量**更容易与实际落点失配。故这里只复刻「project → 项目根；user → 用户目录 +
+ * 各 target 全局目录段」这一层基准判定，文件名与目录段全部取自 projector 常量。
+ *
+ * codex 不列：其 MCP 走 merge_toml 的 `# BEGIN/END AGENTFORGE MCP` 标记段**整段重写**，
+ * 下次 sync 按 SoT 重算该段，摘掉的 server 自动消失，不需要用户动手。
+ *
+ * 用户目录取不到时（USERPROFILE / HOME 皆无、仅靠 AGF_HOME 定位 SoT）退化成 `~` 占位：
+ * 这一行只是提示文案，不该让一次已经写盘成功的 remove 因为算不出提示而失败。
+ */
+function mcpProjectionFiles(ctx: McpCommandContext, env: EnvSnapshot, scope: Scope): string[] {
+  const api = pathApiFor(ctx.os);
+  if (scope === 'project') {
+    return [
+      api.join(ctx.cwd, OPENCODE_MCP_FILENAME),
+      api.join(ctx.cwd, CLAUDE_MCP_FILENAME),
+      api.join(ctx.cwd, PI_DIRNAME, PI_MCP_FILENAME),
+    ];
+  }
+  const home = env.userProfile === undefined || env.userProfile === '' ? '~' : env.userProfile;
+  return [
+    api.join(home, ...OPENCODE_USER_DIR_SEGMENTS, OPENCODE_MCP_FILENAME),
+    api.join(home, CLAUDE_MCP_FILENAME),
+    api.join(home, ...PI_USER_DIR_SEGMENTS, PI_MCP_FILENAME),
+  ];
+}
+
+/**
+ * 输入采集侧的导出面 re-export：`parseMcpServerJson` 实现已搬到
+ * commands/mcp-prompt.ts，这里保证调用方与测试仍能从 `commands/mcp` 原路径拿到。
+ */
+export { parseMcpServerJson } from './mcp-prompt';
 
 export function registerMcpCommand(program: Command): void {
   const cmd = program
     .command('mcp')
-    .description('manage MCP server declarations (add writes profile.mcp.servers)');
+    .description('manage MCP server declarations (add | remove writes profile.mcp.servers)');
 
   cmd
     .command('add')
@@ -168,12 +193,7 @@ export function registerMcpCommand(program: Command): void {
     .option('--from-json', 'read the server declaration as a JSON object from stdin')
     .option('--json', 'machine-readable output (absolute paths) - Spec 6.2')
     .action(async (options: { scope?: string; fromJson?: boolean; json?: boolean }, command) => {
-      if (options.scope !== undefined && options.scope !== 'project' && options.scope !== 'user') {
-        throw new ConfigError(`非法 scope: ${options.scope}`, {
-          hint: '有效值: project, user',
-        });
-      }
-      const scope = options.scope as Scope | undefined;
+      const scope = parseScopeOption(options.scope);
       const json = resolveJsonFlag(command, options.json);
 
       let server: McpServerInput | null;
@@ -206,7 +226,43 @@ export function registerMcpCommand(program: Command): void {
           `mcp server ${result.replaced ? 'updated' : 'added'}: ${result.server.name}`,
           `  transport : ${result.server.transport}`,
           `  profile   : ${result.profileFile}`,
-          `  servers   : ${result.servers.map((s) => s.name).join(', ')}`,
+          `  servers   : ${renderList(result.servers.map((s) => s.name))}`,
+        ].join('\n'),
+      );
+    });
+
+  cmd
+    .command('remove <name>')
+    .description(
+      'unregister an MCP server from profile.mcp.servers (SoT only - see the note in the output)',
+    )
+    .option('--scope <scope>', 'SoT scope to write: project or user (default: effective scope)')
+    .option('--json', 'machine-readable output (absolute paths) - Spec 6.2')
+    .action(async (name: string, options: { scope?: string; json?: boolean }, command) => {
+      const ctx = defaultCommandContext();
+      const result = await runMcpRemove(ctx, name, {
+        scope: parseScopeOption(options.scope),
+      });
+      if (resolveJsonFlag(command, options.json)) {
+        // §6.2 机器可读输出（路径一律绝对路径）
+        printJson(result);
+        return;
+      }
+      console.log(
+        [
+          `mcp server removed: ${result.removed.name}`,
+          `  transport : ${result.removed.transport}`,
+          `  scope     : ${result.scope}`,
+          `  profile   : ${result.profileFile}`,
+          `  servers   : ${renderList(result.servers.map((s) => s.name))}`,
+          '',
+          // 诚实交代已知限制：sync 当前不 prune 已投影的 MCP 键（§8.2 未知键一律保留），
+          // 所以这里绝不能写 "run aforge sync to drop it from your agents"；文件清单按本次
+          // 写入的层解析（project / user 落点不同，见 mcpProjectionFiles）
+          'note: removed from profile.mcp.servers only. `aforge sync` does NOT prune',
+          `      already projected keys yet - delete the "${result.removed.name}" entry by`,
+          `      hand from these ${result.scope}-level files:`,
+          ...mcpProjectionFiles(ctx, readEnv(ctx.host), result.scope).map((f) => `        ${f}`),
         ].join('\n'),
       );
     });

@@ -21,8 +21,9 @@ import { parse as parseYaml } from 'yaml';
 
 import { runInit } from '../../src/commands/init';
 import { runLearn } from '../../src/commands/learn';
+import { runMcpAdd, runMcpRemove } from '../../src/commands/mcp';
 import { runPromote } from '../../src/commands/promote';
-import { runSkillAdd } from '../../src/commands/skill';
+import { runSkillAdd, runSkillRemove } from '../../src/commands/skill';
 import {
   runSourceAdd,
   runSourceList,
@@ -506,5 +507,103 @@ describe('aforge learn/promote/source/skill（子进程端到端）', () => {
     });
     expect(result.status).toBe(5);
     expect(result.stderr).toContain('离线');
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// remove → sync：**现状锁定测试（characterization test）**
+//
+// 断言的是「当前行为」而不是「期望行为」：`skill remove` / `mcp remove` 只改 SoT，
+// 而 sync 目前**不 prune** 已投影的产物（Spec §7.6「已知限制」：投影只写应有产物，
+// 不比对上一轮差集；MCP 侧还叠加 §8.2「未知键一律保留」）。
+//
+// 作用有两个：
+// 1. 缺口不会在无人察觉中变化——若某次改动让 sync 开始/停止清理产物，这里会红；
+// 2. 给未来的 prune 交付留翻转锚点。
+//
+// >>> prune 交付落地时，请把下面两个 "仍残留" 断言**翻转**为 "已被清理"，
+// >>> 并同步删除 Spec §7.6 / README 的「已知限制」段与两条 remove 命令输出里的
+// >>> "does NOT prune ..." 提示。<<<
+// ---------------------------------------------------------------------------
+
+describe('remove 后 sync 的产物残留（现状锁定，prune 落地时须翻转）', () => {
+  let ws: Workspace;
+
+  beforeEach(async () => {
+    ws = await createWorkspace('prune-gap');
+  });
+
+  afterEach(async () => {
+    await disposeWorkspace(ws);
+  });
+
+  function ctx() {
+    return { host: ws.host, cwd: ws.root, os: OS };
+  }
+
+  it('skill remove → sync：SoT 已摘除，但各 agent 侧 skills/<name>/SKILL.md 仍残留', async () => {
+    await runInit(ctx());
+    const vendor = path.join(ws.root, 'vendor-src');
+    await mkdir(path.join(vendor, 'skills', 'pdf'), { recursive: true });
+    await writeFile(path.join(vendor, 'skills', 'pdf', 'SKILL.md'), '# pdf skill\n', 'utf8');
+    await runSourceAdd(ctx(), 'vendor-src', { id: 'vendor' });
+    await runSkillAdd(ctx(), 'pdf', 'vendor');
+    await runSync({ ...ctx(), agentforgeVersion: VERSION });
+
+    // 第一次 sync 后实际落地的产物（target 集合随 detect 结果变化，故按实测取）
+    const candidates = ['.claude', '.opencode', '.agents', '.pi'].map((dir) =>
+      path.join(ws.root, dir, 'skills', 'pdf', 'SKILL.md'),
+    );
+    const projectedBefore = candidates.filter((p) => existsSync(p));
+    expect(projectedBefore.length).toBeGreaterThan(0);
+
+    // ① 正向断言：SoT 侧确实摘除了
+    const removed = await runSkillRemove(ctx(), 'pdf');
+    expect(removed.always).toEqual([]);
+    const profile = parseYaml(await readFile(path.join(ws.sotRoot, 'profile.yaml'), 'utf8')) as {
+      skills?: { always?: string[] };
+    };
+    expect(profile.skills?.always).toEqual([]);
+    // SoT 里的 skill 目录按设计保留（remove 不删磁盘）
+    expect(existsSync(path.join(ws.sotRoot, 'skills', 'pdf', 'SKILL.md'))).toBe(true);
+
+    // ② 现状锁定：再 sync 一次，已投影的 SKILL.md 一个都没被清掉（当前已知限制）
+    await runSync({ ...ctx(), agentforgeVersion: VERSION });
+    expect(candidates.filter((p) => existsSync(p))).toEqual(projectedBefore);
+  }, 60_000);
+
+  it('mcp remove → sync：SoT 已摘除，但各 agent 侧 MCP 配置里的键仍残留', async () => {
+    await runInit(ctx());
+    await runMcpAdd(ctx(), { name: 'jenkins-config', transport: 'stdio', command: 'npx' });
+    await runSync({ ...ctx(), agentforgeVersion: VERSION });
+
+    const candidates = [
+      path.join(ws.root, 'opencode.json'),
+      path.join(ws.root, '.mcp.json'),
+      path.join(ws.root, '.pi', 'mcp.json'),
+    ];
+    const containing = async (): Promise<string[]> => {
+      const hit: string[] = [];
+      for (const file of candidates) {
+        if (existsSync(file) && (await readFile(file, 'utf8')).includes('jenkins-config')) {
+          hit.push(file);
+        }
+      }
+      return hit;
+    };
+    const beforeRemove = await containing();
+    expect(beforeRemove.length).toBeGreaterThan(0);
+
+    // ① 正向断言：SoT 侧 mcp.servers 已摘除
+    const removed = await runMcpRemove(ctx(), 'jenkins-config');
+    expect(removed.servers).toEqual([]);
+    const profile = parseYaml(await readFile(path.join(ws.sotRoot, 'profile.yaml'), 'utf8')) as {
+      mcp?: { servers?: unknown[] };
+    };
+    expect(profile.mcp?.servers).toEqual([]);
+
+    // ② 现状锁定：再 sync 一次，被删的 server 键仍在各投影文件里（§8.2 未知键保留）
+    await runSync({ ...ctx(), agentforgeVersion: VERSION });
+    expect(await containing()).toEqual(beforeRemove);
   }, 60_000);
 });

@@ -2,8 +2,8 @@
  * mcp 单测（Spec §4.2 mcp.servers / §6 命令表）。
  *
  * 覆盖：validateMcpServer transport 条件依赖（stdio 需 command / http·sse 需
- * url）、addMcpServer 新增与同名 upsert、profile 往返、命令层
- * parseMcpServerJson 的 JSON 与 schema 校验。
+ * url）、addMcpServer 新增与同名 upsert、removeMcpServerLocked 摘除与其失败判据、
+ * profile 往返、命令层 parseMcpServerJson 的 JSON 与 schema 校验。
  */
 
 import path from 'node:path';
@@ -11,7 +11,11 @@ import { describe, expect, it } from 'vitest';
 import { parseMcpServerJson } from '../../../src/commands/mcp';
 import { loadProfile } from '../../../src/core/config/load';
 import type { TargetLayer } from '../../../src/core/config/target-layer';
-import { addMcpServer, validateMcpServer } from '../../../src/core/sources/mcp';
+import {
+  addMcpServer,
+  removeMcpServerLocked,
+  validateMcpServer,
+} from '../../../src/core/sources/mcp';
 import type { McpServerInput } from '../../../src/schema';
 import { abs } from '../test-utils';
 import { createDirAwareHost } from './helpers';
@@ -161,6 +165,135 @@ describe('addMcpServer', () => {
     };
     await addMcpServer(host, userLayer, stdioServer);
     expect((await loadProfile(host, USER_SOT))?.mcp?.servers).toHaveLength(1);
+  });
+});
+
+describe('removeMcpServerLocked', () => {
+  /** 两条 server 的已 init project 层（fs 为 raw YAML，走 input 原始形态）。 */
+  function seedTwo(): ReturnType<typeof createDirAwareHost> {
+    const host = createDirAwareHost();
+    host.files.set(
+      projectLayer().profileFile,
+      [
+        'version: 1',
+        'targets: [claude]',
+        'templates: [base/default]',
+        'mcp:',
+        '  servers:',
+        '    - name: fs',
+        '      transport: stdio',
+        '      command: npx',
+        '    - name: web',
+        '      transport: http',
+        '      url: https://x',
+        '',
+      ].join('\n'),
+    );
+    return host;
+  }
+
+  it('命中：摘掉该条，其余条目与其他字段保留', async () => {
+    const host = seedTwo();
+
+    const result = await removeMcpServerLocked(host, projectLayer(), 'fs');
+
+    expect(result.removed.name).toBe('fs');
+    expect(result.servers.map((s) => s.name)).toEqual(['web']);
+    expect(result.profileFile).toBe(projectLayer().profileFile);
+    const profile = await loadProfile(host, PROJECT_SOT);
+    expect(profile?.mcp?.servers?.map((s) => s.name)).toEqual(['web']);
+    expect(profile?.templates).toEqual(['base/default']);
+  });
+
+  it('removed 为移除前的条目且已填充默认值（enabled:true，与 add 的 server 同形态）', async () => {
+    const host = seedTwo();
+
+    const result = await removeMcpServerLocked(host, projectLayer(), 'fs');
+
+    expect(result.removed).toEqual({
+      name: 'fs',
+      enabled: true,
+      transport: 'stdio',
+      command: 'npx',
+    });
+  });
+
+  it('移除最后一条 → servers 为空数组（profile 仍合法）', async () => {
+    const host = createDirAwareHost();
+    host.files.set(
+      projectLayer().profileFile,
+      [
+        'version: 1',
+        'targets: [claude]',
+        'mcp:',
+        '  servers:',
+        '    - name: fs',
+        '      transport: stdio',
+        '      command: npx',
+        '',
+      ].join('\n'),
+    );
+
+    const result = await removeMcpServerLocked(host, projectLayer(), 'fs');
+
+    expect(result.servers).toEqual([]);
+    expect((await loadProfile(host, PROJECT_SOT))?.mcp?.servers).toEqual([]);
+  });
+
+  it('该层不存在该名字 → ConfigError(2)，profile 一字未改（消息带现有名单）', async () => {
+    const host = seedTwo();
+    const before = host.files.get(projectLayer().profileFile);
+
+    await expect(removeMcpServerLocked(host, projectLayer(), 'nope')).rejects.toMatchObject({
+      code: 2,
+    });
+    await expect(removeMcpServerLocked(host, projectLayer(), 'nope')).rejects.toThrow(/fs, web/);
+    expect(host.files.get(projectLayer().profileFile)).toBe(before);
+  });
+
+  it('该层没有任何 server（mcp 字段缺失）→ ConfigError(2)，且不写盘', async () => {
+    const host = createDirAwareHost();
+    host.files.set(projectLayer().profileFile, 'version: 1\ntargets: [claude]\n');
+
+    await expect(removeMcpServerLocked(host, projectLayer(), 'fs')).rejects.toMatchObject({
+      code: 2,
+    });
+    expect(host.files.get(projectLayer().profileFile)).toBe('version: 1\ntargets: [claude]\n');
+  });
+
+  it('空白名 → ConfigError(2)，在读 profile 之前抛（profile 不存在也报同一码）', async () => {
+    const host = createDirAwareHost();
+
+    await expect(removeMcpServerLocked(host, projectLayer(), '   ')).rejects.toMatchObject({
+      code: 2,
+    });
+    // 未走到 editProfileLocked → 不会为缺失的 profile 创建最小骨架
+    expect(host.files.has(projectLayer().profileFile)).toBe(false);
+  });
+
+  it('profile.yaml 损坏 → ConfigError(2)', async () => {
+    const host = createDirAwareHost();
+    host.files.set(projectLayer().profileFile, 'version: 1\ntargets: [claude\n  bad: : :\n');
+
+    await expect(removeMcpServerLocked(host, projectLayer(), 'fs')).rejects.toMatchObject({
+      code: 2,
+    });
+  });
+
+  it('user 层 targetLayer：只动 user 层 profile.yaml', async () => {
+    const host = createDirAwareHost();
+    const userLayer: TargetLayer = {
+      scope: 'user',
+      sotRoot: USER_SOT,
+      profileFile: path.join(USER_SOT, 'profile.yaml'),
+    };
+    await addMcpServer(host, userLayer, { name: 'fs', transport: 'stdio', command: 'npx' });
+    await addMcpServer(host, projectLayer(), { name: 'fs', transport: 'stdio', command: 'npx' });
+
+    await removeMcpServerLocked(host, userLayer, 'fs');
+
+    expect((await loadProfile(host, USER_SOT))?.mcp?.servers).toEqual([]);
+    expect((await loadProfile(host, PROJECT_SOT))?.mcp?.servers).toHaveLength(1);
   });
 });
 

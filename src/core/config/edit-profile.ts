@@ -64,8 +64,12 @@ export interface EditProfileResult {
  * @param mutate 纯函数：接收当前（或缺省）原始形态，返回修改后的原始形态；
  *        **返回 null 表示无改动** → 跳过写盘（不产生纯格式 diff，见模块头）。
  *        不要在回调里做 IO；不要原地修改入参（返回新对象）。
+ *        允许**抛 ConfigError(2)** 表达「本次编辑的前置条件不成立」（如
+ *        `mcp remove` 发现目标名不在该层）——异常在 atomicWrite 之前冒泡，
+ *        故此时一个字节都不会写盘，详见 editProfileLocked。
  * @param os 宿主平台（决定锁目录的长路径归一）；缺省取当前进程平台，测试请显式注入。
- * @throws ConfigError(2) 目标层 profile.yaml 损坏（loadProfile 抛出）/ 修改后整体校验失败。
+ * @throws ConfigError(2) 目标层 profile.yaml 损坏（loadProfile 抛出）/ 修改后整体校验失败
+ *         / mutate 自己抛出的前置条件错误（原样冒泡，不被包装）。
  * @throws ConflictError(3) 取不到 SoT 事务锁（另一个 aforge 正在写同一 SoT）。
  */
 export async function editProfile(
@@ -89,7 +93,13 @@ export async function editProfile(
  *
  * 调用方必须**已持有 targetLayer.sotRoot 的锁**；不确定时用 editProfile。
  *
- * @throws ConfigError(2) profile.yaml 损坏 / 修改后整体校验失败（见 assertValidProfile）。
+ * mutate 抛出的异常在 `atomicWrite` **之前**冒泡（顺序：loadProfile → mutate →
+ * assertValidProfile → atomicWrite），因此 mutate 里用 ConfigError 表达「前置条件
+ * 不成立」是安全的——`mcp remove` 的「目标名不在该层」判据就落在那里，profile.yaml
+ * 一个字节都不会被改写。
+ *
+ * @throws ConfigError(2) profile.yaml 损坏 / 修改后整体校验失败（见 assertValidProfile）
+ *         / mutate 自己抛出的前置条件错误（原样冒泡）。
  */
 export async function editProfileLocked(
   host: Host,

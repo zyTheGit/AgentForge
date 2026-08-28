@@ -1,22 +1,35 @@
 /**
  * aforge skill 命令（Spec §6 命令表 / §7.6 / §11.2.6）。
  *
- * `aforge skill add <name> [--from <sourceId|路径>] [--no-register] | list [--json]`：
+ * `aforge skill add <name> [--from <sourceId|路径>] [--no-register] | list
+ *            | remove <name> [--scope project|user]`（三条子命令均支持 `--json`，§6.2）：
  * - add：从源（local 路径 / git store）**实体 copy** 到目标层 SoT
  *   `skills\<name>\`（非 symlink，§7.6 Windows 默认；目标已存在 →
  *   ConflictError(3)）；目标层 = AGF_SCOPE > project 在用 > user 在用；
  *   copy 完成后把名字**自动登记**进同一层 profile.yaml 的 skills.always
  *   （幂等；`--no-register` 只 copy 不登记，留给手工编排 profile 的场景）；
  * - list：SoT skills\（installed，标层）+ 各源 skills 清单（available，
- *   标源 id；同名时 project 层优先生效，§5.3）。
+ *   标源 id；同名时 project 层优先生效，§5.3）；
+ * - remove：**只**把名字从该层 profile.yaml 的 skills.always 摘掉，
+ *   `skills\<name>\` 目录原样留在磁盘上（§7.6 profile-only；见 runSkillRemove）。
  *
  * 核心逻辑在 core/sources/skill；本层只做目标层解析与输出。
+ *
+ * 拆分后的模块清单（对外导出面不变，remove 侧的符号在文件末尾原样 re-export）：
+ * - 本文件：上下文构造 + add / list 逻辑 + 三个子命令的注册与输出渲染；
+ * - commands/skill-remove.ts：remove 的结果类型与核心逻辑（含「层选错了」的 hint）。
  */
 import type { Command } from 'commander';
+import { defaultHabits, windowsDefaultProfile } from '../core/config/defaults';
 import { resolveWriteTargetLayer, type TargetLayer } from '../core/config/target-layer';
-import { readEnv } from '../core/env';
+import { readEnv, type Scope } from '../core/env';
 import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
+import { claudeSkillPath } from '../core/project/projectors/claude';
+import { codexSkillPath } from '../core/project/projectors/codex';
+import { opencodeSkillPath } from '../core/project/projectors/opencode';
+import { piSkillPath } from '../core/project/projectors/pi';
 import { withSotLock } from '../core/project/sync-lock';
+import type { ProjectContext } from '../core/project/types';
 import {
   type AddSkillResult,
   addSkill,
@@ -27,8 +40,10 @@ import {
   type SkillListItem,
   setSkillAlwaysLocked,
 } from '../core/sources/skill';
-import { type CommandContext, defaultCommandContext, printJson } from './context';
-import { resolveJsonFlag } from './flags';
+import { HabitsSchema, ProfileSchema } from '../schema';
+import { type CommandContext, defaultCommandContext, printJson, renderList } from './context';
+import { parseScopeOption, resolveJsonFlag } from './flags';
+import { runSkillRemove } from './skill-remove';
 
 /** 命令上下文。 */
 export type SkillCommandContext = CommandContext;
@@ -88,7 +103,7 @@ export interface SkillAddResult extends AddSkillResult {
  *
  * @param register false → 只 copy 不改 profile.yaml（`--no-register`）。
  * @throws ConflictError(3) 取不到 SoT 事务锁（另一个 aforge 正在写同一 SoT）。
- * @see addSkill / setSkillAlways 异常契约。
+ * @see addSkill / setSkillAlwaysLocked 异常契约。
  */
 export async function runSkillAdd(
   ctx: SkillCommandContext,
@@ -121,15 +136,70 @@ export async function runSkillList(ctx: SkillCommandContext): Promise<SkillListI
   return listSkills((await buildSkillContext(ctx, false)).skillCtx);
 }
 
+/**
+ * remove 侧的导出面 re-export：`runSkillRemove` / `SkillRemoveResult` 实现已搬到
+ * commands/skill-remove.ts，这里保证调用方与测试仍能从 `commands/skill` 原路径拿到。
+ */
+export { runSkillRemove, type SkillRemoveResult } from './skill-remove';
+
 /** 单行 skill 摘要（ASCII）。 */
 function skillLine(item: SkillListItem): string {
   return `  ${item.name}  [${item.status}]  ${item.origin}`;
 }
 
+/**
+ * 本次写入那一层上、四个 target 实际会落 `skills\<name>\SKILL.md` 的绝对路径。
+ *
+ * 路径一律取自 projector 的 skills 解析函数（Spec §2.3 / §8.3-8.6 是它们的唯一出处）：
+ * 命令层原先写死的 `.claude / .opencode / .agents / .pi` 只对 project 层成立，
+ * `--scope user` 时 opencode（`~\.config\opencode`）、codex（`CODEX_HOME` 或
+ * `~\.codex`）的全局根根本不在项目根下，用户照那行提示找不到要删的文件。
+ *
+ * projector 的签名要 ProjectContext，但这几个函数只读 os / scope / rootDir / env；
+ * profile 与 habits 仅为满足类型用默认值填充（同 init -i 的 targetMainRulePaths），
+ * 不参与路径计算，也不落盘。
+ */
+function projectedSkillDocPaths(
+  ctx: SkillCommandContext,
+  scope: Scope,
+  skillName: string,
+): string[] {
+  const env = readEnv(ctx.host);
+  const home = env.userProfile;
+  // user scope 的投影基准根是用户目录；两层模型下走到这里必然已解析出 SoT，故
+  // 缺 USERPROFILE / HOME 只可能是极端环境——回落项目根，不让提示行反过来弄砸
+  // 一次已经成功的 remove
+  const rootDir = scope === 'project' || home === undefined || home === '' ? ctx.cwd : home;
+  const profile = ProfileSchema.parse(windowsDefaultProfile());
+  const planCtx: ProjectContext = {
+    os: ctx.os,
+    scope,
+    rootDir,
+    renderedRulesMd: '',
+    habits: HabitsSchema.parse(defaultHabits()),
+    profile,
+    skillsToMaterialize: [],
+    mcpServers: [],
+    dryRun: true,
+    lineEnding: profile.projection.line_ending,
+    markerBegin: profile.projection.marker_begin,
+    markerEnd: profile.projection.marker_end,
+    markerMode: profile.projection.marker_mode,
+    // env 必须注入：codexSkillPath 走 ctx.env?.codexHome 分支，缺了会忽略 CODEX_HOME
+    env,
+  };
+  return [
+    opencodeSkillPath(planCtx, skillName),
+    codexSkillPath(planCtx, skillName),
+    claudeSkillPath(planCtx, skillName),
+    piSkillPath(planCtx, skillName),
+  ];
+}
+
 export function registerSkillCommand(program: Command): void {
   const cmd = program
     .command('skill')
-    .description('install / list agent skills (add copies files into SoT skills/)');
+    .description('install / list / unregister agent skills (add copies files into SoT skills/)');
 
   cmd
     .command('add <name>')
@@ -139,15 +209,20 @@ export function registerSkillCommand(program: Command): void {
       'source id or path containing skills/<name>/ (default: first source that has it)',
     )
     .option('--no-register', 'copy only - do not add the name to profile.yaml skills.always')
+    .option('--json', 'machine-readable output (absolute paths) - Spec 6.2')
     .action(
-      async (name: string, options: { from?: string; register: boolean }, command: Command) => {
+      async (
+        name: string,
+        options: { from?: string; register: boolean; json?: boolean },
+        command: Command,
+      ) => {
         const result = await runSkillAdd(
           defaultCommandContext(),
           name,
           options.from,
           options.register,
         );
-        if (resolveJsonFlag(command)) {
+        if (resolveJsonFlag(command, options.json)) {
           // skipped 一并输出：symlink / 环路跳过项属于结果的一部分（§10 安全边界）
           printJson(result);
           return;
@@ -206,5 +281,39 @@ export function registerSkillCommand(program: Command): void {
       const lines = items.map(skillLine);
       lines.push('', `${items.length} skill(s)`);
       console.log(lines.join('\n'));
+    });
+
+  cmd
+    .command('remove <name>')
+    .description('unregister a skill from profile.yaml skills.always (files stay in SoT skills/)')
+    .option('--scope <scope>', 'SoT scope to write: project or user (default: effective scope)')
+    .option('--json', 'machine-readable output (absolute paths) - Spec 6.2')
+    .action(async (name: string, options: { scope?: string; json?: boolean }, command: Command) => {
+      const ctx = defaultCommandContext();
+      const result = await runSkillRemove(ctx, name, {
+        scope: parseScopeOption(options.scope),
+      });
+      if (resolveJsonFlag(command, options.json)) {
+        printJson(result);
+        return;
+      }
+      console.log(
+        [
+          `skill removed: ${result.name} (profile only)`,
+          `  scope     : ${result.scope}`,
+          `  profile   : ${result.profileFile}`,
+          `  always    : ${renderList(result.always)}`,
+          `  skill dir : ${result.skillDir} (kept on disk)`,
+          '',
+          // 诚实交代已知限制：sync 当前不 prune 已投影产物（prune 属后续独立交付），
+          // 所以这里绝不能写 "run aforge sync to drop it from your agents"；
+          // 路径按本次写入的层从 projector 现算，不写死 project 级目录名
+          'note: removed from profile.yaml only. `aforge sync` does NOT prune already',
+          `      projected files yet - delete these by hand (${result.scope} level):`,
+          ...projectedSkillDocPaths(ctx, result.scope, result.name).map(
+            (file) => `        ${file}`,
+          ),
+        ].join('\n'),
+      );
     });
 }
