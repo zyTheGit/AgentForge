@@ -11,6 +11,16 @@
  * - 完成后提示 `aforge promote <id>`（§7.4-4）。
  *
  * 核心逻辑在 core/learning/store.createLearning；本层只做输入采集与输出。
+ *
+ * **auto_promote（§4.2 `learning.auto_promote`，默认 false）**：为真时条目落盘后
+ * 立刻在同一次命令内跑一遍 §7.5 promote（产物写入条目所在层，等价于不带 `--to`
+ * 的 `aforge promote <id>`）。`--no-auto-promote` 可单次关掉。两点边界：
+ * - **仍不投影**：promote 只写 SoT 的 `custom/` 或 `skills/`，进 agent 侧投影依旧
+ *   要 `aforge sync`（§7.4-3 的"不自动进入投影"未被破坏）；
+ * - **不回滚 learn**：promote 失败（目标文件已存在 → 3 / 无写权限 → 4）时条目
+ *   **保留**且仍为 promoted:false，命令先打印"learning created"再按 promote 的
+ *   退出码失败，用户处理掉冲突后 `aforge promote <id>` 即可续跑。故失败原因不能
+ *   直接 throw 出 runLearn——那会让"条目已创建"这件事在输出里丢掉。
  */
 import path from 'node:path';
 import { cancel, intro, isCancel, multiline, outro, select, text } from '@clack/prompts';
@@ -20,9 +30,10 @@ import { resolveWriteTargetLayer } from '../core/config/target-layer';
 import type { EnvSnapshot, Scope } from '../core/env';
 import { readEnv } from '../core/env';
 import { ConfigError } from '../core/errors';
+import { type PromoteResult, promoteLearning } from '../core/learning/promote';
 import { type CreateLearningResult, createLearning } from '../core/learning/store';
 import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
-import type { LearningCategory } from '../schema';
+import type { LearningCategory, Profile } from '../schema';
 import { type CommandContext, defaultCommandContext, printJson } from './context';
 import { parseScopeOption, resolveJsonFlag } from './flags';
 import { isInteractiveStdin, readStdinText } from './stdin';
@@ -46,12 +57,24 @@ export interface LearnOptions {
   readonly id?: string;
   /** 内容来源标识（file:<path> / stdin / paste / cli）。 */
   readonly source?: string;
+  /** 覆盖 `profile.learning.auto_promote`（`--no-auto-promote` → false）；缺省随配置。 */
+  readonly autoPromote?: boolean;
 }
+
+/**
+ * auto_promote 的执行结果。失败**不**中断 learn（条目已落盘、仍 promoted:false），
+ * 错误原样带出由命令层先打印条目再按其退出码失败。
+ */
+export type AutoPromoteOutcome =
+  | { readonly ok: true; readonly result: PromoteResult }
+  | { readonly ok: false; readonly error: unknown };
 
 /** learn 结果（store 结果 + 目标层信息）。 */
 export interface LearnResult extends CreateLearningResult {
   readonly scope: Scope;
   readonly sotRoot: string;
+  /** auto_promote 关闭时为 undefined（"没跑" ≠ "跑了但失败"）。 */
+  readonly autoPromote: AutoPromoteOutcome | undefined;
 }
 
 /**
@@ -61,6 +84,10 @@ export interface LearnResult extends CreateLearningResult {
  * scope 优先级：`--scope` > `profile.learning.default_scope`（Spec §4.2）——
  * 之前硬编码 'project'，使该配置项完全失效。
  *
+ * auto_promote 优先级：`options.autoPromote`（`--no-auto-promote`）>
+ * `profile.learning.auto_promote`。为真时条目落盘后立刻 promote，失败经
+ * `autoPromote.ok === false` 上报而**不**抛出（见文件头）。
+ *
  * @throws ConfigError(2) 目标层未初始化 / 内容为空 / id 非法 / CI 环境 / 配置损坏；
  * @throws PermissionError(4) 写入失败。
  */
@@ -69,7 +96,8 @@ export async function runLearn(
   options: LearnOptions = {},
 ): Promise<LearnResult> {
   const env = readEnv(ctx.host);
-  const scope: Scope = options.scope ?? (await resolveDefaultLearningScope(ctx, env));
+  const learningConfig = await resolveLearningConfig(ctx, env);
+  const scope: Scope = options.scope ?? learningConfig.default_scope;
   const layer = await resolveWriteTargetLayer(ctx.host, env, ctx.os, ctx.cwd, scope);
 
   let content = options.content;
@@ -108,7 +136,30 @@ export async function runLearn(
       source,
     },
   );
-  return { ...result, scope, sotRoot: layer.sotRoot };
+
+  const autoPromote =
+    (options.autoPromote ?? learningConfig.auto_promote)
+      ? await tryAutoPromote(ctx, env, result.learning.id)
+      : undefined;
+  return { ...result, scope, sotRoot: layer.sotRoot, autoPromote };
+}
+
+/**
+ * 落盘后的自动 promote（等价于不带 `--to` 的 `aforge promote <id>`：产物写入条目
+ * 所在层）。异常一律收进 `ok:false` —— learn 已经改了磁盘，抛出去会让"条目已创建"
+ * 从输出里消失，用户不知道该 `aforge promote <id>` 续跑还是重新 learn。
+ */
+async function tryAutoPromote(
+  ctx: LearnCommandContext,
+  env: EnvSnapshot,
+  id: string,
+): Promise<AutoPromoteOutcome> {
+  try {
+    const result = await promoteLearning({ host: ctx.host, env, os: ctx.os, cwd: ctx.cwd }, id);
+    return { ok: true, result };
+  } catch (error) {
+    return { ok: false, error };
+  }
 }
 
 /** 全部合法 category（§4.3，交互 select 用；字面量 + as const 供泛型推断）。 */
@@ -160,16 +211,17 @@ async function promptMetadata(): Promise<{
 }
 
 /**
- * `--scope` 缺省时的落层：生效 profile 的 `learning.default_scope`（Spec §4.2）。
+ * 生效 profile 的 `learning` 段（Spec §4.2）：`default_scope` 决定 `--scope` 缺省时
+ * 的落层，`auto_promote` 决定落盘后是否自动 promote。
  *
  * user 级 SoT 根不可解析（无 USERPROFILE/HOME）时以 project 根占位装配——与
  * status / doctor 同口径，保证 learn 在缺用户目录的环境下仍可用（默认值仍是
- * schema 的 'project'）。
+ * schema 的 'project' / false）。
  */
-async function resolveDefaultLearningScope(
+async function resolveLearningConfig(
   ctx: LearnCommandContext,
   env: EnvSnapshot,
-): Promise<Scope> {
+): Promise<Profile['learning']> {
   const projectSoTRoot = resolveProjectSoT(ctx.cwd, ctx.os);
   let userSoTRoot = projectSoTRoot;
   try {
@@ -178,7 +230,7 @@ async function resolveDefaultLearningScope(
     // 用户目录不可解析：仅影响 user 层配置的读取，诊断归 aforge doctor
   }
   const config = await resolveEffectiveConfig(env, userSoTRoot, projectSoTRoot, ctx.host);
-  return config.profile.learning.default_scope;
+  return config.profile.learning;
 }
 
 export function registerLearnCommand(program: Command): void {
@@ -191,13 +243,23 @@ export function registerLearnCommand(program: Command): void {
     )
     .option('--file <path>', 'read content from a file, or "-" for stdin')
     .option('--id <id>', 'custom learning id (default: auto-generated)')
+    .option('--no-auto-promote', 'do not promote right away even if learning.auto_promote is true')
     .action(
       async (
-        options: { scope?: string; file?: string; id?: string; json?: boolean },
+        options: {
+          scope?: string;
+          file?: string;
+          id?: string;
+          json?: boolean;
+          autoPromote?: boolean;
+        },
         command: Command,
       ) => {
         const json = resolveJsonFlag(command, options.json);
         const scope = parseScopeOption(options.scope);
+        // commander 的 --no-x 无参时恒为 true，区分不出"未指定"；只把显式 false
+        // 当覆盖，其余交回 profile.learning.auto_promote
+        const autoPromote = options.autoPromote === false ? false : undefined;
 
         // ---- 内容采集（§7.4-1：粘贴 / 文件 / stdin）----
         let stdinContent: string | undefined;
@@ -243,6 +305,7 @@ export function registerLearnCommand(program: Command): void {
           category,
           confidence,
           id: options.id,
+          autoPromote,
         });
 
         if (json) {
@@ -253,7 +316,9 @@ export function registerLearnCommand(program: Command): void {
             sotRoot: result.sotRoot,
             file: result.file,
             duplicateOf: result.duplicateOf ?? null,
+            autoPromote: describeAutoPromoteJson(result.autoPromote),
           });
+          throwAutoPromoteFailure(result.autoPromote);
           return;
         }
 
@@ -268,11 +333,65 @@ export function registerLearnCommand(program: Command): void {
             `  WARNING   : content duplicates unpromoted entry ${result.duplicateOf} (still created, Spec 7.5)`,
           );
         }
-        lines.push(
-          '',
-          `next: review then run \`aforge promote ${result.learning.id}\` to inject into projections`,
-        );
+        lines.push(...autoPromoteLines(result));
         console.log(lines.join('\n'));
+        throwAutoPromoteFailure(result.autoPromote);
       },
     );
+}
+
+/** auto_promote 的 --json 形态（关闭 → null，避免与"跑了但失败"混淆）。 */
+function describeAutoPromoteJson(
+  outcome: AutoPromoteOutcome | undefined,
+): Record<string, unknown> | null {
+  if (outcome === undefined) {
+    return null;
+  }
+  if (!outcome.ok) {
+    return { ok: false, error: describeAutoPromoteError(outcome.error) };
+  }
+  return {
+    ok: true,
+    targetScope: outcome.result.targetScope,
+    targetSoTRoot: outcome.result.targetSoTRoot,
+    targetFile: outcome.result.targetFile,
+    promotedAt: outcome.result.learning.promoted_at,
+  };
+}
+
+function describeAutoPromoteError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** 人类可读输出的尾段：auto_promote 结果 + 下一步提示。 */
+function autoPromoteLines(result: LearnResult): string[] {
+  const outcome = result.autoPromote;
+  if (outcome === undefined) {
+    return [
+      '',
+      `next: review then run \`aforge promote ${result.learning.id}\` to inject into projections`,
+    ];
+  }
+  if (!outcome.ok) {
+    return [
+      '',
+      `auto-promote FAILED (learning.auto_promote=true): ${describeAutoPromoteError(outcome.error)}`,
+      `  entry kept as promoted:false — fix the cause then run \`aforge promote ${result.learning.id}\``,
+    ];
+  }
+  return [
+    `  promoted  : ${outcome.result.targetFile} (learning.auto_promote=true)`,
+    '',
+    'next: run `aforge sync` to project the promoted rule into agent targets',
+  ];
+}
+
+/**
+ * auto_promote 失败时按 promote 的退出码失败（3 冲突 / 4 权限），但**在打印之后**
+ * ——用户先看到条目已创建，再看到失败原因，才知道下一步是续跑 promote。
+ */
+function throwAutoPromoteFailure(outcome: AutoPromoteOutcome | undefined): void {
+  if (outcome !== undefined && !outcome.ok) {
+    throw outcome.error;
+  }
 }
