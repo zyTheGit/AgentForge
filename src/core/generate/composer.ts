@@ -1,7 +1,11 @@
 /**
  * 规则正文装配（Spec §5.2 四层优先级，输出自上而下）：
  *   ① custom/*.md（按文件名序）→ ② promoted learnings（统一 ## Learnings 段）
+ *   → ②' habits.notes（统一 ## Notes 段，§4.1）
  *   → ③ profile.templates 已解析模板（列表序）→ ④ 内置 base/default（恒渲染一次）。
+ *
+ * ②' 不是新增的优先级层：notes 与 ② 的 learnings 同属"用户沉淀的自由文本"，
+ * 紧跟 ② 输出即可，§5.2 的四层契约不变。
  *
  * 职责边界：只产正文（renderedRulesMd 的 body）；marker 包裹由投影层负责。
  * 装配出口按 profile.projection.path_style 归一正文里的路径 token（§4.2，
@@ -31,7 +35,13 @@ export interface ComposeInput {
   readonly profile: Profile;
   /** custom/*.md 正文（调用方已按文件名排序），§5.2 第 ① 层。 */
   readonly customContents: readonly string[];
-  /** 已 promote 的 learning content 列表，§5.2 第 ② 层（统一 ## Learnings 段）。 */
+  /**
+   * 已 promote 的 learning 正文列表，§5.2 第 ② 层（统一 ## Learnings 段）。
+   *
+   * 契约：**已是渲染就绪的字符串**——trigger 的 `**When:** …` 前缀由调用方
+   * （sync-prepare.readPromotedLearnings）拼好。composer 只吃字符串，不引入
+   * Learning schema 依赖，渲染层与 learning 数据结构解耦（§4.3 字段演化不牵动这里）。
+   */
   readonly promotedLearnings: readonly string[];
   /** 已解析模板（按 profile.templates 顺序；可含 base/default，第 ④ 层恒用内置版）。 */
   readonly templateContents: readonly TemplateContent[];
@@ -221,6 +231,33 @@ function stripSection(section: string): string {
   return section.replace(/^(?:[ \t]*\r?\n)+/, '').replace(/\s+$/, '');
 }
 
+/**
+ * 收集待渲染的 notes（Spec §4.1 habits.notes）。
+ *
+ * 过渡期兼容：M8 的 promote(habits_note) 曾把条目写进 `detected.promote_notes`
+ * 自由键（当时 §4.1 还没有正式 notes 字段），而渲染层从未消费过它。这里把旧键并入
+ * 一起渲染，老 SoT 升级后无需手工搬键就能立刻拿到 `## Notes` 段。
+ *
+ * 为什么只读兼容、不做自动迁移：habits.yaml 是用户手写的 SoT，而 sync 的准备阶段
+ * 按约定只读不写（§7.3）。在渲染路径里回写用户文件会引入"sync 悄悄改 SoT"的副作用，
+ * 也会让 doctor 的 contentHash 比对失去稳定基准。迁移属显式动作，留给用户手工搬键；
+ * 搬完这条分支自然失效。
+ *
+ * 顺序：正式字段在前、旧键在后——正式字段是当前唯一写入路径，新条目位置才稳定。
+ */
+function collectNotes(habits: Habits): string[] {
+  const notes = [...(habits.notes ?? [])];
+  const legacy = (habits.detected as Record<string, unknown>).promote_notes;
+  if (Array.isArray(legacy)) {
+    for (const item of legacy) {
+      if (typeof item === 'string') {
+        notes.push(item);
+      }
+    }
+  }
+  return notes;
+}
+
 /** 先校验后渲染一个模板，返回规范化正文（语法错误 → ConfigError(2)，message 带 id）。 */
 async function renderValidated(id: string, source: string, view: TemplateView): Promise<string> {
   await validateTemplate(source, `模板 ${id} `);
@@ -253,6 +290,14 @@ export async function composeRules(input: ComposeInput): Promise<string> {
   const learned = input.promotedLearnings.map(stripSection).filter((s) => s !== '');
   if (learned.length > 0) {
     sections.push(stripSection(`## Learnings\n\n${learned.join('\n\n')}`));
+  }
+
+  // ②' habits.notes → 统一 ## Notes 段（§4.1；紧随 Learnings，空 notes 不产出该段）
+  const notes = collectNotes(input.habits)
+    .map(stripSection)
+    .filter((s) => s !== '');
+  if (notes.length > 0) {
+    sections.push(stripSection(`## Notes\n\n${notes.join('\n\n')}`));
   }
 
   // ③ 已解析模板（列表序）：缺失的非内置 id → fail-fast

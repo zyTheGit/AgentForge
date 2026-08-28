@@ -226,11 +226,14 @@ ai:
   style: string
   verification: [test, lint, typecheck, build, format]
   forbid: [string]
+notes: [string]           # 自由文本沉淀（promote habits_note 的落点，渲染为 ## Notes 段）
 detected: object          # 探测器只读快照
 extensions: object        # 用户扩展键
 ```
 
 **规则：** 声明字段优先于 `detected`。生成规则时不得在模板中硬编码个人工具名，只能通过变量注入。
+
+**`notes`：** `aforge promote <id>` 在 `promote_target: habits_note` 时追加到此数组（§7.5），投影时渲染成 `## Notes` 段，紧随 `## Learnings` 之后。属内容型数组，两层合并走 `merge.arrays`（§4.2）。早期版本曾写 `detected.promote_notes` 自由键且渲染层不消费（等于 promote 完永远进不了投影）；现在正式落点是 `notes`，旧键只做**读兼容**（一并渲染）而不自动搬迁——迁移是显式动作，把旧键内容挪进 `notes` 后该兼容分支自然失效。
 
 ### 4.2 profile.yaml
 
@@ -343,6 +346,8 @@ promote_target: custom_rule | skill | habits_note
 ```
 
 文件名不得包含 Windows 非法字符：`<>:"/\|?*`。
+
+**字段的投影口径：** `content` 与 `trigger` 进投影——`trigger` 非空时在该条正文前渲染一行 `**When:** <trigger>`（§5.2 第 ② 层的 `## Learnings` 段内）。`confidence` 与 `category` 是**管理维度**，供 `aforge learnings list` 展示与人工判断，不参与投影，也不做阈值过滤。
 
 ### 4.4 sources.json
 
@@ -520,7 +525,7 @@ mcp: []
 ### 7.5 Promote
 
 1. 校验 id。
-2. 写入 `custom/` 或 `skills/`（按 `promote_target`）。
+2. 写入 `custom/`、`skills/` 或 `habits.yaml` 的 `notes`（按 `promote_target`，§4.1）。
 3. 标记 `promoted: true`。
 4. 可选立即 sync。
 

@@ -6,9 +6,8 @@
  * 2. 按 promote_target 写入目标层 SoT：
  *    - custom_rule → `custom/<id>.md`；
  *    - skill → `skills/<id>/SKILL.md`；
- *    - habits_note → 追加到 habits.yaml 的 detected.promote_notes
- *      （**简单实现**：notes 类字段 Spec 未定义结构，此处选 detected 下的
- *      自由键，渲染层不消费——仅作记录；M9+ 如有正式 notes 字段再迁移）；
+ *    - habits_note → 追加到 habits.yaml 的顶层 `notes` 数组（§4.1），由 composer
+ *      渲染成 `## Notes` 段——三个 promote_target 至此都真正进入投影；
  * 3. 标记 promoted: true + promoted_at（条目保留不删除，§7.5）；
  * 4. 可选立即 sync 由 CLI 层提示，core 不自动执行。
  *
@@ -94,20 +93,23 @@ async function findLearning(
 }
 
 /**
- * habits_note 简单实现：追加到目标层 habits.yaml 的 detected.promote_notes 数组。
+ * habits_note：追加到目标层 habits.yaml 的顶层 `notes` 数组（Spec §4.1）。
  * habits.yaml 不存在时创建最小骨架（version + detected）；目标层 SoT 目录尚未
  * init（如 `--to user` 但 user 层未初始化）时先 mkdirp，避免裸 ENOENT 绕过
  * PermissionError(4) 的错误码映射（与 custom_rule / skill 两个分支一致）。
+ *
+ * 早期版本写的是 `detected.promote_notes` 自由键（当时 §4.1 还没有正式 notes
+ * 字段），而渲染层从不消费它——即条目 promote 完永远进不了投影。现在写正式字段，
+ * 由 composer 渲染成 `## Notes` 段；旧键的兼容只做读（见 composer.collectNotes），
+ * 此处不搬旧数据：迁移属显式动作，promote 一条新 note 不该顺手改写用户既有内容。
  */
 async function appendPromoteNote(host: Host, sotRoot: string, learning: Learning): Promise<string> {
   const habitsFile = path.join(sotRoot, HABITS_FILE);
   const existing = await loadHabits(host, sotRoot);
   const habits: HabitsInput = existing ?? { version: 1, detected: {} };
-  const detected = { ...(habits.detected ?? {}) };
-  const notes = Array.isArray(detected.promote_notes) ? [...detected.promote_notes] : [];
+  const notes = Array.isArray(habits.notes) ? [...habits.notes] : [];
   notes.push(`${learning.id}: ${learning.content.replace(/\s+/g, ' ').trim()}`);
-  detected.promote_notes = notes;
-  habits.detected = detected;
+  habits.notes = notes;
 
   await mkdirp(host, sotRoot);
   await atomicWrite(host, habitsFile, serializeYamlDoc(habits));
