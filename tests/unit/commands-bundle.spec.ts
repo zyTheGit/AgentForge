@@ -15,7 +15,7 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runBundleExport, runBundleImport } from '../../src/commands/bundle';
+import { renderImport, runBundleExport, runBundleImport } from '../../src/commands/bundle';
 import { BUNDLE_CONTENT_DIR, BUNDLE_MANIFEST_FILE } from '../../src/core/bundle/layout';
 import { REDACTED_PLACEHOLDER } from '../../src/core/bundle/redact';
 import { currentOs } from '../../src/core/paths';
@@ -340,5 +340,20 @@ describe('bundle import', () => {
     await expect(
       runBundleImport(ctxFor(host, OTHER_ROOT), { from: abs('nowhere') }),
     ).rejects.toMatchObject({ code: 2 });
+  });
+
+  it('puts the credential alert last so it survives a scrolled terminal', async () => {
+    const host = await exported();
+    const result = await runBundleImport(ctxFor(host, OTHER_ROOT), { from: OUT_DIR });
+
+    const lines = renderImport(result).split('\n');
+    const alertAt = lines.findIndex((l) => l.includes('[WARN]'));
+    expect(alertAt).toBeGreaterThan(lines.findIndex((l) => l.startsWith('next:')));
+    // 告警要自带「改哪个文件」，否则用户只知道有占位符不知道去哪补
+    const alert = lines.slice(alertAt).join('\n');
+    expect(alert).toContain('mcp.servers[ctx7].headers.Authorization');
+    expect(alert).toContain(path.join(OTHER_SOT, 'profile.yaml'));
+    // 纯 ASCII（Windows GBK 控制台安全，同 cli.ts 的约束）
+    expect(/^[\x20-\x7e\n]*$/.test(alert)).toBe(true);
   });
 });

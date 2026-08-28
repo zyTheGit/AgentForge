@@ -12,6 +12,7 @@
  * 本层只做参数解析与输出渲染；分类规则见 core/bundle/layout，
  * 净化改写见 core/bundle/redact，两条主流程见 core/bundle/export|import。
  */
+import path from 'node:path';
 import type { Command } from 'commander';
 import { type BundleExportResult, exportBundle } from '../core/bundle/export';
 import {
@@ -152,8 +153,37 @@ function renderExport(result: BundleExportResult): string {
   return lines.join('\n');
 }
 
-/** import 的人类可读输出。 */
-function renderImport(result: BundleImportResult): string {
+/** 醒目告警的分隔带宽度（纯 ASCII，Windows GBK 控制台安全，同 doctor 的取舍）。 */
+const ALERT_RULE = '='.repeat(72);
+
+/**
+ * 凭据占位符告警块。
+ *
+ * 刻意放在**输出最末尾**（`next:` 之后）：这条是唯一「不处理就会静默出问题」的信息，
+ * 而终端只保证最后几行必然在视野里——夹在文件清单与 next 之间会被一起滚过去。
+ * 与 doctor 同用 `[WARN]` 前缀，加 `=` 分隔带把它从流水账里拽出来。
+ *
+ * 除了告警本身，还给出**改哪个文件**：用户拿到字段路径也得自己推 profile.yaml 在哪，
+ * 少这一句就等于把最后一步留给用户猜。
+ */
+function pushCredentialAlert(lines: string[], result: BundleImportResult): void {
+  const keys = result.manifest.redacted;
+  if (keys.length === 0) {
+    return;
+  }
+  lines.push('', ALERT_RULE, `[WARN] ${keys.length} credential value(s) are placeholders.`);
+  lines.push('       The MCP server(s) below will fail auth until you set them again:');
+  for (const key of keys) {
+    lines.push(`         - ${key}`);
+  }
+  lines.push(
+    `       Edit ${path.join(result.sotRoot, 'profile.yaml')}, then run \`aforge sync\`.`,
+    ALERT_RULE,
+  );
+}
+
+/** import 的人类可读输出（导出供测试断言告警块位置，同 doctor.formatDoctorReport 的取舍）。 */
+export function renderImport(result: BundleImportResult): string {
   const counts = {
     written: result.entries.filter((e) => e.action === 'written').length,
     skipped: result.entries.filter((e) => e.action === 'skipped').length,
@@ -179,15 +209,6 @@ function renderImport(result: BundleImportResult): string {
       '      or --on-conflict rename (park the incoming copy next to yours).',
     );
   }
-  if (result.manifest.redacted.length > 0) {
-    lines.push(
-      '',
-      `WARNING: ${result.manifest.redacted.length} credential value(s) are placeholders and must be set again:`,
-    );
-    for (const key of result.manifest.redacted) {
-      lines.push(`      - ${key}`);
-    }
-  }
   if (result.manifest.warnings.length > 0) {
     lines.push('', 'export-time warnings:');
     for (const warning of result.manifest.warnings) {
@@ -206,6 +227,7 @@ function renderImport(result: BundleImportResult): string {
     'next: aforge detect   (refresh this machine toolchain snapshot)',
     '      aforge sync     (project the imported SoT to your agents)',
   );
+  pushCredentialAlert(lines, result);
   return lines.join('\n');
 }
 
