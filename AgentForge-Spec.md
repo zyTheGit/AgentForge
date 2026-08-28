@@ -90,12 +90,12 @@ Detect/Declare Habits → Profile → Generate Rules (SoT)
 
 ### 2.3 项目级投影路径
 
-| Target | 主规则 | Skills | MCP / 配置 |
-|--------|--------|--------|------------|
-| opencode | `AGENTS.md` | `.opencode\skills\<name>\SKILL.md` | `opencode.json` 或 `.opencode\opencode.json` |
-| codex | `AGENTS.md` | `.agents\skills\<name>\SKILL.md` | `.codex\config.toml` |
-| claude | `CLAUDE.md` | `.claude\skills\<name>\SKILL.md` | `.mcp.json` |
-| pi | `AGENTS.md` | `.pi\skills\<name>\SKILL.md` | `.pi\mcp.json`（MVP soft） |
+| Target | 主规则 | Skills | MCP / 配置 | Commands（§8.8，可选） |
+|--------|--------|--------|------------|------------------------|
+| opencode | `AGENTS.md` | `.opencode\skills\<name>\SKILL.md` | `opencode.json` 或 `.opencode\opencode.json` | `.opencode\command\<name>.md` |
+| codex | `AGENTS.md` | `.agents\skills\<name>\SKILL.md` | `.codex\config.toml` | 项目级不支持（见 §8.8） |
+| claude | `CLAUDE.md` | `.claude\skills\<name>\SKILL.md` | `.mcp.json` | `.claude\commands\<name>.md` |
+| pi | `AGENTS.md` | `.pi\skills\<name>\SKILL.md` | `.pi\mcp.json`（MVP soft） | `.pi\prompts\<name>.md` |
 
 ### 2.4 环境变量
 
@@ -261,6 +261,7 @@ skills:
   always: [string]
   on_demand: [string]
   copy_mode: copy | symlink              # Windows 默认 copy
+  expose_as_command: [string]            # 额外投影成命令/prompt 的技能名（§8.8，缺省空）
 merge:
   strategy: overlay | replace
   arrays: append | replace
@@ -275,6 +276,7 @@ projection:
   gitignore_generated: boolean
 learning:
   default_scope: project | user
+  auto_capture: off | prompt | hook      # 缺省 off（§7.4）
   auto_promote: false
   include_promoted_in_sync: true
 extensions: object
@@ -318,6 +320,10 @@ extensions: object
 
 **`skills.always` 的维护方：** 除手写外，`aforge skill add` 会把装入的技能名自动登记进**同一层** `profile.yaml` 的 `skills.always`（幂等，`--no-register` 关闭，见 §7.6）；`aforge skill remove <name>` 是其逆操作，只把名字从**同一层**的 `skills.always` 摘掉（profile-only：`skills\<name>\` 目录与已投影产物都不动，见 §7.6）。两者的回写都会重排整份 `profile.yaml` 的格式并丢弃注释（§7.6"写 `profile.yaml` 的副作用"）。
 
+**`skills.expose_as_command`（缺省空数组）：** 列出的技能名在 skill 投影之外**额外**投影一份命令/prompt 薄壳（落点与语义见 §8.8）。名单是 `skills.always` 的子集——点了名却不在 `skills.always` 里 → `sync` 报退出码 2（与"`skills.always` 点名却没装"同一口径）。默认空的理由见 §8.8：四个 target 都已把技能本身暴露成用户可调用入口，这份薄壳只为"强制调用"与"位置参数"两个额外能力存在。
+
+**`learning.auto_capture`（缺省 `off`）：** 控制"由谁触发 `aforge learn`"，三档语义见 §7.4。`off` 时行为与现状完全一致（只有人工敲命令）。该项与 `auto_promote` 正交：`auto_capture` 决定条目怎么产生，`auto_promote` 决定条目产生后是否顺手 promote，两者都为真时仍不投影（§7.4）。
+
 **Windows 安装默认值：**
 
 ```yaml
@@ -332,6 +338,7 @@ projection:
   line_ending: lf
 learning:
   default_scope: project
+  auto_capture: off
   auto_promote: false
 ```
 
@@ -422,6 +429,8 @@ mcp: []
 
 未解析的 template id → sync 失败，退出码 2。
 
+`learning.auto_capture: prompt`（§7.4）时，在第 ② 层之前额外插入一段固定的 `## Learning Protocol`，位置固定、内容不受 SoT 影响；它随 marker 区间整体替换，不产生独立产物、不进 §3.3 记账。`off` / `hook` 两档不插入该段。
+
 ### 5.3 Skill 同名优先级
 
 项目 SoT > 用户 SoT > 源 store（安装时已 copy，以 SoT 为准）。
@@ -451,7 +460,7 @@ mcp: []
 | `aforge template list\|enable\|disable` | 模板 |
 | `aforge skill add [--from <源名\|路径>] [--no-register]\|list\|remove <name> [--scope project\|user]` | Skill（`add` 默认登记进 `skills.always`，`--no-register` 关闭；`remove` **只**摘 `skills.always`，磁盘目录保留，见 §7.6） |
 | `aforge mcp add\|remove <name> [--scope project\|user]` | MCP 描述加入 / 移出 SoT（`add` 交互录入，或 `--from-json` 从 stdin 读 JSON 声明；`remove` 从目标层 `mcp.servers` 摘掉该名字，不存在 → 退出码 2） |
-| `aforge status` | 状态与路径 |
+| `aforge status` | 状态与路径（含各 target 的技能调用前缀：codex 为 `$<name>`，其余为 `/<name>`，见 §8.8） |
 | `aforge doctor` | 诊断 |
 | `aforge import <path>` | 导入现有规则（MVP 基础版） |
 
@@ -534,6 +543,29 @@ mcp: []
 - **仍不投影**：promote 只写 SoT 的 `custom/` 或 `skills/`，进 agent 侧投影依旧要 `aforge sync`——第 3 条"不自动进入投影"不受影响；
 - **不回滚 learn**：promote 失败（目标文件已存在 → 3 / 无写权限 → 4）时条目**保留**且仍为 `promoted: false`，命令先打印 `learning created` 再按 promote 的退出码失败，用户处理掉冲突后 `aforge promote <id>` 续跑即可；
 - `aforge learn --no-auto-promote` 单次关掉（不改配置）。
+
+**`learning.auto_capture`（§4.2，缺省 `off`）**：决定第 1 步的输入由谁触发。三档：
+
+| 取值 | 触发方式 | 确定性 | 新增机制 |
+|------|----------|--------|----------|
+| `off` | 只有人工敲 `aforge learn` | — | 无 |
+| `prompt` | 渲染正文里多一段 learning protocol，指示 agent 自行调用 `aforge learn --file -` | 概率性（模型可能不执行） | 无（复用 §5.2 正文合并） |
+| `hook` | 由 target 侧会话钩子在结束时调用抽取器 → `aforge learn` | 确定性 | 每个 target 一套钩子适配 |
+
+`prompt` 档的实现口径：在 §5.2 第 ② 层（`## Learnings` 段）之前插入一段固定的 `## Learning Protocol`，内容含触发条件与可复制的命令行，随 marker 区间整体替换，因此不新增产物、不新增记账。
+
+`hook` 档的落点与限制：
+
+- claude → `settings.json` 的 `hooks`（`SessionEnd` / `Stop`）；codex → `config.toml` 的钩子段（上游事件含 `SessionStart` / `SessionEnd` / `UserPromptSubmit` / `SubagentStart` / `SubagentStop` / `Stop`）。这两家可落地；
+- opencode 需 plugin、pi 需 extension，两者都要求在 target 侧先装扩展，MVP 内按 **soft** 处理（不写、只在 `aforge status` 标注 "hook not supported - install adapter"），与 §8.6 pi MCP 的 soft 口径一致；
+- **claude 的 `settings.json` 可能存有明文凭据**（`env.ANTHROPIC_AUTH_TOKEN` 等）。写入必须走 §8.2 的 `merge_json`（未知键一律保留），且失败信息与 `--json` 输出**不得回显文件内容**，只报路径与键名。
+
+四条护栏（三档共用）：
+
+1. **只写 SoT，绝不自动 sync**：非 dry-run 的 `sync` 要取 `.sync.lock`（§11），会话中途触发会与人工 `sync` 撞锁，且 marker 指纹校验可能直接判 3。`auto_capture` 的终点是 `learnings/` 落盘（`auto_promote` 为真时再多一步 promote），进投影恒由人工 `aforge sync`；
+2. **不隐含晋升**：`auto_capture` 不改变 `auto_promote` 的缺省 `false`；
+3. **CI 禁写**：沿用 §11「不在 CI 中写入 learnings」——`CI` 为真时三档一律降级为 `off`，且不算错误（静默跳过，`status` 里标注原因）；
+4. **不落原始会话记录**：抽取器只允许写结构化的 `content` / `trigger`，禁止把 transcript 原文塞进条目（凭据泄漏面 + 条目体积）。
 
 
 ### 7.5 Promote
@@ -682,7 +714,10 @@ interface Projector {
 |------|---------|------|
 | 主规则 | `AGENTS.md` | `%USERPROFILE%\.config\opencode\AGENTS.md` |
 | Skills | `.opencode\skills\<name>\SKILL.md` | 全局 skills 目录 |
+| Commands（§8.8） | `.opencode\command\<name>.md` | `%USERPROFILE%\.config\opencode\command\<name>.md` |
 | MCP | `opencode.json` 合并 | 全局 opencode.json |
+
+**命令目录（实测 opencode 1.18.4）**：`command\`（单数）与 `commands\`（复数）**两者都会被扫描**，AgentForge 恒写单数形式；子目录会成为命令名的一部分，分隔符为 `/`（`command\ns\foo.md` → `/ns/foo`）。
 
 ### 8.4 Codex
 
@@ -690,7 +725,12 @@ interface Projector {
 |------|---------|------|
 | 主规则 | `AGENTS.md` | `%USERPROFILE%\.codex\AGENTS.md` |
 | Skills | `.agents\skills\<name>\SKILL.md` | `%USERPROFILE%\.codex\skills\` 等 |
+| Commands（§8.8） | **不支持** | `%USERPROFILE%\.codex\prompts\<name>.md`（= `$CODEX_HOME\prompts`） |
 | MCP | `.codex\config.toml` 中 `# BEGIN AGENTFORGE MCP` 段 | 全局 config.toml |
+
+**自定义 prompt 只有 user 级（实测）**：项目级 `.codex\prompts\<name>.md` 放好后 `/name` **不展开**；`codex app-server` 协议（`generate-json-schema --experimental` 全量导出）里没有任何 custom prompt 方法，配合二进制里的 `tui/src/bottom_pane/custom_prompt_view.rs`，判定它是纯 TUI 特性、只读 `$CODEX_HOME\prompts`。因此 project scope 的 Commands 项按 **skip + doctor warning** 处理（§8.8 / §9），不静默写一个不生效的文件。
+
+**技能调用前缀是 `$` 而非 `/`（实测）**：`.agents\skills\<name>\SKILL.md` 放在项目里即可被发现，用 `$<name>` 调用（`codex exec` 下同样生效）。这是 codex 与其余三家唯一的语法差异，`aforge status` 必须显式提示。
 
 ### 8.5 Claude Code
 
@@ -698,7 +738,10 @@ interface Projector {
 |------|---------|------|
 | 主规则 | `CLAUDE.md` | `%USERPROFILE%\.claude\CLAUDE.md` |
 | Skills | `.claude\skills\<name>\SKILL.md` | `%USERPROFILE%\.claude\skills\` |
+| Commands（§8.8） | `.claude\commands\<name>.md` | `%USERPROFILE%\.claude\commands\<name>.md` |
 | MCP | `.mcp.json`（`mcpServers`） | 对应全局配置 |
+
+**命名空间分隔符是 `:`（实测 Claude Code 2.1.238）**：`commands\ns\foo.md` → `/ns:foo`（与 opencode 的 `/` 不同）。`SKILL.md` 正文里的 `$ARGUMENTS` 同样会被替换，因此 claude 侧"skill 直接当命令用"已能带参数。
 
 ### 8.6 Pi
 
@@ -706,7 +749,10 @@ interface Projector {
 |------|---------|------|
 | 主规则 | `AGENTS.md` | `%USERPROFILE%\.pi\agent\AGENTS.md` |
 | Skills | `.pi\skills\<name>\SKILL.md` | `%USERPROFILE%\.pi\agent\skills\` |
+| Commands（§8.8） | `.pi\prompts\<name>.md` | `%USERPROFILE%\.pi\agent\prompts\<name>.md` |
 | MCP | `.pi\mcp.json`（MVP soft） | `%USERPROFILE%\.pi\agent\mcp.json`（MVP soft） |
+
+**目录名是 `prompts` 而非 `commands`**：pi 启动时会把遗留的 `commands\` 自动 `rename` 成 `prompts\`（`dist/migrations.js` 的 `migrateCommandsToPrompts`），AgentForge 只写 `prompts\`。扫描**非递归**、只认 `.md`，命令名 = 文件名（无命名空间概念）；占位符除 `$ARGUMENTS` 外还支持 `$@` / `$1..$N` / `${N:-默认值}` / `${@:N:L}`（`dist/core/prompt-templates.js` 的 `substituteArgs`）。
 
 **MCP 前置依赖**：pi 本体不内建 MCP，需先在 pi 侧安装适配扩展 `pi install npm:pi-mcp-adapter`（<https://pi.dev/packages/pi-mcp-adapter>）。适配器读取优先级（高 → 低）为 `.pi\mcp.json`（项目级 pi 覆盖）> `.mcp.json`（项目共享）> `<Pi agent dir>\mcp.json`（user 级 pi 覆盖，缺省 `%USERPROFILE%\.pi\agent\mcp.json`）> `~\.config\mcp\mcp.json` / `~\.agents\mcp.json`（全局共享）。注意 user 级 pi 覆盖排在项目级 `.mcp.json` **之后**——上游明确项目文件同时盖过 user 全局共享配置与 pi 全局覆盖，因此不能假定"pi 私有位一定生效"。AgentForge 写 pi 私有位的理由是避免与 claude projector 争用根 `.mcp.json`：同一事务里两个 projector 写同一路径会互相覆盖；扩展未安装时该文件只是躺着不生效。
 
@@ -723,9 +769,68 @@ interface Projector {
 | 根 AGENTS.md | ✅ | ✅ | ❌ | ✅ |
 | CLAUDE.md | 可选 | ❌ | ✅ | ❌ |
 | Skills copy | ✅ | ✅ | ✅ | ✅ |
+| Commands（§8.8，可选） | ✅ | 仅 user | ✅ | ✅ |
 | MCP 配置 | ✅ | ✅ | ✅ | soft |
 
-开关对应（§4.2）：标 ✅ 的根 `AGENTS.md` 受 `projection.write_agents_md` 控制（`false` → 三个 target 均不写）；claude 的 `CLAUDE.md` 受 `projection.write_claude_md` 控制；opencode 的"可选" `CLAUDE.md` 仅在 `projection.write_claude_md: true` 时投影（缺省不写）。`marker_mode: none` 时上述主规则项由 `merge_marker` 降级为整文件 `write`。
+开关对应（§4.2）：标 ✅ 的根 `AGENTS.md` 受 `projection.write_agents_md` 控制（`false` → 三个 target 均不写）；claude 的 `CLAUDE.md` 受 `projection.write_claude_md` 控制；opencode 的"可选" `CLAUDE.md` 仅在 `projection.write_claude_md: true` 时投影（缺省不写）。`marker_mode: none` 时上述主规则项由 `merge_marker` 降级为整文件 `write`。Commands 行受 `skills.expose_as_command` 控制（缺省空 → 该行整体不投影）。
+
+### 8.8 Commands（用户可调用入口）
+
+**先明确一件事：这一层不是必需的。** 四个 target 都已把安装好的技能本身暴露成用户可直接调用的入口，`skills.always` + `aforge sync` 就足够让 `/<skill-name>` 可用：
+
+| target | 调用语法 | 依据 |
+|--------|----------|------|
+| claude | `/<name>` | `claude --help` 明写 "Skills still resolve via /skill-name"；项目级 `.claude\skills\` 实测通过 |
+| opencode | `/<name>` | `GET /command` 返回的条目带 `source: "skill"`；项目级 `.opencode\skills\` 探针实测出现在列表里 |
+| pi | `/<name>` | `dist/modes/interactive/interactive-mode.js` 把 `skillCommandList` 并入补全候选 |
+| codex | **`$<name>`** | `.agents\skills\` 项目级探针 + `$<name>` 实测生效（含 `codex exec`） |
+
+所以 §7 的默认路径不变：装技能 → sync → 直接用。**codex 前缀是 `$`**，`aforge status` 与 `skill add` 的成功提示必须写清这一差异，否则用户会以为 codex 没生效。
+
+**这一层解决的是另外两件事**，需要时才通过 `skills.expose_as_command`（§4.2）开启：
+
+1. **强制调用**：命令/prompt 是确定性的文本展开，不经模型裁量；技能触发依赖 description 匹配；
+2. **位置参数**：技能正文只有 `$ARGUMENTS` 一档（claude 实测支持，其余三家不保证），命令层可用 `$1..$N`。
+
+#### 8.8.1 产物形态
+
+薄壳 Markdown，一名一文件，正文只做"加载技能 X，按其工作流执行，用户输入见 `$ARGUMENTS`"，不复制技能正文（避免两份内容漂移）。落点见 §2.3 与 §8.3–8.6 各表的 Commands 行。
+
+SoT 侧不新增目录：内容由 `skills\<name>\SKILL.md` 的 frontmatter 派生（`description` 直接透传，`argument-hint` 有则透传）。
+
+#### 8.8.2 跨 target 归一化
+
+| 维度 | 归一化口径 |
+|------|------------|
+| 占位符 | SoT 只允许 `$ARGUMENTS` 与 `$1..$9`（四家交集）；`${N:-默认值}` 等 pi 专有语法不进 SoT |
+| frontmatter | 只写 `description` 与 `argument-hint`；opencode 的 `agent` / `model` / `subtask`、claude 的 `allowed-tools` 由各 projector 按需补 |
+| 命名空间 | opencode `/`、claude `:`、pi 无（不投影带命名空间的名字）、codex 不适用。MVP **只投影平铺名**，不产生子目录 |
+| 命令名 | 取技能目录名。中文名四家实测均可用；但 GBK 代码页下终端输入困难，建议 SoT 侧用 ASCII 名，中文别名由用户自行追加（AgentForge 不自动生成别名文件） |
+
+#### 8.8.3 记账与清理
+
+命令文件是**整文件产物**（与 `skills\<name>\SKILL.md` 同类），走 §7.6 的 `artifacts` 记账 + prune：不用 marker，从 `expose_as_command` 摘名后由下一次 `sync` 删除，内容被手工改过则跳过并报进 `prune skipped`。
+
+#### 8.8.4 codex 的降级
+
+codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective scope 为 `project` 时：
+
+- **不写**任何 codex 命令文件（不写进 `%USERPROFILE%`——那会让项目级配置泄漏成全局配置）；
+- `sync` 输出与 `--json` 里列一条 `skipped`，`aforge doctor` 报 `commands/codex-project-unsupported` warning（只提示，不影响退出码）；
+- 提示文案要给出替代方案：codex 侧用 `$<skill-name>` 即可，无需命令文件。
+
+#### 8.8.5 验证记录（2026-08-28）
+
+本节所有落点与语法差异均为真机实测，非文档推断。复现方式记录在此，便于上游变更后重跑：
+
+| target | 版本 | 验证手段 | 结论 |
+|--------|------|----------|------|
+| opencode | 1.18.4（Linux/WSL） | `opencode serve` + `GET /command` / `GET /skill`，探针放在项目 `.opencode\` 下 | `command\` 与 `commands\` 均生效；子目录名带 `/`；技能以 `source: "skill"` 出现在命令列表 |
+| claude | 2.1.238（Linux/WSL） | `claude -p "/<name> <args>"`，探针放在项目 `.claude\` 下 | 项目级 commands 生效、`$ARGUMENTS` 替换生效、命名空间为 `:`、项目级 skill 可 `/name` 调用 |
+| pi | 0.84.x（Windows） | `pi -p "/<name> <args>"`，探针放在项目 `.pi\prompts\` 下 | 项目级 prompts 生效、`$ARGUMENTS` 替换生效 |
+| codex | 0.5x（Windows，`@openai/codex`） | `codex exec '$<name>'` / `codex exec '/<name>'`；`codex app-server generate-json-schema --experimental` | `.agents\skills\` 项目级 + `$` 前缀生效；项目级 `.codex\prompts\` **不生效**，协议里无 custom prompt 方法 |
+
+四家的中文命令名（如 `/软件架构师`）均实测可用，因此 §8.8.2 不强制 ASCII，只把它降级为可读性建议。
 
 ---
 
@@ -737,6 +842,8 @@ interface Projector {
 - 检测 `skills/` 下断开的 symlink（MVP 投影恒为实体 copy，此类 symlink 来自手工创建或历史遗留 → warn）。
 - `profile.skills.copy_mode` 声明 `symlink` 时告警（已声明未实现，见 §4.2 / §12 Phase 2 → warn）。
 - 报告未解析的 template id、损坏的 YAML。
+- `skills.expose_as_command` 里的名字不在 `skills.always` 中 → 与"点名未装"同口径报错（§4.2）；project scope 且 target 含 codex 时报 `commands/codex-project-unsupported` warning（§8.8.4 → warn）。
+- `learning.auto_capture: hook` 且 target 含 opencode / pi 时报 `learning/hook-unsupported` warning（需在 target 侧装扩展，§7.4 → warn）；`CI` 为真时把三档一律降级为 `off` 并在报告里说明原因（非错误）。
 
 ---
 
@@ -745,7 +852,9 @@ interface Projector {
 - MVP 模板仅为 Markdown，不执行模板内脚本。
 - Skill 中含可执行文件时文档警告；投影只 copy，不自动执行。
 - git URL 支持 https/ssh；默认不跟踪浮动 `main`（要求 ref/pin）。
-- 不在 CI 中写入 learnings。
+- 不在 CI 中写入 learnings（`learning.auto_capture` 三档在 `CI` 为真时一律降级为 `off`，§7.4）。
+- `learning.auto_capture: hook` 写 target 侧钩子配置时，claude 的 `settings.json` 可能存有明文凭据：必须走 §8.2 的 `merge_json`（未知键一律保留），错误信息与 `--json` 输出只报路径与键名，**不回显文件内容**。
+- Commands 薄壳（§8.8）与技能一样只投影文本，不含可执行内容；`skills.expose_as_command` 不改变"投影只 copy、不自动执行"的口径。
 - 并发安全：非 dry-run 的 `sync` 在 SoT 根取进程级排他锁 `<sotRoot>\.sync.lock\`（**目录**，用非递归 `mkdir` 原子创建——Windows 与 POSIX 均原子，`EEXIST` 即败者，直接失败退出而不等待）。锁目录内 `meta.json` 记录持有者来源（pid / 机器 / 用户）与心跳时刻；心跳每 30 秒刷新，仅当心跳停摆超过 5 分钟**且**持有者进程已不存活时才判定陈旧并允许抢占（只看时间会误杀慢 sync）。投影产物落在 SoT 之外（user scope 投影、`CODEX_HOME` 覆盖）时额外取用户级 SoT 根的锁，按路径序加锁防死锁。`aforge source add` 等其他写命令暂未纳入锁保护。
 
 ---
@@ -773,6 +882,9 @@ interface Projector {
 11. 多个 template 启用时，合并输出符合 §5.2 优先级。
 12. sync 任一 target 失败时，所有 target 回滚到 sync 前状态。
 13. `aforge import` 从 AGENTS.md 导入工具链声明，映射到 habits detected 字段。
+14. `skills.expose_as_command` 点名一个已装技能后 sync，opencode / claude / pi 各落一份命令文件、codex 报 skip；从名单摘掉后再 sync，三份产物被 prune 删除，手工改过的那份保留并进 `prune skipped`（§8.8.3）。
+15. `learning.auto_capture: prompt` 时投影正文含 `## Learning Protocol` 段且位置固定；置 `off` 后该段消失，marker 外内容不受影响（§5.2）。
+16. `CI=1` 环境下 `auto_capture` 任意取值都不写 `learnings/`，且不以错误退出（§10）。
 
 ---
 
@@ -789,8 +901,8 @@ interface Projector {
 | 阶段 | 范围 |
 |------|------|
 | Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、Windows 门禁 |
-| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板 |
-| Phase 3 | Learning 启发式、适配器插件化、WSL 说明 |
+| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板、Commands 投影（§8.8）、`learning.auto_capture: prompt`（§7.4） |
+| Phase 3 | Learning 启发式、`auto_capture: hook`（含 opencode plugin / pi extension 适配）、适配器插件化、WSL 说明 |
 
 ---
 
