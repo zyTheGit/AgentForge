@@ -19,5 +19,5 @@
 - **Symlink 支持**：`skills/` 目录恒使用实体拷贝，不使用 symlink。`profile.skills.copy_mode` 虽然接受 `symlink`，但 MVP 忽略该值（symlink 属 Phase 2）——声明 `symlink` 时 `aforge doctor` 会告警提示「当前恒为实体 copy」，投影结果不受影响；`skills/` 下已存在的断开 symlink 也会被 doctor 检出。
 - **`learning.auto_capture: hook`**：MVP 未实现任何 target 侧会话钩子，行为等同 `off`，`doctor` 统一 warn。
 - **`skills.on_demand`**：MVP 只登记不物化——声明的 skill 名不会被 `sync` 物化或投影，仅由 `status` / `doctor` 列出（按需装载属 Phase 2）。
-- **`skills.expose_as_command`（§8.8 Commands 投影）**：已实现，但只投影**平铺名**（不生成命名空间子目录，也不做 `$1..$N` 归一化，属 Phase 2）；codex 的 **project scope 不产出**命令薄壳（其 `prompts/` 只读 user 级），`sync` 会打一条 `[codex] commands skipped: ...`，`doctor` 报 `commands/codex-project-unsupported` warn。详见 [技能](skills.md#额外投影成命令expose_as_command)。
+- **`skills.expose_as_command`（§8.8 Commands 投影）**：已实现，含命名空间（条目写 `ns/name`）与 `$1..$9`（`SKILL.md` frontmatter 的 `command-body`）。限制在落点：pi / codex 的命令目录平铺，带命名空间的命令降级成 `ns-name.md`，`doctor` 报 `commands/namespace-flattened` warn；codex 的 **project scope 不产出**命令薄壳（其 `prompts/` 只读 user 级），`sync` 会打一条 `[codex] commands skipped: ...`，`doctor` 报 `commands/codex-project-unsupported` warn。详见 [技能](skills.md#额外投影成命令expose_as_command)。
 - **技能附属文件**：会拷进 SoT，但只有 `SKILL.md` 正文参与投影。

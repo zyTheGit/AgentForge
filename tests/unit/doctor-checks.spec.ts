@@ -698,4 +698,47 @@ describe('skills.expose_as_command 诊断（§8.8）', () => {
     );
     expect(results.some((x) => x.item === 'commands/codex-project-unsupported')).toBe(false);
   });
+
+  it('命名空间 + 平铺目录 target → warn 列出改名后的形态（§8.8.2）', () => {
+    const results: DoctorCheckResult[] = [];
+    checkCommandsExposure(
+      results,
+      config('user', {
+        targets: ['claude', 'pi'],
+        skills: { always: ['tdd'], expose_as_command: ['review/tdd'] },
+      }),
+    );
+    const warn = results.find((x) => x.item === 'commands/namespace-flattened');
+    expect(warn?.level).toBe('warn');
+    expect(warn?.detail).toContain('review/tdd → review-tdd');
+    expect(warn?.detail).toContain('pi');
+    expect(doctorExitCode(results)).toBe(0); // warn 不抬升退出码
+  });
+
+  it('命名空间但没启用平铺 target → 不产出该 warn', () => {
+    const results: DoctorCheckResult[] = [];
+    checkCommandsExposure(
+      results,
+      config('user', {
+        targets: ['claude', 'opencode'],
+        skills: { always: ['tdd'], expose_as_command: ['review/tdd'] },
+      }),
+    );
+    expect(results.some((x) => x.item === 'commands/namespace-flattened')).toBe(false);
+  });
+
+  it('条目形态非法（.. 段）→ error(2)，且不再继续判子集', () => {
+    const results: DoctorCheckResult[] = [];
+    checkCommandsExposure(
+      results,
+      config('project', {
+        targets: ['claude'],
+        skills: { always: ['tdd'], expose_as_command: ['../tdd'] },
+      }),
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0]?.level).toBe('error');
+    expect(results[0]?.code).toBe(ExitCode.Config);
+    expect(results[0]?.detail).toContain('目录树之外');
+  });
 });

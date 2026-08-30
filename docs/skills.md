@@ -95,8 +95,36 @@ skills:
 薄壳只写「加载技能 X、按其工作流执行、用户输入见 `$ARGUMENTS`」，不复制技能正文（避免两份漂移）；frontmatter 只透传 `SKILL.md` 的 `description` 与 `argument-hint`。
 
 - codex 在 project scope 被整项跳过，`sync` 输出里有一行 `[codex] commands skipped: ...`，`aforge doctor` 报 `commands/codex-project-unsupported`（warn，不影响退出码）。codex 侧直接用 `$<name>` 调技能即可；要命令文件就在 user scope（`AGF_HOME` 层）声明；
-- 命令文件是整文件产物：从 `expose_as_command` 摘名后由下一次 `sync` 删除并列进 `pruned`，手工改过的那份保留并进 `prune skipped`（同技能投影，Spec §7.6）；
-- MVP 只投影平铺名，不生成命名空间子目录。
+- 命令文件是整文件产物：从 `expose_as_command` 摘名后由下一次 `sync` 删除并列进 `pruned`，手工改过的那份保留并进 `prune skipped`（同技能投影，Spec §7.6）。
+
+### 位置参数（`command-body`）
+
+默认薄壳只有 `$ARGUMENTS`。要用 `$1..$9`，在 `SKILL.md` 的 frontmatter 里写 `command-body`，整段作为命令正文透传（该字段本身不会出现在产物 frontmatter 里）：
+
+```yaml
+---
+name: code-review
+description: 审查代码变更
+command-body: |
+  审查 $1 分支上的 $2，其余上下文见 $ARGUMENTS。
+---
+```
+
+占位符白名单只有 `$ARGUMENTS` 与 `$1..$9`（四家实测交集）。写 `${1:-默认值}`、`$0`、`$10`、`$@` 等 → `sync` 退出码 2。
+
+### 命名空间
+
+`expose_as_command` 的条目可以带命名空间前缀，最后一段是技能名（仍必须在 `skills.always` 里）：
+
+```yaml
+skills:
+  expose_as_command:
+    - review/code-review
+```
+
+- claude / opencode 落成子目录：`.claude\commands\review\code-review.md`（调用 `/review:code-review`）、`.opencode\command\review\code-review.md`（调用 `/review/code-review`）；
+- pi / codex 的命令目录是平铺的，降级为 `review-code-review.md`（用 `-` 而非 `:`——`:` 在 Windows 文件名里非法），调用时用这个拼接后的名字。target 里含 pi / codex 时 `aforge doctor` 报 `commands/namespace-flattened` warn 列出改名结果；
+- 段内不能为空、不能是 `.` / `..`、不能含 `\ : * ? " < > |`；扁平化后撞车（`a/x` 与已有的 `a-x` 并存）→ 退出码 2。
 
 ## 注销技能
 

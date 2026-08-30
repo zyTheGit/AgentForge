@@ -185,4 +185,55 @@ describe('Commands 投影（§8.8 / 验收 §11.2-14）', () => {
       code: ExitCode.Config,
     });
   }, 120_000);
+
+  it('命名空间（§8.8.2）：claude / opencode 落子目录，pi 拼进文件名；摘名后同样被 prune', async () => {
+    await seed();
+    await setExposeAsCommand([`review/${SKILL_NAME}`]);
+    await runSync({ ...ctx(), agentforgeVersion: VERSION });
+
+    const nested = [
+      path.join(ws.root, '.claude', 'commands', 'review', `${SKILL_NAME}.md`),
+      path.join(ws.root, '.opencode', 'command', 'review', `${SKILL_NAME}.md`),
+      path.join(ws.root, '.pi', 'prompts', `review-${SKILL_NAME}.md`),
+    ];
+    const written = nested.filter((p) => existsSync(p));
+    expect(written.length).toBeGreaterThan(0);
+    // 平铺名不应同时存在（命名空间不是"额外再来一份"）
+    expect(commandCandidates().filter((p) => existsSync(p))).toEqual([]);
+
+    await setExposeAsCommand([]);
+    const synced = await runSync({ ...ctx(), agentforgeVersion: VERSION });
+    expect(written.filter((p) => existsSync(p))).toEqual([]);
+    expect(synced.pruneSkipped).toEqual([]);
+  }, 120_000);
+
+  it('SKILL.md 的 command-body 透传（§8.8.2 位置参数）：$1 原样落盘，内置模板不出现', async () => {
+    await seed();
+    const skillDoc = path.join(ws.sotRoot, 'skills', SKILL_NAME, 'SKILL.md');
+    await writeFile(
+      skillDoc,
+      [
+        '---',
+        `name: ${SKILL_NAME}`,
+        'description: 审查改动',
+        'command-body: 审查 $1 分支上的 $2，其余上下文见 $ARGUMENTS',
+        '---',
+        '',
+        '# Code Review',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await runSync({ ...ctx(), agentforgeVersion: VERSION });
+
+    const written = commandCandidates().filter((p) => existsSync(p));
+    expect(written.length).toBeGreaterThan(0);
+    for (const file of written) {
+      const content = await readFile(file, 'utf8');
+      expect(content).toContain('审查 $1 分支上的 $2，其余上下文见 $ARGUMENTS');
+      expect(content).not.toContain('用户输入：$ARGUMENTS');
+      // command-body 是正文来源，不进 frontmatter
+      expect(content).not.toContain('command-body');
+    }
+  }, 120_000);
 });

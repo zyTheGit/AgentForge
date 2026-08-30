@@ -6,6 +6,8 @@
  * 为什么单独成文件而不是塞进四个 projector 的 spec：§8.8 的价值在于「同一份
  * CommandArtifact 在四家落到不同目录名」这条横向约束（`commands` / `command` /
  * `prompts`），分散在四个文件里断言反而看不出差异，也容易改一处漏三处。
+ * §8.8.2 的命名空间同理——claude / opencode 建子目录、pi / codex 拼文件名，
+ * 这条差异也放在本文件里横向比对。
  */
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
@@ -20,7 +22,9 @@ import { piCommandPath, piProjector } from '../../../../src/core/project/project
 import type { CommandArtifact, ProjectContext } from '../../../../src/core/project/types';
 import { HabitsSchema, ProfileSchema } from '../../../../src/schema';
 
-const REVIEW: CommandArtifact = { name: 'code-review', description: '审查改动' };
+const REVIEW: CommandArtifact = { name: 'code-review', namespace: [], description: '审查改动' };
+/** 带两级命名空间的同一技能（§8.8.2）。 */
+const NESTED: CommandArtifact = { name: 'code-review', namespace: ['team', 'review'] };
 
 function buildCtx(overrides: Partial<ProjectContext> = {}): ProjectContext {
   return {
@@ -41,19 +45,25 @@ function buildCtx(overrides: Partial<ProjectContext> = {}): ProjectContext {
   };
 }
 
-/** 计划中的命令项（按路径后缀识别；四家都是 `<name>.md` 的 write 项）。 */
+/** 计划中的命令项（按路径后缀识别；平铺名与扁平化后的名字都以 code-review 结尾）。 */
 function commandItems(plan: { items: readonly { path: string; action: string }[] }) {
   return plan.items.filter((item) => item.path.endsWith('code-review.md'));
 }
 
 describe('claude commands（§8.5：.claude\\commands\\）', () => {
   it('project / user 两态路径', () => {
-    expect(claudeCommandPath(buildCtx(), 'code-review')).toBe(
+    expect(claudeCommandPath(buildCtx(), REVIEW)).toBe(
       'C:\\proj\\.claude\\commands\\code-review.md',
     );
-    expect(
-      claudeCommandPath(buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u' }), 'code-review'),
-    ).toBe('C:\\Users\\u\\.claude\\commands\\code-review.md');
+    expect(claudeCommandPath(buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u' }), REVIEW)).toBe(
+      'C:\\Users\\u\\.claude\\commands\\code-review.md',
+    );
+  });
+
+  it('命名空间 → 子目录（§8.8.2：/ns:name 由目录层级派生）', () => {
+    expect(claudeCommandPath(buildCtx(), NESTED)).toBe(
+      'C:\\proj\\.claude\\commands\\team\\review\\code-review.md',
+    );
   });
 
   it('plan：write 项，内容与 renderCommandShell 同源（不复制技能正文）', () => {
@@ -74,19 +84,25 @@ describe('claude commands（§8.5：.claude\\commands\\）', () => {
 
 describe('opencode commands（§8.3：.opencode\\command\\ 单数）', () => {
   it('project / user 两态路径', () => {
-    expect(opencodeCommandPath(buildCtx(), 'code-review')).toBe(
+    expect(opencodeCommandPath(buildCtx(), REVIEW)).toBe(
       'C:\\proj\\.opencode\\command\\code-review.md',
     );
-    expect(
-      opencodeCommandPath(buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u' }), 'code-review'),
-    ).toBe('C:\\Users\\u\\.config\\opencode\\command\\code-review.md');
+    expect(opencodeCommandPath(buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u' }), REVIEW)).toBe(
+      'C:\\Users\\u\\.config\\opencode\\command\\code-review.md',
+    );
+  });
+
+  it('命名空间 → 子目录（§8.8.2：/ns/name 由目录层级派生）', () => {
+    expect(opencodeCommandPath(buildCtx(), NESTED)).toBe(
+      'C:\\proj\\.opencode\\command\\team\\review\\code-review.md',
+    );
   });
 
   it('plan：write 项，路径与 opencodeCommandPath 一致', () => {
     const ctx = buildCtx();
     expect(commandItems(opencodeProjector.plan(ctx))).toEqual([
       {
-        path: opencodeCommandPath(ctx, 'code-review'),
+        path: opencodeCommandPath(ctx, REVIEW),
         action: 'write',
         content: renderCommandShell(REVIEW),
       },
@@ -96,9 +112,15 @@ describe('opencode commands（§8.3：.opencode\\command\\ 单数）', () => {
 
 describe('pi commands（§8.6：.pi\\prompts\\）', () => {
   it('project / user 两态路径', () => {
-    expect(piCommandPath(buildCtx(), 'code-review')).toBe('C:\\proj\\.pi\\prompts\\code-review.md');
-    expect(piCommandPath(buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u' }), 'code-review')).toBe(
+    expect(piCommandPath(buildCtx(), REVIEW)).toBe('C:\\proj\\.pi\\prompts\\code-review.md');
+    expect(piCommandPath(buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u' }), REVIEW)).toBe(
       'C:\\Users\\u\\.pi\\agent\\prompts\\code-review.md',
+    );
+  });
+
+  it('命名空间 → 拼进文件名（§8.8.2 降级：prompts\\ 只扫一层）', () => {
+    expect(piCommandPath(buildCtx(), NESTED)).toBe(
+      'C:\\proj\\.pi\\prompts\\team-review-code-review.md',
     );
   });
 
@@ -125,9 +147,7 @@ describe('codex commands（§8.4 / §8.8.4：只有 user scope 产出）', () =>
       rootDir: 'C:\\Users\\u',
       profile: ProfileSchema.parse({ version: 1, targets: ['codex'] }),
     });
-    expect(codexCommandPath(ctx, 'code-review')).toBe(
-      'C:\\Users\\u\\.codex\\prompts\\code-review.md',
-    );
+    expect(codexCommandPath(ctx, REVIEW)).toBe('C:\\Users\\u\\.codex\\prompts\\code-review.md');
     expect(commandItems(codexProjector.plan(ctx))).toEqual([
       {
         path: 'C:\\Users\\u\\.codex\\prompts\\code-review.md',
@@ -135,6 +155,17 @@ describe('codex commands（§8.4 / §8.8.4：只有 user scope 产出）', () =>
         content: renderCommandShell(REVIEW),
       },
     ]);
+  });
+
+  it('命名空间 → 拼进文件名（§8.8.2：codex 无命名空间概念）', () => {
+    const ctx = buildCtx({
+      scope: 'user',
+      rootDir: 'C:\\Users\\u',
+      profile: ProfileSchema.parse({ version: 1, targets: ['codex'] }),
+    });
+    expect(codexCommandPath(ctx, NESTED)).toBe(
+      'C:\\Users\\u\\.codex\\prompts\\team-review-code-review.md',
+    );
   });
 
   it('user scope + CODEX_HOME → 命令目录随之改到覆盖目录', () => {
@@ -152,6 +183,6 @@ describe('codex commands（§8.4 / §8.8.4：只有 user scope 产出）', () =>
         userProfile: 'C:\\Users\\u',
       },
     });
-    expect(codexCommandPath(ctx, 'code-review')).toBe('D:\\codex\\prompts\\code-review.md');
+    expect(codexCommandPath(ctx, REVIEW)).toBe('D:\\codex\\prompts\\code-review.md');
   });
 });

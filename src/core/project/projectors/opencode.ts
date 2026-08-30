@@ -27,6 +27,7 @@ import type { McpServer } from '../../../schema';
 import { pathApiFor } from '../../paths';
 import { renderCommandShell } from '../commands';
 import {
+  type CommandArtifact,
   mainRuleAction,
   type ProjectContext,
   type ProjectionPlan,
@@ -140,14 +141,15 @@ export function opencodeMcpPath(ctx: ProjectContext): string {
  *
  * 目录名取**单数** `command\`：§8.8.5 实测 `command\` 与 `commands\` 均生效，
  * 取单数与上游文档一致，避免同一技能在两个目录下各留一份。
+ * 命名空间落成子目录（§8.8.2）：opencode 的 `/ns/name` 调用语法由目录层级派生。
  */
-export function opencodeCommandPath(ctx: ProjectContext, commandName: string): string {
+export function opencodeCommandPath(ctx: ProjectContext, command: CommandArtifact): string {
   const api = pathApiFor(ctx.os);
   const commandsRoot =
     ctx.scope === 'project'
       ? api.join(ctx.rootDir, OPENCODE_DIRNAME, OPENCODE_COMMANDS_DIRNAME)
       : api.join(opencodeUserDir(ctx), OPENCODE_COMMANDS_DIRNAME);
-  return commandFilePath(api, commandsRoot, commandName);
+  return commandFilePath(api, commandsRoot, command);
 }
 
 /** OpenCode projector 实例（纯函数 plan；apply 由引擎统一执行）。 */
@@ -192,7 +194,7 @@ export const opencodeProjector: Projector = {
     // 走 §7.6 artifacts 记账 + prune（不用 marker）
     for (const command of ctx.commandsToExpose) {
       items.push({
-        path: opencodeCommandPath(ctx, command.name),
+        path: opencodeCommandPath(ctx, command),
         action: 'write',
         content: renderCommandShell(command),
       });

@@ -33,6 +33,7 @@ import type { McpServer } from '../../../schema';
 import { type OsContext, pathApiFor } from '../../paths';
 import { renderCommandShell } from '../commands';
 import {
+  type CommandArtifact,
   mainRuleAction,
   type ProjectContext,
   type ProjectionPlan,
@@ -41,7 +42,7 @@ import {
   shouldWriteAgentsMd,
 } from '../types';
 import { buildMcpServersObject } from './mcp-payload';
-import { commandFilePath, SKILLS_DIRNAME, skillDocPath } from './shared';
+import { flatCommandFilePath, SKILLS_DIRNAME, skillDocPath } from './shared';
 
 /** Spec §2.3 / §8.6 主规则文件名（project / user 两个 scope 同名）。 */
 export const PI_MAIN_RULE_FILENAME = 'AGENTS.md';
@@ -130,11 +131,12 @@ export function piMcpPath(ctx: ProjectContext): string {
  * 成 `prompts\`（`dist/migrations.js` 的 migrateCommandsToPrompts），写 `commands\`
  * 等于把产物交给上游迁移逻辑搬家，记账路径随即失真。
  * project = `<root>\.pi\prompts\<name>.md`；user = `<pi agent dir>\prompts\<name>.md`。
+ * pi 只扫一层 prompts\，故命名空间拼进文件名（§8.8.2 降级）而不建子目录。
  */
-export function piCommandPath(ctx: ProjectContext, commandName: string): string {
+export function piCommandPath(ctx: ProjectContext, command: CommandArtifact): string {
   const api = pathApiFor(ctx.os);
   const base = ctx.scope === 'project' ? api.join(ctx.rootDir, PI_DIRNAME) : piUserDir(ctx);
-  return commandFilePath(api, api.join(base, PI_PROMPTS_DIRNAME), commandName);
+  return flatCommandFilePath(api, api.join(base, PI_PROMPTS_DIRNAME), command);
 }
 
 /** Pi projector 实例（纯函数 plan；apply 由引擎统一执行）。 */
@@ -172,7 +174,7 @@ export const piProjector: Projector = {
     // 不依赖 pi-mcp-adapter 那类扩展，因此没有 MCP 项那种「装了才生效」的前提
     for (const command of ctx.commandsToExpose) {
       items.push({
-        path: piCommandPath(ctx, command.name),
+        path: piCommandPath(ctx, command),
         action: 'write',
         content: renderCommandShell(command),
       });
