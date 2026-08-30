@@ -12,20 +12,36 @@ import path from 'node:path';
 import type { Host } from '../../infra/host';
 import type { SyncMeta } from '../../schema';
 import type { EffectiveConfig } from '../config/defaults';
+import type { EnvSnapshot } from '../env';
 import { ExitCode } from '../errors';
 import { resolveTemplate } from '../generate/resolver';
+import {
+  LEARNING_PROTOCOL_HEADING,
+  rendersLearningProtocol,
+  resolveAutoCapture,
+} from '../learning/auto-capture';
+import type { OsContext } from '../paths';
 import { readSyncMeta, SYNC_META_FILE } from '../project/sync-meta';
 import { renderRulesMd } from '../project/sync-prepare';
 import type { DoctorRoots } from './check-config';
 import type { EnabledPlan } from './check-paths';
 import { type DoctorCheckResult, errHint, errMessage, toDoctorCode } from './check-types';
 
-/** 当前 SoT 渲染（hash 基准；与 sync 共用 sync-prepare.renderRulesMd）。失败 → error 并返回 undefined。 */
+/**
+ * 当前 SoT 渲染（hash 基准；与 sync 共用 sync-prepare.renderRulesMd）。失败 → error 并返回 undefined。
+ *
+ * 不传 EnvSnapshot：渲染正文与环境无关（`learning.auto_capture` 只经
+ * effectiveAutoCapture），CI 与本地渲染同一份 SoT 得到同一个 contentHash。
+ *
+ * @param os 必须与 sync 取同一个平台值：`projection.path_style: auto` 下 composer 会按它
+ *   改写路径 token，两侧不一致会把平台差异误报成投影漂移。
+ */
 export async function renderForDoctor(
   host: Host,
   results: DoctorCheckResult[],
   roots: DoctorRoots,
   config: EffectiveConfig,
+  os: OsContext,
 ): Promise<string | undefined> {
   try {
     return await renderRulesMd(
@@ -34,6 +50,7 @@ export async function renderForDoctor(
       roots.projectSoTRoot,
       config.habits,
       config.profile,
+      os,
     );
   } catch (err) {
     results.push({
@@ -143,6 +160,62 @@ export function checkSkillsCopyMode(results: DoctorCheckResult[], config: Effect
     item: 'skills-copy-mode',
     detail: `profile.skills.copy_mode: ${copyMode}（skills 投影为实体 copy）`,
   });
+}
+
+/**
+ * profile.learning.auto_capture：声明档位 vs 实际生效档位（Spec §7.4 / §9）。
+ *
+ * 三件事都必须说出来，口径同 skills-copy-mode：
+ * - `hook`：MVP 没有任何 target 侧钩子写入（§12 Phase 3）→ warn，行为等同 off；
+ * - `CI` 为真：learnings 恒不落盘（§7.4 护栏 3 / §10）→ **不是错误**，补一句原因。注意这
+ *   只影响*写入*，投影正文不变（`prompt` 档在 CI 下照样渲染），这样 contentHash 才跨环境稳定；
+ * - `prompt` + `auto_promote: true`：agent 会话中途的 `learn` 会连带 promote，而 promote 取的
+ *   是与 `sync` 同一把 `.sync.lock` → 与人工 `sync` 并发即 ConflictError(3)。单独报一条 warn
+ *   而不是在协议正文里写死 `--no-auto-promote`：那会静默覆盖用户显式配置，违反护栏 2
+ *   「auto_capture 不改变 auto_promote」的正交性。
+ *
+ * 恒不影响退出码：投影结果本身是自洽的，只是与声明不符。
+ */
+export function checkLearningAutoCapture(
+  results: DoctorCheckResult[],
+  config: EffectiveConfig,
+  env: EnvSnapshot,
+): void {
+  const state = resolveAutoCapture(config.profile, env);
+  // CI 说明与档位判定正交：hook（warn）与其余档位（ok）都要带上，否则同一状态下
+  // doctor 少一句而 status 有，两处口径分叉
+  const ciNote = state.ciNoCapture
+    ? '；CI 为真 → 本次运行不会写入任何 learnings（§7.4 护栏 3，投影正文不受影响）'
+    : '';
+  if (state.unimplemented) {
+    results.push({
+      section: 'config',
+      level: 'warn',
+      item: 'learning-auto-capture',
+      detail: `profile.learning.auto_capture: hook 已声明，但 MVP 未实现 target 侧钩子写入（Spec §12 Phase 3）——当前行为等同 off${ciNote}`,
+      hint: '需要确定性抓取请暂用 auto_capture: prompt（渲染 ## Learning Protocol 段），或改回 off 消除该告警',
+    });
+    return;
+  }
+  const projected = rendersLearningProtocol(state.effective)
+    ? `（投影正文含 ${LEARNING_PROTOCOL_HEADING} 段）`
+    : '';
+  results.push({
+    section: 'config',
+    level: 'ok',
+    item: 'learning-auto-capture',
+    detail: `profile.learning.auto_capture: ${state.effective}${projected}${ciNote}`,
+  });
+  if (rendersLearningProtocol(state.effective) && config.profile.learning.auto_promote) {
+    results.push({
+      section: 'config',
+      level: 'warn',
+      item: 'learning-auto-capture-lock',
+      detail:
+        'auto_capture: prompt 与 auto_promote: true 并存：agent 照协议执行的 aforge learn 会连带 promote，而 promote 取的是与 sync 同一把 .sync.lock，与人工 aforge sync 并发时报 ConflictError(3)',
+      hint: '让 agent 改用 aforge learn --no-auto-promote，或把 learning.auto_promote 置回 false（晋升仍可人工 aforge promote）',
+    });
+  }
 }
 
 /**

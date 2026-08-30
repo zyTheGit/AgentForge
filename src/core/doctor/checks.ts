@@ -13,7 +13,10 @@
  * 8. 现有 merge_json 投影损坏（硬项 error(3)，soft 项 warn——§8.2/§8.6）；
  * 9. profile.skills.on_demand 清单（信息项：MVP 只登记不物化，§4.2 注记）；
  * 10. pi 的 MCP 历史落点残留（`.pi\settings.json` 含 `mcpServers` → warn，只诊断不删）；
- * 11. profile.skills.copy_mode 声明 `symlink`（已声明未实现 → warn，§4.2 注记 / §12 Phase 2）。
+ * 11. profile.skills.copy_mode 声明 `symlink`（已声明未实现 → warn，§4.2 注记 / §12 Phase 2）；
+ * 12. profile.learning.auto_capture：`hook` 已声明未实现 → warn；CI 为真时补一句
+ *     "本次不会写入 learnings" → ok（§7.4 护栏 3 / §10；投影正文不受 CI 影响）；
+ *     `prompt` 与 `auto_promote: true` 并存 → warn（会与人工 sync 争 `.sync.lock`）。
  *
  * 设计原则：
  * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题；
@@ -50,6 +53,7 @@ import {
   resolveDoctorRoots,
 } from './check-config';
 import {
+  checkLearningAutoCapture,
   checkMergeJson,
   checkSkillsCopyMode,
   checkSkillsOnDemand,
@@ -156,7 +160,9 @@ async function runConfigDependentChecks(
   config: EffectiveConfig,
 ): Promise<void> {
   // ---- 当前 SoT 渲染（hash 基准；与 sync 共用 sync-prepare.renderRulesMd，不经 engine 门面）----
-  const rendered = await renderForDoctor(host, results, roots, config);
+  // os 必须注入（与 sync 同一个值：path_style: auto 依据它改写路径）；env 刻意不注入——
+  // 渲染正文与环境无关（auto_capture 只经 effectiveAutoCapture），CI 与本地得到同一 hash
+  const rendered = await renderForDoctor(host, results, roots, config, os);
 
   // ---- §9 第 1 条：各 target 解析后的绝对路径（project + user scope）----
   checkTargetPaths(results, os, cwd, rendered, config, env);
@@ -169,6 +175,9 @@ async function runConfigDependentChecks(
 
   // ---- profile.skills.copy_mode：symlink 已声明未实现（§4.2 注记 / §12 Phase 2）----
   checkSkillsCopyMode(results, config);
+
+  // ---- profile.learning.auto_capture：hook 未实现 / CI 不写入 / 与 auto_promote 撞锁（§7.4 / §9）----
+  checkLearningAutoCapture(results, config, env);
 
   // ---- sync-meta 读取（损坏 → error(2)；不存在 → 信息性 ok）----
   const syncMeta = await readSyncMetaForDoctor(host, results, roots, config);

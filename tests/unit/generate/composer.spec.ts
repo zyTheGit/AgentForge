@@ -173,6 +173,43 @@ describe('§5.2 四层优先级（输出自上而下）', () => {
   });
 });
 
+describe('auto_capture: prompt → ## Learning Protocol 段（§5.2 / §7.4）', () => {
+  it('prompt 档 → 段落插在 custom 之后、## Learnings 之前，位置固定', async () => {
+    const habits = HabitsSchema.parse({ version: 1, ai: { style: 's' } });
+    const rules = await composeRules(
+      composeInput(habits, undefined, {
+        customContents: ['# Custom A'],
+        promotedLearnings: ['Prefer vitest.'],
+        autoCapture: 'prompt',
+      }),
+    );
+    const positions = [
+      rules.indexOf('# Custom A'),
+      rules.indexOf('## Learning Protocol'),
+      rules.indexOf('## Learnings'),
+      rules.indexOf('# AgentForge Rules'),
+    ];
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+    // 可复制的命令行（正文固定、不受 SoT 影响）
+    expect(rules).toContain('aforge learn --file -');
+  });
+
+  it('缺省 / off / hook → 不产出该段（hook 的降级在 learning 层完成）', async () => {
+    const habits = HabitsSchema.parse({ version: 1 });
+    for (const autoCapture of [undefined, 'off', 'hook'] as const) {
+      const rules = await composeRules(composeInput(habits, undefined, { autoCapture }));
+      expect(rules).not.toContain('## Learning Protocol');
+    }
+  });
+
+  it('重复装配幂等（同一输入 → 同一正文，段落不累积）', async () => {
+    const habits = HabitsSchema.parse({ version: 1 });
+    const input = composeInput(habits, undefined, { autoCapture: 'prompt' });
+    expect(await composeRules(input)).toBe(await composeRules(input));
+  });
+});
+
 describe('habits.notes → ## Notes 段（§4.1）', () => {
   it('notes 非空 → 紧随 ## Learnings 之后产出 ## Notes 段，条目空行分隔', async () => {
     const habits = HabitsSchema.parse({ version: 1, notes: ['note-a: 第一条', 'note-b: 第二条'] });

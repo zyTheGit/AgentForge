@@ -518,3 +518,65 @@ describe('syncOnce — sync-meta.json（Spec §3.3）', () => {
     expect(meta.targets.claude).toBeTruthy();
   });
 });
+
+describe('syncOnce — learning.auto_capture: prompt 端到端（Spec §5.2 / §7.4）', () => {
+  const PROMPT_PROFILE = [
+    'version: 1',
+    'scope: project',
+    'targets: [claude]',
+    'learning:',
+    '  auto_capture: prompt',
+    '',
+  ].join('\n');
+
+  async function seedWithProfile(host: FakeHost, profile: string): Promise<void> {
+    await host.writeFile(path.join(PROJECT_SOT, 'profile.yaml'), profile);
+    await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), HABITS_YAML);
+  }
+
+  it('prompt → 投影正文含 ## Learning Protocol 段，且落在 marker 区间内', async () => {
+    const host = createSyncHost();
+    await seedWithProfile(host, PROMPT_PROFILE);
+    await syncOnce(syncOptions(host));
+
+    const written = host.files.get(CLAUDE_MD) as string;
+    expect(written).toContain('## Learning Protocol');
+    expect(written).toContain('aforge learn --file -');
+    // marker 区间内 → 随下一次 sync 整体替换，不产生独立产物
+    const begin = written.indexOf(DEFAULT_MARKER_BEGIN);
+    const end = written.indexOf(DEFAULT_MARKER_END);
+    const section = written.indexOf('## Learning Protocol');
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(section).toBeGreaterThan(begin);
+    expect(section).toBeLessThan(end);
+  });
+
+  it('置回 off 后再 sync → 该段消失（幂等，marker 外内容不受影响）', async () => {
+    const host = createSyncHost();
+    await seedWithProfile(host, PROMPT_PROFILE);
+    await host.writeFile(CLAUDE_MD, '# Handwritten\n\nkeep me\n');
+    await syncOnce(syncOptions(host));
+    expect(host.files.get(CLAUDE_MD) as string).toContain('## Learning Protocol');
+
+    await seedWithProfile(host, PROFILE_YAML);
+    await syncOnce(syncOptions(host, { force: true }));
+    const after = host.files.get(CLAUDE_MD) as string;
+    expect(after).not.toContain('## Learning Protocol');
+    expect(after).toContain('keep me');
+  });
+
+  it('CI 为真 → 照样渲染该段，且与非 CI 逐字节一致（contentHash 跨环境稳定）', async () => {
+    const inCi = createSyncHost({ CI: '1' });
+    await seedWithProfile(inCi, PROMPT_PROFILE);
+    await syncOnce(syncOptions(inCi));
+
+    const local = createSyncHost();
+    await seedWithProfile(local, PROMPT_PROFILE);
+    await syncOnce(syncOptions(local));
+
+    // 护栏 3 只挡 learnings 写入，不挡渲染：否则同一份 SoT 在 CI 与本地产出不同
+    // 的 marker 区间，跨环境 hash 比对会误报漂移
+    expect(inCi.files.get(CLAUDE_MD) as string).toContain('## Learning Protocol');
+    expect(inCi.files.get(CLAUDE_MD)).toBe(local.files.get(CLAUDE_MD));
+  });
+});

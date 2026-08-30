@@ -1,10 +1,12 @@
 /**
  * 规则正文装配（Spec §5.2 四层优先级，输出自上而下）：
- *   ① custom/*.md（按文件名序）→ ② promoted learnings（统一 ## Learnings 段）
+ *   ① custom/*.md（按文件名序）→ ①' Learning Protocol（仅 auto_capture: prompt，§7.4）
+ *   → ② promoted learnings（统一 ## Learnings 段）
  *   → ②' habits.notes（统一 ## Notes 段，§4.1）
  *   → ③ profile.templates 已解析模板（列表序）→ ④ 内置 base/default（恒渲染一次）。
  *
- * ②' 不是新增的优先级层：notes 与 ② 的 learnings 同属"用户沉淀的自由文本"，
+ * ①' 与 ②' 都不是新增的优先级层：①' 是给 agent 的固定协议说明（§5.2 规定它插在
+ * 第 ② 层之前），②' 的 notes 与 ② 的 learnings 同属"用户沉淀的自由文本"，
  * 紧跟 ② 输出即可，§5.2 的四层契约不变。
  *
  * 职责边界：只产正文（renderedRulesMd 的 body）；marker 包裹由投影层负责。
@@ -18,8 +20,9 @@
  * 据此省略小节——禁止编造默认工具、禁止输出 "Not specified"（Spec §5.1）。
  */
 import { BASE_DEFAULT_TEMPLATE, BASE_DEFAULT_TEMPLATE_ID } from '../../assets/templates';
-import type { Habits, PathStyle, Profile } from '../../schema';
+import type { AutoCapture, Habits, PathStyle, Profile } from '../../schema';
 import { ConfigError } from '../errors';
+import { LEARNING_PROTOCOL_SECTION, rendersLearningProtocol } from '../learning/auto-capture';
 import type { OsContext } from '../paths';
 import { renderTemplate, validateTemplate } from './renderer';
 
@@ -50,6 +53,15 @@ export interface ComposeInput {
    * 缺省按 posix 解释 auto——纯函数不去读 process，调用方（engine / doctor）注入。
    */
   readonly os?: OsContext;
+  /**
+   * `learning.auto_capture` 的**有效**档位（§7.4；缺省 off）。
+   *
+   * 契约：调用方先经 core/learning/auto-capture.effectiveAutoCapture 完成
+   * "hook 未实现"的归并，composer 只按 `prompt` 决定是否插 `## Learning Protocol`
+   * 段（§5.2）。判定不落在这里，是为了让 status / doctor 与渲染层共用同一口径；
+   * 该口径**与环境无关**（CI 也照渲染），正文因此跨环境稳定。
+   */
+  readonly autoCapture?: AutoCapture;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +296,12 @@ export async function composeRules(input: ComposeInput): Promise<string> {
   // ① custom/*.md（按序；每文件一个小节）
   for (const content of input.customContents) {
     sections.push(stripSection(content));
+  }
+
+  // ①' Learning Protocol（§5.2 / §7.4 prompt 档）：位置固定在第 ② 层之前，内容
+  // 不受 SoT 影响。随 marker 区间整体替换 → 不产生独立产物、不进 §3.3 记账。
+  if (input.autoCapture !== undefined && rendersLearningProtocol(input.autoCapture)) {
+    sections.push(LEARNING_PROTOCOL_SECTION);
   }
 
   // ② promoted learnings → 统一 ## Learnings 段（条目间空行分隔）

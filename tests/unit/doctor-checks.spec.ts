@@ -240,6 +240,82 @@ describe('runDoctorChecks — skills.copy_mode 已声明未实现（§4.2 注记
   });
 });
 
+describe('runDoctorChecks — learning.auto_capture（§7.4 / §9）', () => {
+  const profileWithCapture = (value: string) =>
+    `version: 1\nscope: project\ntargets: [claude]\nlearning:\n  auto_capture: ${value}\n`;
+
+  it('hook → learning-auto-capture warn（MVP 未实现），不影响退出码', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host, profileWithCapture('hook'));
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'learning-auto-capture');
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain('hook');
+    expect(r.hint).toContain('prompt');
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('prompt → ok 并说明投影正文含 Learning Protocol 段', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host, profileWithCapture('prompt'));
+    const r = resultOf(await runDoctorChecks(doctorOpts(host)), 'learning-auto-capture');
+    expect(r.level).toBe('ok');
+    expect(r.detail).toContain('Learning Protocol');
+  });
+
+  it('CI 为真 → 生效档位不变，仅补一句"本次不会写入"（护栏 3 只挡写入）', async () => {
+    const host = createDoctorHost({ CI: '1' });
+    await seedProjectSoT(host, profileWithCapture('prompt'));
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'learning-auto-capture');
+    expect(r.level).toBe('ok');
+    expect(r.detail).toContain('prompt');
+    expect(r.detail).toContain('Learning Protocol');
+    expect(r.detail).toContain('CI');
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('缺省（off）→ ok，且不提 Learning Protocol', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host);
+    const r = resultOf(await runDoctorChecks(doctorOpts(host)), 'learning-auto-capture');
+    expect(r.level).toBe('ok');
+    expect(r.detail).toContain('off');
+    expect(r.detail).not.toContain('Learning Protocol');
+  });
+
+  it('hook + CI → warn 里仍带上"本次不会写入"（与 status 的 ciNote 口径一致）', async () => {
+    const host = createDoctorHost({ CI: '1' });
+    await seedProjectSoT(host, profileWithCapture('hook'));
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'learning-auto-capture');
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain('CI');
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('prompt + auto_promote: true → 额外一条撞锁 warn，不影响退出码', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(
+      host,
+      'version: 1\nscope: project\ntargets: [claude]\nlearning:\n  auto_capture: prompt\n  auto_promote: true\n',
+    );
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'learning-auto-capture-lock');
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain('.sync.lock');
+    expect(r.hint).toContain('--no-auto-promote');
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('prompt + auto_promote 缺省（false）→ 不报撞锁 warn', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host, profileWithCapture('prompt'));
+    const report = await runDoctorChecks(doctorOpts(host));
+    expect(report.results.some((r) => r.item === 'learning-auto-capture-lock')).toBe(false);
+  });
+});
+
 describe('runDoctorChecks — OneDrive（§2.1.1）', () => {
   it('用户目录在 OneDrive 下 → onedrive warn（不影响退出码）', async () => {
     const odHome = path.resolve('/home/OneDrive/u');

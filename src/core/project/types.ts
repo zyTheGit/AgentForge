@@ -104,9 +104,25 @@ export interface ProjectContext {
   readonly env?: EnvSnapshot;
 }
 
+/**
+ * 技能调用前缀的取值域（Spec §8.8 实测表）：codex 是 `$<name>`，其余三家是 `/<name>`。
+ *
+ * 单独命名而不是就地写联合字面量：`aforge status` 的对外结构（含 `--json`）也要引用
+ * 同一取值域，否则命令层会把它宽化成 `string`，类型契约随之丢失精度。
+ */
+export type SkillInvokePrefix = '/' | '$';
+
 /** Spec §8.1 Projector。 */
 export interface Projector {
   readonly id: string;
+  /**
+   * 该 target 里调用已装技能的前缀（Spec §8.8 实测表）：codex 是 `$`，其余三家是 `/`。
+   *
+   * 为什么进 Projector 契约而不是放一张外部映射表：它与"技能落在哪个目录"是同一份
+   * target 知识，写在各 projector 里，新增 target 时 TS 会强制补上（漏掉即编译失败）。
+   * 唯一消费方是 `aforge status`（§6.1 要求打印），不参与 plan / apply。
+   */
+  readonly skillInvokePrefix: SkillInvokePrefix;
   plan(ctx: ProjectContext): ProjectionPlan;
   /**
    * M5 不实现（引擎统一执行）；返回类型 never 表示当前版本调用即视为契约违规。

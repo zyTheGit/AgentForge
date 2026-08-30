@@ -557,14 +557,14 @@ mcp: []
 `hook` 档的落点与限制：
 
 - claude → `settings.json` 的 `hooks`（`SessionEnd` / `Stop`）；codex → `config.toml` 的钩子段（上游事件含 `SessionStart` / `SessionEnd` / `UserPromptSubmit` / `SubagentStart` / `SubagentStop` / `Stop`）。这两家可落地；
-- opencode 需 plugin、pi 需 extension，两者都要求在 target 侧先装扩展，MVP 内按 **soft** 处理（不写、只在 `aforge status` 标注 "hook not supported - install adapter"），与 §8.6 pi MCP 的 soft 口径一致；
+- opencode 需 plugin、pi 需 extension，两者都要求在 target 侧先装扩展；**MVP 未实现任何 target 侧钩子写入**，声明 `hook` 时由 doctor 的 `learning-auto-capture` 统一报一条 warn（§9），`status` 只打「hook 未实现、行为等同 off」，不做 per-target 标注。hook 真正落地后再按 target 细分 soft 处理（不写、在 `aforge status` 标注 "hook not supported - install adapter"，与 §8.6 pi MCP 的 soft 口径一致）；
 - **claude 的 `settings.json` 可能存有明文凭据**（`env.ANTHROPIC_AUTH_TOKEN` 等）。写入必须走 §8.2 的 `merge_json`（未知键一律保留），且失败信息与 `--json` 输出**不得回显文件内容**，只报路径与键名。
 
 四条护栏（三档共用）：
 
 1. **只写 SoT，绝不自动 sync**：非 dry-run 的 `sync` 要取 `.sync.lock`（§11），会话中途触发会与人工 `sync` 撞锁，且 marker 指纹校验可能直接判 3。`auto_capture` 的终点是 `learnings/` 落盘（`auto_promote` 为真时再多一步 promote），进投影恒由人工 `aforge sync`；
 2. **不隐含晋升**：`auto_capture` 不改变 `auto_promote` 的缺省 `false`；
-3. **CI 禁写**：沿用 §11「不在 CI 中写入 learnings」——`CI` 为真时三档一律降级为 `off`，且不算错误（静默跳过，`status` 里标注原因）；
+3. **CI 禁写**：沿用 §11「不在 CI 中写入 learnings」——`CI` 为真时任何档位都不得产生 `learnings/` 写入，且不算错误（静默跳过，`status` 里标注原因）。**约束对象是写入，不是渲染**：`prompt` 档的 `## Learning Protocol` 段在 CI 下照样渲染，否则同一份 SoT 在 CI 与本机会产出不同的 marker 区间（`contentHash` 不同），§9 的 hash 比对与 §3.3 记账都会跨环境失真；
 4. **不落原始会话记录**：抽取器只允许写结构化的 `content` / `trigger`，禁止把 transcript 原文塞进条目（凭据泄漏面 + 条目体积）。
 
 
@@ -843,7 +843,7 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 - `profile.skills.copy_mode` 声明 `symlink` 时告警（已声明未实现，见 §4.2 / §12 Phase 2 → warn）。
 - 报告未解析的 template id、损坏的 YAML。
 - `skills.expose_as_command` 里的名字不在 `skills.always` 中 → 与"点名未装"同口径报错（§4.2）；project scope 且 target 含 codex 时报 `commands/codex-project-unsupported` warning（§8.8.4 → warn）。
-- `learning.auto_capture: hook` 且 target 含 opencode / pi 时报 `learning/hook-unsupported` warning（需在 target 侧装扩展，§7.4 → warn）；`CI` 为真时把三档一律降级为 `off` 并在报告里说明原因（非错误）。
+- `learning.auto_capture`（§7.4）报一条 `learning-auto-capture`：声明 `hook` → warn（**MVP 未实现任何 target 侧钩子写入**，行为等同 `off`；等 hook 落地后再按 target 细分成 `learning/hook-unsupported`）；`prompt` → `ok` 并说明投影正文含 `## Learning Protocol` 段；`CI` 为真 → 仍报 `ok`，附一句"本次运行不会写入任何 learnings"（护栏 3 只约束**写入**，不改变生效档位与渲染正文——否则同一份 SoT 在 CI 与本机的 `contentHash` 不同，跨环境 hash 比对全部失真）。
 
 ---
 
@@ -852,7 +852,7 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 - MVP 模板仅为 Markdown，不执行模板内脚本。
 - Skill 中含可执行文件时文档警告；投影只 copy，不自动执行。
 - git URL 支持 https/ssh；默认不跟踪浮动 `main`（要求 ref/pin）。
-- 不在 CI 中写入 learnings（`learning.auto_capture` 三档在 `CI` 为真时一律降级为 `off`，§7.4）。
+- 不在 CI 中写入 learnings：`CI` 为真时任何 `learning.auto_capture` 取值都不产生 `learnings/` 写入（由唯一写入口的守卫强制，显式 `aforge learn` 在 CI 下被拒并退出码 2），**但不改变生效档位与渲染正文**（§7.4 护栏 3）。
 - `learning.auto_capture: hook` 写 target 侧钩子配置时，claude 的 `settings.json` 可能存有明文凭据：必须走 §8.2 的 `merge_json`（未知键一律保留），错误信息与 `--json` 输出只报路径与键名，**不回显文件内容**。
 - Commands 薄壳（§8.8）与技能一样只投影文本，不含可执行内容；`skills.expose_as_command` 不改变"投影只 copy、不自动执行"的口径。
 - 并发安全：非 dry-run 的 `sync` 在 SoT 根取进程级排他锁 `<sotRoot>\.sync.lock\`（**目录**，用非递归 `mkdir` 原子创建——Windows 与 POSIX 均原子，`EEXIST` 即败者，直接失败退出而不等待）。锁目录内 `meta.json` 记录持有者来源（pid / 机器 / 用户）与心跳时刻；心跳每 30 秒刷新，仅当心跳停摆超过 5 分钟**且**持有者进程已不存活时才判定陈旧并允许抢占（只看时间会误杀慢 sync）。投影产物落在 SoT 之外（user scope 投影、`CODEX_HOME` 覆盖）时额外取用户级 SoT 根的锁，按路径序加锁防死锁。`aforge source add` 等其他写命令暂未纳入锁保护。
@@ -900,8 +900,8 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 
 | 阶段 | 范围 |
 |------|------|
-| Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、Windows 门禁 |
-| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板、Commands 投影（§8.8）、`learning.auto_capture: prompt`（§7.4） |
+| Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、`learning.auto_capture: prompt`（§7.4）、Windows 门禁 |
+| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板、Commands 投影（§8.8） |
 | Phase 3 | Learning 启发式、`auto_capture: hook`（含 opencode plugin / pi extension 适配）、适配器插件化、WSL 说明 |
 
 ---

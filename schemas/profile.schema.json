@@ -169,6 +169,11 @@
           "type": "string",
           "enum": ["user", "project"]
         },
+        "auto_capture": {
+          "default": "off",
+          "type": "string",
+          "enum": ["off", "prompt", "hook"]
+        },
         "auto_promote": {
           "default": false,
           "type": "boolean"

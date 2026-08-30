@@ -193,6 +193,12 @@ export function codexConfigPath(ctx: ProjectContext): string {
 export const codexProjector: Projector = {
   id: 'codex',
 
+  /**
+   * §8.8 实测：codex 是四家里唯一用 `$<name>` 调技能的（`codex exec` 下同样生效），
+   * `/<name>` 不展开。status 必须显式提示，否则用户会以为 codex 没生效。
+   */
+  skillInvokePrefix: '$',
+
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];
 

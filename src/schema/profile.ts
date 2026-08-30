@@ -7,8 +7,8 @@
  * - projection.marker_mode 默认 replace_between_markers（Windows 安装默认值），
  *   marker_begin/marker_end 与 core/markers 常量同源（单一事实源），
  *   line_ending 默认 lf（Windows 亦然，Spec §2.5）、path_style 默认 auto；
- * - learning.default_scope 默认 project、auto_promote 默认 false、
- *   include_promoted_in_sync 默认 true。
+ * - learning.default_scope 默认 project、auto_capture 默认 off、
+ *   auto_promote 默认 false、include_promoted_in_sync 默认 true。
  *
  * 无默认值的字段说明：
  * - targets：Spec 要求"至少一项"且属于"选择型"数组——合并时 project 恒覆盖
@@ -30,6 +30,11 @@
  *   路径 token 分隔符与家目录变量）；
  * - projection.gitignore_generated → core/project/engine 的 .gitignore 标记段写入；
  * - learning.default_scope → commands/learn 的默认落层；
+ * - learning.auto_capture → core/learning/auto-capture（effectiveAutoCapture 供渲染，
+ *   resolveAutoCapture 供 status / doctor 展示）
+ *   → `prompt` 档由 core/generate/composer 插入 `## Learning Protocol` 段
+ *   （§5.2 / §7.4）；`hook` 档 MVP 未实现，由 doctor 的 learning-auto-capture
+ *   条目显式告警，不静默失效；
  * - skills.always → core/sources/skill.readSkillsToMaterialize（物化并投影）；
  * - skills.on_demand → **MVP 决定：只登记不物化**，由 aforge status 展示清单
  *   （Spec §4.2 注记）。按需装载属 Phase 2，MVP 不投影、不生成占位文件——
@@ -59,6 +64,20 @@ export type MarkerMode = z.output<typeof MarkerMode>;
 
 /** Spec §4.2 projection.line_ending。 */
 export const LineEndingEnum = z.enum(['lf', 'crlf']);
+
+/**
+ * Spec §4.2 learning.auto_capture：由谁触发 `aforge learn`（§7.4 三档）。
+ *
+ * - `off`（缺省）：只有人工敲命令；
+ * - `prompt`：渲染正文里多一段 `## Learning Protocol`，指示 agent 自行调用
+ *   `aforge learn --file -`（概率性，模型可能不执行）；
+ * - `hook`：由 target 侧会话钩子触发（确定性，需每个 target 一套钩子适配）——
+ *   **MVP 未实现**，行为等同 `off`，由 doctor 显式告警（同 copy_mode: symlink 的口径）。
+ */
+export const AutoCaptureEnum = z.enum(['off', 'prompt', 'hook']);
+
+/** auto_capture 的类型形态（core/learning/auto-capture 与渲染层消费）。 */
+export type AutoCapture = z.output<typeof AutoCaptureEnum>;
 
 /** Spec §4.2 projection.path_style。 */
 export const PathStyle = z.enum(['auto', 'windows', 'posix']);
@@ -133,6 +152,7 @@ export const ProfileSchema = z.object({
   learning: z
     .object({
       default_scope: ScopeEnum.default('project'),
+      auto_capture: AutoCaptureEnum.default('off'),
       auto_promote: z.boolean().default(false),
       include_promoted_in_sync: z.boolean().default(true),
     })

@@ -131,6 +131,9 @@ export function opencodeMcpPath(ctx: ProjectContext): string {
 export const opencodeProjector: Projector = {
   id: 'opencode',
 
+  /** §8.8 实测：`GET /command` 里技能以 `source: "skill"` 出现，按 `/<name>` 调用。 */
+  skillInvokePrefix: '/',
+
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];
 

@@ -5,13 +5,16 @@
  * - 两层 scope 与 SoT 根绝对路径 + 初始化状态；
  * - effective scope 与启用 targets 及各自将写入的绝对路径（§2.2：status
  *   必须打印实际将写入的绝对路径——取 projector.plan 的全部 items 路径，
- *   含 skills / mcp 配置等非 md 项）；
+ *   含 skills / mcp 配置等非 md 项），以及各 target 的**技能调用前缀**
+ *   （§6.1 / §8.8：codex 为 `$<name>`，其余三家为 `/<name>`）；
  * - 最近一次成功 sync 时间（effective scope 层 sync-meta.lastSyncAt；
  *   无记录 → never）；
  * - custom / learnings / templates 计数（两层合并、同名 / 同 id 去重——
  *   与渲染素材口径一致：project 覆盖 user）；
  * - profile.skills 的 always / on_demand 清单——on_demand 在 MVP 中**只登记不物化**
  *   （Spec §4.2 注记），在此如实标注，避免该字段静默无效；
+ * - profile.learning.auto_capture 的声明值与生效值（§7.4）：`hook` 未实现时标出原因，
+ *   `prompt` 时说明投影正文含 `## Learning Protocol` 段，CI 下补一句"本次不会写入"；
  * - --json 输出机器可读 JSON（路径一律绝对路径）。
  *
  * 只读命令：不做渲染（profile.templates 未解析不影响路径展示，环境探测
@@ -23,22 +26,36 @@ import { resolveEffectiveConfig } from '../core/config/defaults';
 import { HABITS_FILE, PROFILE_FILE } from '../core/config/load';
 import { readEnv, type Scope } from '../core/env';
 import { ConfigError } from '../core/errors';
+import {
+  type AutoCaptureState,
+  LEARNING_PROTOCOL_HEADING,
+  rendersLearningProtocol,
+  resolveAutoCapture,
+} from '../core/learning/auto-capture';
 import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
 import { projectorRegistry } from '../core/project/projectors/registry';
 import { readSyncMeta } from '../core/project/sync-meta';
-import type { ProjectContext } from '../core/project/types';
+import type { ProjectContext, SkillInvokePrefix } from '../core/project/types';
 import { listDirSafe } from '../infra/fsutil';
 import type { FileStat, Host } from '../infra/host';
+import type { AutoCapture } from '../schema';
 import { type CommandContext, defaultCommandContext, printJson, renderList } from './context';
 import { resolveJsonFlag } from './flags';
 
 /** 命令上下文（host/os/cwd 注入；测试可换 fake host 与任意平台）。 */
 export type StatusCommandContext = CommandContext;
 
-/** 单个启用 target 的写入路径（plan items 全量）。 */
+/** 单个启用 target 的写入路径（plan items 全量）与技能调用前缀。 */
 export interface StatusTargetInfo {
   readonly targetId: string;
   readonly paths: readonly string[];
+  /**
+   * 该 target 里调用已装技能的前缀（§6.1 要求 status 打印；§8.8 实测表）。
+   *
+   * 取值域复用 Projector 契约的 SkillInvokePrefix，不宽化成 string——`--json` 的对外
+   * 类型契约与 core 侧保持同一精度，映射表也只有 projector 一处事实源。
+   */
+  readonly skillInvokePrefix: SkillInvokePrefix;
 }
 
 /** custom / learnings / templates 计数（两层合并去重）。 */
@@ -72,6 +89,19 @@ export interface StatusResult {
    * 在此展示，是为了让「声明了但不会被投影」这件事可见——否则该字段静默无效。
    */
   readonly onDemandSkills: readonly string[];
+  /**
+   * profile.learning.auto_capture 的声明值与生效值（§7.4）。
+   *
+   * 同样是"避免字段静默无效"：`hook` 档 MVP 未实现，declared 与 effective 会不同，
+   * `reason` 说明为什么。`ciNote` 另说一件事——CI 下 learnings 恒不落盘，但**生效档位
+   * 与投影正文不变**（否则 contentHash 跨环境不稳定）。
+   */
+  readonly autoCapture: Readonly<{
+    declared: AutoCapture;
+    effective: AutoCapture;
+    reason: string | null;
+    ciNote: string | null;
+  }>;
 }
 
 /** stat 失败（不存在 / 不可访问）→ 非文件。 */
@@ -218,7 +248,11 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
       skipped.push(targetId);
       continue;
     }
-    targets.push({ targetId, paths: projector.plan(planCtx).items.map((i) => i.path) });
+    targets.push({
+      targetId,
+      paths: projector.plan(planCtx).items.map((i) => i.path),
+      skillInvokePrefix: projector.skillInvokePrefix,
+    });
   }
 
   // ---- 最近 sync（effective scope 层；损坏 → ConfigError(2) fail-fast）----
@@ -232,6 +266,8 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     templates: await countTemplateFiles(host, userRootForLoad, projectSoTRoot),
   };
 
+  const autoCapture = resolveAutoCapture(config.profile, env);
+
   return {
     effectiveScope: config.effectiveScope,
     userSoTRoot,
@@ -244,7 +280,30 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     counts,
     alwaysSkills: config.profile.skills.always ?? [],
     onDemandSkills: config.profile.skills.on_demand ?? [],
+    autoCapture: {
+      declared: autoCapture.declared,
+      effective: autoCapture.effective,
+      reason: describeAutoCaptureReason(autoCapture),
+      ciNote: describeAutoCaptureCiNote(autoCapture),
+    },
   };
+}
+
+/** 声明了 MVP 未实现的档位时给出原因（否则 null）。 */
+function describeAutoCaptureReason(state: AutoCaptureState): string | null {
+  return state.unimplemented ? 'hook is not implemented in MVP - behaves as off' : null;
+}
+
+/**
+ * 当前环境下会不会真的采集（非 CI → null）。
+ *
+ * 与 reason 分开：CI 只挡*写入*（§7.4 护栏 3），不改变生效档位与投影正文——
+ * 否则同一份 SoT 在 CI 与本地会渲染出不同的 contentHash。
+ */
+function describeAutoCaptureCiNote(state: AutoCaptureState): string | null {
+  return state.ciNoCapture
+    ? 'CI detected - no learnings will be written (projected rules are unchanged)'
+    : null;
 }
 
 /** SoT 根描述行：`<绝对路径> (initialized|not initialized)`。 */
@@ -267,7 +326,10 @@ export function formatStatus(result: StatusResult): string {
 
   lines.push(`targets (${result.enabledTargets.length} enabled):`);
   for (const target of result.targets) {
-    lines.push(`  ${target.targetId}:`);
+    // 前缀取自 projector.skillInvokePrefix（映射表的单一事实源在各 projector 里，
+    // 见 core/project/types.ts 的 Projector 契约）。不打这一行，用户在 codex 里敲
+    // `/name` 不展开，会以为投影没生效。
+    lines.push(`  ${target.targetId} (invoke skills as ${target.skillInvokePrefix}<name>):`);
     for (const file of target.paths) {
       lines.push(`    ${file}`);
     }
@@ -293,6 +355,23 @@ export function formatStatus(result: StatusResult): string {
   // MVP 决定：on_demand 只登记不物化（Spec §4.2 注记）——如实说明，避免用户
   // 以为声明后就会被投影
   lines.push(`  on_demand : ${onDemand} (declared only - not projected in MVP)`);
+
+  lines.push('');
+  lines.push('learning (profile.learning):');
+  // 声明值与生效值分开打：hook 未实现时二者不同，只打一个会骗人
+  const capture = result.autoCapture;
+  lines.push(
+    `  auto_capture: ${capture.declared}${capture.declared === capture.effective ? '' : ` -> ${capture.effective}`}`,
+  );
+  if (capture.reason !== null) {
+    lines.push(`                ${capture.reason}`);
+  }
+  if (rendersLearningProtocol(capture.effective)) {
+    lines.push(`                projected rules include a ${LEARNING_PROTOCOL_HEADING} section`);
+  }
+  if (capture.ciNote !== null) {
+    lines.push(`                ${capture.ciNote}`);
+  }
 
   return lines.join('\n');
 }

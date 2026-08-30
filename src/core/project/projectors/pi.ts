@@ -102,6 +102,9 @@ export function piMcpPath(ctx: ProjectContext): string {
 export const piProjector: Projector = {
   id: 'pi',
 
+  /** §8.8 实测：交互模式把 skillCommandList 并入补全候选，按 `/<name>` 调用。 */
+  skillInvokePrefix: '/',
+
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];
 
