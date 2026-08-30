@@ -16,7 +16,9 @@
  * 11. profile.skills.copy_mode 声明 `symlink`（已声明未实现 → warn，§4.2 注记 / §12 Phase 2）；
  * 12. profile.learning.auto_capture：`hook` 已声明未实现 → warn；CI 为真时补一句
  *     "本次不会写入 learnings" → ok（§7.4 护栏 3 / §10；投影正文不受 CI 影响）；
- *     `prompt` 与 `auto_promote: true` 并存 → warn（会与人工 sync 争 `.sync.lock`）。
+ *     `prompt` 与 `auto_promote: true` 并存 → warn（会与人工 sync 争 `.sync.lock`）；
+ * 13. profile.skills.expose_as_command：名单不是 `skills.always` 子集 → error(2)（sync 将失败）；
+ *     project scope 且启用 codex → warn（codex 只读 `$CODEX_HOME\prompts\`，该项跳过，§8.8）。
  *
  * 设计原则：
  * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题；
@@ -53,6 +55,7 @@ import {
   resolveDoctorRoots,
 } from './check-config';
 import {
+  checkCommandsExposure,
   checkLearningAutoCapture,
   checkMergeJson,
   checkSkillsCopyMode,
@@ -175,6 +178,9 @@ async function runConfigDependentChecks(
 
   // ---- profile.skills.copy_mode：symlink 已声明未实现（§4.2 注记 / §12 Phase 2）----
   checkSkillsCopyMode(results, config);
+
+  // ---- profile.skills.expose_as_command：名单子集校验 + codex project scope 跳过（§8.8）----
+  checkCommandsExposure(results, config);
 
   // ---- profile.learning.auto_capture：hook 未实现 / CI 不写入 / 与 auto_promote 撞锁（§7.4 / §9）----
   checkLearningAutoCapture(results, config, env);

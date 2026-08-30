@@ -128,6 +128,12 @@ export const ProfileSchema = z.object({
           'MVP 只登记不物化：声明的 skill 名不会被 sync 物化或投影，仅由 aforge status / doctor 列出（Spec §4.2 注记）',
         ),
       copy_mode: CopyMode.default('copy'),
+      expose_as_command: z
+        .array(z.string())
+        .optional()
+        .describe(
+          '额外投影成命令/prompt 薄壳的 skill 名（Spec §8.8）：必须是 skills.always 的子集，否则 sync 退出码 2；codex 的 project scope 不支持命令文件，按 skip + doctor warn 处理',
+        ),
     })
     // prefault：缺省时以 {} 作为输入再解析，内层 default 自然填充（单一事实源）
     .prefault({}),

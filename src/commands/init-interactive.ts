@@ -85,6 +85,7 @@ export function targetMainRulePaths(
     habits,
     profile,
     skillsToMaterialize: [],
+    commandsToExpose: [],
     mcpServers: [],
     dryRun: true,
     lineEnding: profile.projection.line_ending,

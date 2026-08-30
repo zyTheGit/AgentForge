@@ -20,6 +20,7 @@
  */
 import type { McpServer } from '../../../schema';
 import { pathApiFor } from '../../paths';
+import { renderCommandShell } from '../commands';
 import {
   mainRuleAction,
   type ProjectContext,
@@ -28,7 +29,7 @@ import {
   type Projector,
   shouldWriteAgentsMd,
 } from '../types';
-import { SKILLS_DIRNAME, skillDocPath } from './shared';
+import { commandFilePath, SKILLS_DIRNAME, skillDocPath } from './shared';
 
 /** Spec §2.3 / §8.4 主规则文件名（project / user 两个 scope 同名）。 */
 export const CODEX_MAIN_RULE_FILENAME = 'AGENTS.md';
@@ -41,6 +42,12 @@ export const CODEX_PROJECT_SKILLS_DIRNAME = '.agents';
 
 /** Spec §2.3 / §8.4 MCP 配置文件（config.toml）。 */
 export const CODEX_CONFIG_FILENAME = 'config.toml';
+
+/**
+ * Spec §8.4 Commands 目录名（§8.8）：codex 用 `prompts`，且**只有 user 级生效**。
+ * §8.8.5 实测项目级 `.codex\prompts\` 不展开，故 project scope 不产出该项。
+ */
+export const CODEX_PROMPTS_DIRNAME = 'prompts';
 
 /** Spec §8.4：codex MCP 标记段（writer 默认 `# BEGIN AGENTFORGE` 的 MCP 变体）。 */
 export const CODEX_MCP_TOML_BEGIN = '# BEGIN AGENTFORGE MCP';
@@ -182,6 +189,22 @@ export function codexSkillPath(ctx: ProjectContext, skillName: string): string {
   return skillDocPath(api, skillsRoot, skillName);
 }
 
+/**
+ * 单个命令薄壳的目标路径（§8.8 / §8.4 Commands 行）——**仅 user scope 有意义**。
+ *
+ * §8.8.5 实测：codex 的自定义 prompt 只读 `$CODEX_HOME\prompts\`，项目级
+ * `.codex\prompts\` 放进去 `/name` 不展开，`codex app-server` 协议里也没有任何
+ * custom prompt 方法。因此 project scope 由 plan 整项跳过（§8.8.4），不写
+ * `%USERPROFILE%`——那会把项目级配置泄漏成全局配置。
+ *
+ * 调用方须自行保证 `ctx.scope === 'user'`；project scope 下调用只会得到一个
+ * 不生效的路径（保留可计算性，便于 doctor 在提示里说明「本该落在哪」）。
+ */
+export function codexCommandPath(ctx: ProjectContext, commandName: string): string {
+  const api = pathApiFor(ctx.os);
+  return commandFilePath(api, api.join(codexUserDir(ctx), CODEX_PROMPTS_DIRNAME), commandName);
+}
+
 /** MCP 配置绝对路径（project 级 `<root>\.codex\config.toml`；user 级全局 config.toml）。 */
 export function codexConfigPath(ctx: ProjectContext): string {
   const api = pathApiFor(ctx.os);
@@ -219,6 +242,20 @@ export const codexProjector: Projector = {
         action: 'write',
         content: skill.content,
       });
+    }
+
+    // Commands 薄壳（§8.8）：**只在 user scope 产出**。project scope 整项跳过
+    // （§8.8.4：codex 只读 $CODEX_HOME\prompts\，写 %USERPROFILE% 会把项目级配置
+    // 泄漏成全局配置）；跳过原因由 doctor 的 commands/codex-project-unsupported 说明，
+    // codex 侧用 `$<skill-name>` 即可，无需命令文件
+    if (ctx.scope === 'user') {
+      for (const command of ctx.commandsToExpose) {
+        items.push({
+          path: codexCommandPath(ctx, command.name),
+          action: 'write',
+          content: renderCommandShell(command),
+        });
+      }
     }
 
     // MCP：merge_toml——只替换 `# BEGIN AGENTFORGE MCP` 标记段（§8.4）

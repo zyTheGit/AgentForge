@@ -62,6 +62,20 @@ export interface SkillArtifact {
   readonly content: string;
 }
 
+/**
+ * 待投影的命令/prompt 薄壳（Spec §8.8）。
+ *
+ * 由 `skills.expose_as_command` 点名的技能派生：内容不复制技能正文，只透传
+ * frontmatter 的 `description` / `argument-hint`（派生逻辑见 core/project/commands）。
+ * `description` / `argumentHint` 缺省即代表技能 frontmatter 里没有该键——不造默认值。
+ */
+export interface CommandArtifact {
+  /** 命令名 = 技能目录名（§8.8.2：MVP 只投影平铺名，不产生子目录）。 */
+  readonly name: string;
+  readonly description?: string;
+  readonly argumentHint?: string;
+}
+
 /** Spec §8.1 ProjectContext：projector 计算投影计划所需的全部输入。 */
 export interface ProjectContext {
   /** 宿主平台（路径分隔符与投影格式随平台变化，Spec §8.1 os）。 */
@@ -79,6 +93,14 @@ export interface ProjectContext {
   readonly habits: Habits;
   readonly profile: Profile;
   readonly skillsToMaterialize: readonly SkillArtifact[];
+  /**
+   * Spec §8.8：本次要额外投影成命令/prompt 薄壳的技能（`skills.expose_as_command`）。
+   *
+   * 与 `skillsToMaterialize` 分开传而不是让 projector 自己从 profile 里筛：名单的
+   * 子集校验（点名却未装 → ConfigError(2)）与 frontmatter 派生都是 SoT 侧职责
+   * （core/project/commands），projector 只负责「落到哪个目录」。
+   */
+  readonly commandsToExpose: readonly CommandArtifact[];
   readonly mcpServers: readonly McpServer[];
   /** M5：dry-run 语义由引擎在 apply 阶段实现，plan 始终产出完整计划。 */
   readonly dryRun: boolean;

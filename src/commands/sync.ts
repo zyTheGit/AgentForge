@@ -137,6 +137,10 @@ export function printSyncResult(result: SyncResult): void {
   for (const skipped of result.skippedTargets) {
     lines.push(`[${skipped}] skipped: projector not available in this version`);
   }
+  for (const skip of result.commandSkips) {
+    // §8.8.4：命令薄壳整项跳过（该 target 的其余产物照常投影）
+    lines.push(`[${skip.targetId}] commands skipped: ${skip.reason}`);
+  }
 
   if (result.targets.length > 0) {
     lines.push('', 'target summary:', ...result.targets.map(targetSummaryLine));

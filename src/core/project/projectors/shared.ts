@@ -25,3 +25,14 @@ export { SKILL_DOC_FILENAME, SKILLS_DIRNAME };
 export function skillDocPath(api: PathApi, skillsRoot: string, name: string): string {
   return api.join(skillsRoot, name, SKILL_DOC_FILENAME);
 }
+
+/**
+ * 单个命令薄壳的目标路径：`<commandsRoot>/<name>.md`（Spec §8.8.1 一名一文件）。
+ *
+ * 各 target 的差异只在 `commandsRoot` 的目录名（opencode `command\`、claude
+ * `commands\`、pi / codex `prompts\`），末段拼装一致，故由本函数统一。
+ * §8.8.2：MVP 只投影平铺名，命令名里不含命名空间分隔符，因此这里不做子目录处理。
+ */
+export function commandFilePath(api: PathApi, commandsRoot: string, name: string): string {
+  return api.join(commandsRoot, `${name}.md`);
+}

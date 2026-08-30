@@ -75,6 +75,7 @@ import { ConfigError } from '../errors';
 import { renderedSectionHash } from '../markers';
 import { resolveProjectSoT, resolveUserSoT } from '../paths';
 import { readSkillsToMaterialize } from '../sources/skill';
+import { CODEX_PROJECT_COMMANDS_SKIP_REASON, resolveCommandsToExpose } from './commands';
 import { projectorRegistry } from './projectors/registry';
 import { buildGitignoreItem, GITIGNORE_MARKERS, GITIGNORE_TARGET_ID } from './sync-gitignore';
 import { acquireSyncLocks, releaseSyncLocks, resolveLockRoots } from './sync-lock';
@@ -103,6 +104,7 @@ import {
 import {
   ALL_TARGET_IDS,
   attachFailureReport,
+  type SyncCommandSkip,
   type SyncFailureReport,
   type SyncOptions,
   type SyncResult,
@@ -148,6 +150,7 @@ export {
   ALL_TARGET_IDS,
   getSyncFailureReport,
   REGISTERED_PROJECTORS,
+  type SyncCommandSkip,
   type SyncFailureReport,
   type SyncItemStatus,
   type SyncOptions,
@@ -193,6 +196,8 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     projectSoTRoot,
     config.profile,
   );
+  // §8.8：expose_as_command 点名的技能额外产出命令薄壳（名单非 always 子集 → 退出码 2）
+  const commandsToExpose = resolveCommandsToExpose(config.profile, skillsToMaterialize);
 
   const ctx: ProjectContext = {
     os,
@@ -202,6 +207,7 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     habits: config.habits,
     profile: config.profile,
     skillsToMaterialize, // M8：skill add 接入（write 项/事务 M6 已就绪）
+    commandsToExpose, // §8.8：命令薄壳（codex project scope 由该 projector 自行跳过）
     mcpServers: config.profile.mcp.servers ?? [],
     dryRun: opts.dryRun,
     lineEnding: config.profile.projection.line_ending,
@@ -232,6 +238,14 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   }
 
   const contentHash = renderedSectionHash(renderedRulesMd, ctx.markerBegin, ctx.markerEnd);
+
+  // ---- §8.8.4：codex 的 project scope 不支持命令文件 → 记一条 skipped 供命令层打印 ----
+  const commandSkips: SyncCommandSkip[] =
+    commandsToExpose.length > 0 &&
+    ctx.scope === 'project' &&
+    planned.some((t) => t.targetId === 'codex')
+      ? [{ targetId: 'codex', reason: CODEX_PROJECT_COMMANDS_SKIP_REASON }]
+      : [];
 
   const sotRoot = config.effectiveScope === 'project' ? projectSoTRoot : userSoTRoot;
 
@@ -264,6 +278,7 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
         statuses: t.plan.items.map(() => 'planned' as const),
       })),
       skippedTargets,
+      commandSkips,
       warnings: [],
       transactionWarnings: [],
       gitignore:
@@ -458,6 +473,7 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
         statuses: t.statuses,
       })),
       skippedTargets,
+      commandSkips,
       warnings,
       transactionWarnings: transactionWarningsOf(tx, sotRoot, recovery.preservedDir),
       gitignore: gitignoreResult,

@@ -901,8 +901,8 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 
 | 阶段 | 范围 |
 |------|------|
-| Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、`learning.auto_capture: prompt`（§7.4）、Windows 门禁 |
-| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板、Commands 投影（§8.8） |
+| Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、`learning.auto_capture: prompt`（§7.4）、Commands 投影（§8.8，平铺名）、Windows 门禁 |
+| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板、Commands 的命名空间与 `$1..$N` 归一化（§8.8.2） |
 | Phase 3 | Learning 启发式、`auto_capture: hook`（含 opencode plugin / pi extension 适配）、适配器插件化、WSL 说明 |
 
 ---

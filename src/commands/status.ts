@@ -231,6 +231,7 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     habits: config.habits,
     profile: config.profile,
     skillsToMaterialize: [],
+    commandsToExpose: [],
     mcpServers: config.profile.mcp.servers ?? [],
     dryRun: true,
     lineEnding: config.profile.projection.line_ending,

@@ -184,6 +184,7 @@ function projectedSkillDocPaths(
     habits: HabitsSchema.parse(defaultHabits()),
     profile,
     skillsToMaterialize: [],
+    commandsToExpose: [],
     mcpServers: [],
     dryRun: true,
     lineEnding: profile.projection.line_ending,

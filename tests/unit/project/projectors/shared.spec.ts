@@ -29,6 +29,7 @@ function buildCtx(overrides: Partial<ProjectContext> = {}): ProjectContext {
     habits: HabitsSchema.parse({ version: 1 }),
     profile: ProfileSchema.parse({ version: 1, targets: ['claude'] }),
     skillsToMaterialize: [],
+    commandsToExpose: [],
     mcpServers: [],
     dryRun: true,
     lineEnding: 'lf',
