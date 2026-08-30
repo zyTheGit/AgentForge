@@ -84,7 +84,7 @@ Detect/Declare Habits → Profile → Generate Rules (SoT)
 | OpenCode | `%USERPROFILE%\.config\opencode\`（适配器需探测候选目录并在 doctor 中说明） |
 | Codex | `%USERPROFILE%\.codex\`（`CODEX_HOME` 可覆盖） |
 | Claude Code | `%USERPROFILE%\.claude\` |
-| Pi | `%USERPROFILE%\.pi\agent\` |
+| Pi | `%USERPROFILE%\.pi\agent\`（`PI_CODING_AGENT_DIR` 可覆盖） |
 
 每个 Projector 实现 `resolveUserDirs(env, os)`；`aforge status` 必须打印实际将写入的绝对路径。
 
@@ -107,6 +107,7 @@ Detect/Declare Habits → Profile → Generate Rules (SoT)
 | `AGF_LINE_ENDING` | `lf` 或 `crlf` |
 | `CI` | 为真时禁止写入 learnings |
 | `CODEX_HOME` | Codex 根目录覆盖 |
+| `PI_CODING_AGENT_DIR` | pi 的 agent 目录覆盖（user scope 落点整体跟随） |
 | `USERPROFILE` | Windows 用户目录（优先于 `HOME`） |
 
 ### 2.5 换行与文件写入
@@ -756,7 +757,7 @@ interface Projector {
 
 **MCP 前置依赖**：pi 本体不内建 MCP，需先在 pi 侧安装适配扩展 `pi install npm:pi-mcp-adapter`（<https://pi.dev/packages/pi-mcp-adapter>）。适配器读取优先级（高 → 低）为 `.pi\mcp.json`（项目级 pi 覆盖）> `.mcp.json`（项目共享）> `<Pi agent dir>\mcp.json`（user 级 pi 覆盖，缺省 `%USERPROFILE%\.pi\agent\mcp.json`）> `~\.config\mcp\mcp.json` / `~\.agents\mcp.json`（全局共享）。注意 user 级 pi 覆盖排在项目级 `.mcp.json` **之后**——上游明确项目文件同时盖过 user 全局共享配置与 pi 全局覆盖，因此不能假定"pi 私有位一定生效"。AgentForge 写 pi 私有位的理由是避免与 claude projector 争用根 `.mcp.json`：同一事务里两个 projector 写同一路径会互相覆盖；扩展未安装时该文件只是躺着不生效。
 
-**已知限制（`PI_CODING_AGENT_DIR`）**：user scope 的落点硬编码为 `%USERPROFILE%\.pi\agent`，当前不支持 `PI_CODING_AGENT_DIR`（上游适配器在该变量置位时改读它指向的目录）。置位该变量时 user scope 的 MCP 投影会落在 pi 不读的路径上；又因该项是 MVP soft、写成功即静默，用户拿不到"这份配置不生效"的信号。对比 §2.2 的 `CODEX_HOME` 已被 paths 层认掉，此项属待补的对称支持。
+**`PI_CODING_AGENT_DIR`**：user scope 的 agent 目录支持该变量覆盖（缺省 `%USERPROFILE%\.pi\agent`），主规则 / skills / mcp.json 三个落点**整体跟随**——上游 pi 与 pi-mcp-adapter 都按它找 agent 目录，只跟一个会让同一目录下的产物半新半旧。口径与 §2.2 的 `CODEX_HOME` 一致。`aforge doctor` 在该变量置位时报一条 `ok`，把生效目录打出来（MCP 项是 soft、写成功即静默，出问题时这条是唯一的定位线索）。
 
 **MVP soft 定义**：Pi 的 MCP 投影采用 best-effort 策略——尝试写入 `.pi\mcp.json` 的 `mcpServers` 管理键；目录/文件异常则跳过并输出 warning，不阻塞 sync 流程。
 

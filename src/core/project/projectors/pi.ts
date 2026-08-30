@@ -3,9 +3,12 @@
  *
  * | 角色          | Project                     | User                            |
  * |---------------|-----------------------------|---------------------------------|
- * | 主规则        | `<root>\AGENTS.md`          | `%USERPROFILE%\.pi\agent\AGENTS.md` |
- * | Skills        | `.pi\skills\<name>\SKILL.md` | `~\.pi\agent\skills\`          |
- * | MCP           | `.pi\mcp.json`（soft）       | `~\.pi\agent\mcp.json`（soft）  |
+ * | 主规则        | `<root>\AGENTS.md`          | `<pi agent dir>\AGENTS.md`      |
+ * | Skills        | `.pi\skills\<name>\SKILL.md` | `<pi agent dir>\skills\`       |
+ * | MCP           | `.pi\mcp.json`（soft）       | `<pi agent dir>\mcp.json`（soft）|
+ *
+ * user 级的 `<pi agent dir>` = `PI_CODING_AGENT_DIR` 覆盖，否则 `%USERPROFILE%\.pi\agent`
+ * （Spec §2.2，同 codex 的 `CODEX_HOME`）。
  *
  * - 主规则动作按 profile.projection.marker_mode（§4.2；merge_marker 时 marker 外
  *   保留，Spec §8.2；none 时整文件 write）；`write_agents_md: false` 关闭该项；
@@ -26,7 +29,7 @@
  * - plan 为纯函数：不做任何 IO，路径按注入 os 选择分隔符（Spec §2.1）。
  */
 import type { McpServer } from '../../../schema';
-import { pathApiFor } from '../../paths';
+import { type OsContext, pathApiFor } from '../../paths';
 import {
   mainRuleAction,
   type ProjectContext,
@@ -44,15 +47,32 @@ export const PI_MAIN_RULE_FILENAME = 'AGENTS.md';
 /** pi 的项目级配置目录（`.pi\`，Spec §2.3）。 */
 export const PI_DIRNAME = '.pi';
 
-/** pi 的用户级全局目录段（`<home>\.pi\agent`，Spec §2.2）。 */
+/** pi 的用户级全局目录段（`<home>\.pi\agent`，Spec §2.2 缺省值）。 */
 export const PI_USER_DIR_SEGMENTS = ['.pi', 'agent'] as const;
 
 /** Spec §2.3 / §8.6 MCP 配置文件（pi 私有覆盖位，由 pi-mcp-adapter 读取）。 */
 export const PI_MCP_FILENAME = 'mcp.json';
 
-/** user scope 的 pi 全局目录（`<home>\.pi\agent`，与 paths.resolveTargetUserDirs().pi 同构）。 */
+/**
+ * user scope 的 pi agent 目录：`PI_CODING_AGENT_DIR` 覆盖，否则 `<home>\.pi\agent`
+ * （Spec §2.2，与 paths.resolveTargetUserDirs().pi 同构）。
+ *
+ * 与 codexUserDir 的 `CODEX_HOME` 分支同构：该变量置位时上游 pi 与 pi-mcp-adapter
+ * 都改从它指向的目录读 agent 配置，所以这一层的三个落点（AGENTS.md / skills /
+ * mcp.json）必须整体跟着走——只跟一个会让同一目录下的产物半新半旧。
+ *
+ * 入参是 `(home, override)` 而非 ProjectContext：命令层（`aforge mcp remove` 的提示
+ * 文案）也要算这个目录，但它手里只有基准根与 env，造一个假 ctx 不值得。
+ */
+export function piUserAgentDir(home: string, override: string | undefined, os: OsContext): string {
+  const api = pathApiFor(os);
+  return override !== undefined && override !== ''
+    ? api.resolve(override)
+    : api.join(home, ...PI_USER_DIR_SEGMENTS);
+}
+
 function piUserDir(ctx: ProjectContext): string {
-  return pathApiFor(ctx.os).join(ctx.rootDir, ...PI_USER_DIR_SEGMENTS);
+  return piUserAgentDir(ctx.rootDir, ctx.env?.piCodingAgentDir, ctx.os);
 }
 
 /**
@@ -85,12 +105,9 @@ export function piSkillPath(ctx: ProjectContext, skillName: string): string {
 }
 
 /**
- * MCP 配置绝对路径（project 级 `<root>\.pi\mcp.json`；user 级 `~\.pi\agent\mcp.json`）。
+ * MCP 配置绝对路径（project 级 `<root>\.pi\mcp.json`；user 级 `<pi agent dir>\mcp.json`）。
  *
- * **已知限制**：user 级目录段硬编码为 `.pi\agent`，当前不支持 `PI_CODING_AGENT_DIR`
- * （上游 pi-mcp-adapter 在该变量置位时改读它指向的目录）。置位该变量时 user scope 的
- * 投影会落在 pi 不读的路径上，且 MCP 项是 soft、写成功即静默，用户拿不到"这份配置不
- * 生效"的信号。对比 `CODEX_HOME` 已由 paths 层的 `env.codexHome` 认掉。
+ * user 级目录由 piUserDir 解析（`PI_CODING_AGENT_DIR` 覆盖，否则 `.pi\agent`）。
  */
 export function piMcpPath(ctx: ProjectContext): string {
   const api = pathApiFor(ctx.os);

@@ -92,7 +92,7 @@ export function resolveProjectSoT(projectRoot: string, os: OsContext = currentOs
  * - opencode：`~/.config/opencode`
  * - codex：CODEX_HOME 覆盖，否则 `~/.codex`
  * - claude：`~/.claude`
- * - pi：`~/.pi/agent`
+ * - pi：PI_CODING_AGENT_DIR 覆盖，否则 `~/.pi/agent`
  * 分隔符随注入 os 变化（win32 `\`，posix `/`）。
  */
 export function resolveTargetUserDirs(env: EnvSnapshot, os: OsContext): TargetUserDirs {
@@ -102,7 +102,9 @@ export function resolveTargetUserDirs(env: EnvSnapshot, os: OsContext): TargetUs
     opencode: api.resolve(home, '.config', 'opencode'),
     codex: env.codexHome ? api.resolve(env.codexHome) : api.resolve(home, '.codex'),
     claude: api.resolve(home, '.claude'),
-    pi: api.resolve(home, '.pi', 'agent'),
+    pi: env.piCodingAgentDir
+      ? api.resolve(env.piCodingAgentDir)
+      : api.resolve(home, '.pi', 'agent'),
   };
 }
 

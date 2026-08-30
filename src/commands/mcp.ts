@@ -41,7 +41,7 @@ import {
   OPENCODE_MCP_FILENAME,
   OPENCODE_USER_DIR_SEGMENTS,
 } from '../core/project/projectors/opencode';
-import { PI_DIRNAME, PI_MCP_FILENAME, PI_USER_DIR_SEGMENTS } from '../core/project/projectors/pi';
+import { PI_DIRNAME, PI_MCP_FILENAME, piUserAgentDir } from '../core/project/projectors/pi';
 import { withSotLock } from '../core/project/sync-lock';
 import {
   type AddMcpServerResult,
@@ -151,13 +151,13 @@ export async function runMcpRemove(
  * MCP 侧的落点判定只有「基准根 + 目录段 + 文件名」三段，projector 的
  * opencodeMcpPath / claudeMcpPath / piMcpPath 里除此之外没有别的逻辑，而它们的入参是
  * 完整 ProjectContext（profile / habits / renderedRulesMd / marker 等）——为三个常量拼接
- * 造一个假 ctx 得不偿失。目录段与文件名全部取自 projector 导出的常量
- * （OPENCODE_USER_DIR_SEGMENTS / PI_USER_DIR_SEGMENTS / *_MCP_FILENAME），
- * 而 opencodeUserDir / piUserDir 本身就是 `join(rootDir, ...同一常量)`，所以两边同源。
+ * 造一个假 ctx 得不偿失。文件名与 opencode 的目录段取自 projector 导出的常量
+ * （OPENCODE_USER_DIR_SEGMENTS / *_MCP_FILENAME），而 opencodeUserDir 本身就是
+ * `join(rootDir, ...同一常量)`，所以两边同源。
  *
- * **残留风险**：将来某个 projector 像 codex 处理 CODEX_HOME 那样引入环境变量覆盖，
- * 这里不会自动跟上（pi 的 PI_CODING_AGENT_DIR 已在 piMcpPath 的 JSDoc 里记为已知限制）。
- * 真出现那种情况，就把本函数改成与 skill 侧一致的假 ctx + projector 调用。
+ * **同源约束**：user scope 的 pi 目录必须走 projector 导出的 `piUserAgentDir`——它认
+ * `PI_CODING_AGENT_DIR`（同 codex 认 `CODEX_HOME`），在这里重新 join 目录段会在该变量
+ * 置位时打印出一条 pi 根本不读的路径。其余两家目前无环境变量覆盖，仍按常量拼接。
  *
  * codex 不列：其 MCP 走 merge_toml 的 `# BEGIN/END AGENTFORGE MCP` 标记段**整段重写**，
  * 下次 sync 按 SoT 重算该段，摘掉的 server 自动消失，不需要用户动手。
@@ -179,7 +179,7 @@ function mcpProjectionFiles(ctx: McpCommandContext, env: EnvSnapshot, scope: Sco
   return [
     api.join(root, ...OPENCODE_USER_DIR_SEGMENTS, OPENCODE_MCP_FILENAME),
     api.join(root, CLAUDE_MCP_FILENAME),
-    api.join(root, ...PI_USER_DIR_SEGMENTS, PI_MCP_FILENAME),
+    api.join(piUserAgentDir(root, env.piCodingAgentDir, ctx.os), PI_MCP_FILENAME),
   ];
 }
 
