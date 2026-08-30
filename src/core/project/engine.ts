@@ -280,13 +280,14 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   // ---- 阶段 1.6：取事务锁（覆盖备份 → apply → 写 sync-meta 整段）----
   // 只锁 apply 是不够的：并发进程若在「备份」与「apply」之间写入同一 AGENTS.md，
   // 本次失败回滚会用过期备份把对方的改动覆盖掉。
-  // 锁按根取，但产物可能落在 SoT 之外（CODEX_HOME 指向用户目录时两个项目会并发写
-  // 同一个 ~/.codex/config.toml）→ 此时额外取用户级 SoT 根的锁，按路径序加锁防死锁。
+  // 锁按根取，但产物可能落在 SoT 之外（CODEX_HOME / PI_CODING_AGENT_DIR 指向用户目录外
+  // 时两个项目会并发写同一个 config.toml / mcp.json）→ 此时额外取用户级 SoT 根的锁，
+  // 按路径序加锁防死锁。
   const allItemPaths = [
     ...planned.flatMap((t) => t.plan.items.map((i) => i.path)),
     ...(gitignoreItem === undefined ? [] : [gitignoreItem.path]),
   ];
-  const outsideRoots = [env.userProfile, env.codexHome].filter(
+  const outsideRoots = [env.userProfile, env.codexHome, env.piCodingAgentDir].filter(
     (root): root is string => root !== undefined && root !== '',
   );
   const locks = await acquireSyncLocks(

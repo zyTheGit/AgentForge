@@ -97,6 +97,13 @@ describe('resolveTargetUserDirs（Spec §2.2 四 target 用户级目录）', () 
     expect(dirs.claude).toBe('C:\\Users\\tester\\.claude');
   });
 
+  it('PI_CODING_AGENT_DIR 覆盖 pi 目录', () => {
+    const dirs = resolveTargetUserDirs(envOf({ piCodingAgentDir: 'E:\\tools\\pi-agent' }), WIN);
+    expect(dirs.pi).toBe('E:\\tools\\pi-agent');
+    // 其余不受影响
+    expect(dirs.codex).toBe('C:\\Users\\tester\\.codex');
+  });
+
   it('posix 分隔符映射（~/.config/opencode 等）', () => {
     const dirs = resolveTargetUserDirs(envOf({ userProfile: '/home/u' }), POSIX);
     expect(dirs.opencode).toBe('/home/u/.config/opencode');

@@ -20,5 +20,4 @@
 - **`learning.auto_capture: hook`**：MVP 未实现任何 target 侧会话钩子，行为等同 `off`，`doctor` 统一 warn。
 - **`skills.on_demand`**：MVP 只登记不物化——声明的 skill 名不会被 `sync` 物化或投影，仅由 `status` / `doctor` 列出（按需装载属 Phase 2）。
 - **`skills.expose_as_command`（§8.8 Commands 投影）**：尚未实现，`profile.yaml` schema 里也还没有这个字段，写了会被静默忽略。
-- **`PI_CODING_AGENT_DIR`**：pi 的 user scope 落点仍硬编码为 `.pi/agent`，置位该变量时 MCP 投影会落在 pi 不读的路径上（`doctor` warn）。
 - **技能附属文件**：会拷进 SoT，但只有 `SKILL.md` 正文参与投影。

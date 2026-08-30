@@ -55,7 +55,7 @@ project scope 下投影 `SKILL.md` 正文，各 target 的调用前缀不同（S
 | claude | `.claude\skills\<name>\SKILL.md` | `/<name>` |
 | pi | `.pi\skills\<name>\SKILL.md` | `/<name>` |
 
-codex 是四家里唯一用 `$` 的，`/<name>` 不展开。`aforge status` 会在每个 target 的路径旁打印它的前缀，不必记。
+codex 是四家里唯一用 `$` 的，`/<name>` 不展开。`aforge skill add` 的成功提示与 `aforge status` 都会打印前缀（前者按技能名给出可直接复制的调用形式），不必记。
 
 要点：
 

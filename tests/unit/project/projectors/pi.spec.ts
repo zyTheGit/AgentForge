@@ -75,6 +75,46 @@ describe('piProjector.plan（Spec §8.6 主规则 / MCP soft / skills）', () =>
     expect(plan.items[1]?.path).toBe('C:\\Users\\u\\.pi\\agent\\mcp.json');
   });
 
+  it('user scope + PI_CODING_AGENT_DIR：三个落点整体改到覆盖目录（Spec §2.2 env 覆盖）', () => {
+    const ctx = buildCtx({
+      scope: 'user',
+      rootDir: 'C:\\Users\\u',
+      skillsToMaterialize: [{ name: 's1', content: 'x' }],
+      env: {
+        agfHome: undefined,
+        agfScope: undefined,
+        offline: false,
+        lineEnding: undefined,
+        ci: false,
+        codexHome: undefined,
+        piCodingAgentDir: 'D:\\pi-agent',
+        userProfile: 'C:\\Users\\u',
+      },
+    });
+    const plan = piProjector.plan(ctx);
+    expect(plan.items[0]?.path).toBe('D:\\pi-agent\\AGENTS.md');
+    expect(plan.items[1]?.path).toBe('D:\\pi-agent\\skills\\s1\\SKILL.md');
+    expect(plan.items.at(-1)?.path).toBe('D:\\pi-agent\\mcp.json');
+  });
+
+  it('project scope 不受 PI_CODING_AGENT_DIR 影响（覆盖只针对 user 级 agent 目录）', () => {
+    const ctx = buildCtx({
+      env: {
+        agfHome: undefined,
+        agfScope: undefined,
+        offline: false,
+        lineEnding: undefined,
+        ci: false,
+        codexHome: undefined,
+        piCodingAgentDir: 'D:\\pi-agent',
+        userProfile: 'C:\\Users\\u',
+      },
+    });
+    const plan = piProjector.plan(ctx);
+    expect(plan.items[0]?.path).toBe('C:\\proj\\AGENTS.md');
+    expect(plan.items.at(-1)?.path).toBe('C:\\proj\\.pi\\mcp.json');
+  });
+
   it('posix os：分隔符为 /（Spec §2.1 路径随平台）', () => {
     const ctx = buildCtx({ os: { platform: 'linux' }, rootDir: '/home/u/proj' });
     const plan = piProjector.plan(ctx);

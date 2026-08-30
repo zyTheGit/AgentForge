@@ -89,23 +89,22 @@ export function checkOneDrive(results: DoctorCheckResult[], env: EnvSnapshot, ho
 }
 
 /**
- * PI_CODING_AGENT_DIR 置位提示（Spec §2.2 已知限制 → warn）。
+ * PI_CODING_AGENT_DIR 置位确认（Spec §2.2 → ok）。
  *
- * 为什么必须报：pi 的 user scope 落点在 projector 里硬编码为 `.pi\agent`，该变量置位时
- * 上游适配器改读它指向的目录，于是投影落在 pi 不读的路径上；又因 pi 的 MCP 项是 soft
- * （写成功即静默、不算 sync 失败），用户拿不到任何"这份配置不生效"的信号。对比 CODEX_HOME
- * 已被 paths 层认掉，此项属待补的对称支持，在补上之前由 doctor 顶着。
+ * 为什么留一条 ok 而不是删掉这个检查：pi 的 MCP 项是 soft（写成功即静默、失败也不算
+ * sync 失败），user scope 的落点又整体跟着这个变量走，出问题时用户很难判断"投影到底
+ * 落在哪"。报一条 ok 把生效的目录打出来，比让人去翻 projector 源码便宜。
+ * 未置位时不产出任何项——避免给没用 pi 的用户增加噪音。
  */
 export function checkPiCodingAgentDir(results: DoctorCheckResult[], env: EnvSnapshot): void {
   if (env.piCodingAgentDir === undefined) {
-    return; // 未置位：不产出 ok 项（避免给没用 pi 的用户增加噪音）
+    return;
   }
   results.push({
     section: 'environment',
-    level: 'warn',
+    level: 'ok',
     item: 'pi-coding-agent-dir',
-    detail: `PI_CODING_AGENT_DIR 已置位（${env.piCodingAgentDir}），但 pi 的 user scope 落点仍硬编码为 .pi/agent`,
-    hint: '若启用了 pi 且使用 user scope，该 MCP 投影会落在 pi 不读的路径上；改用 project scope，或手工把 mcp.json 复制到 PI_CODING_AGENT_DIR 指向的目录',
+    detail: `PI_CODING_AGENT_DIR 已置位（${env.piCodingAgentDir}）：pi 的 user scope 落点按它解析`,
   });
 }
 
