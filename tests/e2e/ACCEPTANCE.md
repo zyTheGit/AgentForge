@@ -1,8 +1,8 @@
-# AgentForge MVP 验收清单（Spec §11.2，13 条）
+# AgentForge MVP 验收清单（Spec §11.2，16 条）
 
 验收环境：Windows（用户主环境）+ Node 22（fnm 管理）+ 本机存在 fnm 1.39.0 与 uv 0.11.3。
 执行方式：`npm test`（vitest 全量，含进程内真实临时目录 + 子进程端到端两层）。
-最近一次全量结果：**758 passed / 4 skipped（48+1 测试文件）**，`tsc --noEmit` 零错误。
+最近一次全量结果：**1209 passed / 6 skipped（67 测试文件）**，`tsc --noEmit` 零错误。
 
 | # | 验收条目（Spec §11.2 原文摘要） | 状态 | 证据（测试文件 → 用例） |
 |---|--------------------------------|------|------------------------|
@@ -19,6 +19,10 @@
 | 11 | 多个 template 启用时合并输出符合 §5.2 优先级 | ✅ | `tests/e2e/acceptance.spec.ts` →「custom → tpl-a → tpl-b → base/default 顺序正确，模板变量渲染生效」；装配层：`tests/unit/generate/composer.spec.ts` →「§5.2 四层优先级」 |
 | 12 | sync 任一 target 失败时所有 target 回滚到 sync 前状态 | ✅ | `tests/integration/sync-multi.spec.ts` →「事务回滚（§7.3-6 / §11.2.12）」三用例（EPERM 注入 / 全新目录新建文件删除 / 只读真实 EACCES）；引擎层：`tests/unit/project/engine-transaction.spec.ts` →「syncOnce — 事务回滚」四用例 |
 | 13 | `aforge import` 从 AGENTS.md 导入工具链声明映射到 habits detected 字段 | ✅ | `tests/e2e/acceptance.spec.ts` →「AGENTS.md 导入 → detected.import 映射 → 提升声明 → sync 投影（全程子进程）」；命令层全套：`tests/integration/init-interactive-import.spec.ts`（映射/marker 区间剥除/重复导入覆盖/退出码 2/不自动 sync） |
+| 14 | `skills.expose_as_command` 点名后 sync：opencode / claude / pi 各落一份命令文件、codex 报 skip；摘名后 prune 删除，手改过的进 `pruneSkipped` | ✅ | `tests/integration/commands-projection.spec.ts` → 四用例（落盘 + frontmatter 透传 + `$ARGUMENTS` + codex skip / 摘名后 prune / 手改进 pruneSkipped / 点名未装技能退出码 2）；落点横向约束：`tests/unit/project/projectors/commands-projection.spec.ts` |
+| 15 | `auto_capture: prompt` 时投影正文含 `## Learning Protocol` 段且位置固定；置 `off` 后消失，marker 外内容不受影响 | ✅ | `tests/integration/learning-protocol.spec.ts` → 三用例（prompt 段落逐字落地且顺序 custom → Protocol → Learnings / 改回 off 段落消失且 marker 外手写内容保留 / 声明 hook 等同 off）；渲染判据与正文护栏：`tests/unit/learning/auto-capture.spec.ts`、`tests/unit/generate/composer.spec.ts` |
+| 16 | `CI=1` 下任意 `auto_capture` 取值都不写 `learnings/`；投影链路照常成功，显式 `aforge learn` 被拒退出码 2 | ✅ | `tests/unit/learning/store.spec.ts` →「CI=true（§10 守卫）→ ConfigError(2)，不落任何文件」+「CI=false / 未设置 → 正常创建」；档位不受 CI 影响（渲染跨环境稳定）：`tests/unit/learning/auto-capture.spec.ts` →「CI 为真 → 只标 ciNoCapture，不改变生效档位」；CI 判定来源：`tests/unit/env.spec.ts` |
+
 
 ## M9 补充验证（打包与交互基建）
 
