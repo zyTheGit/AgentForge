@@ -11,7 +11,7 @@
 - **learnings/**：从实战经验沉淀、待确认的条目（`aforge learn`）；
 - **templates/、skills/、mcp/**：可复用模板、技能与 MCP 服务器声明。
 
-执行 `aforge sync` 后，以上内容被渲染并写入各 Agent 的原生规则文件。AgentForge 只管理文件中的 marker 区间，区间外你的手写内容原样保留。
+执行 `aforge sync` 后，以上内容被渲染并写入各 Agent 的原生规则文件。AgentForge 只管理文件中的 marker 区间，区间外你的手写内容原样保留。规则正文之外，同一次 `sync` 还会投影技能目录、MCP 配置，以及（按需开启的）命令薄壳。
 
 ## 安装
 
@@ -75,7 +75,13 @@ aforge mcp add             # 登记 MCP 服务器，sync 时翻译成各 Agent �
         └────────────────────────────┘
 ```
 
-每个投影文件中，AgentForge 只管理 marker 区间：
+规则文件之外，同一次 `sync` 还落三类**整文件产物**（不用 marker，改名/摘名后由下一次 `sync` prune）：
+
+- **技能**：`skills/<name>/SKILL.md` 投影到四家各自的技能目录，`status` 会打出每家的调用前缀；
+- **MCP**：一份 `profile.mcp.servers` 翻译成 opencode / codex / claude / pi 的原生配置；
+- **命令薄壳**：`skills.expose_as_command` 点名的技能额外落一份命令/prompt，支持 `ns/name` 命名空间与 `$1..$9` 位置参数（见 [技能](docs/skills.md#额外投影成命令expose_as_command)）。
+
+每个投影的**规则文件**中，AgentForge 只管理 marker 区间：
 
 ```markdown
 <!-- BEGIN AGENTFORGE -->
@@ -94,7 +100,7 @@ aforge mcp add             # 登记 MCP 服务器，sync 时翻译成各 Agent �
 
 - [命令速查与约定](docs/commands.md)——14 个命令、`--json` 契约、环境变量、退出码
 - [安装与构建](docs/install.md)——三种装法、双轨构建、开发命令
-- [技能](docs/skills.md)——登记来源、安装、投影落点与调用前缀
+- [技能](docs/skills.md)——登记来源、安装、投影落点与调用前缀，以及 `expose_as_command` 命令薄壳（命名空间、`$1..$9`）
 - [MCP](docs/mcp.md)——一份声明翻译成四家的原生配置
 - [learning](docs/learning.md)——`learn` / `promote` 闭环与 `auto_capture`
 - [迁移 SoT](docs/bundle.md)——`bundle export/import` 换机器、备份
@@ -103,4 +109,4 @@ aforge mcp add             # 登记 MCP 服务器，sync 时翻译成各 Agent �
 
 ---
 
-*AgentForge v0.1.0 — MVP。*
+*版本以 git tag 为唯一来源（`v*` tag → npm 包版本 + Release 资产），本机版本用 `aforge --version` 查。*

@@ -8,7 +8,7 @@
 | 状态 | 会议审核修订 |
 | 平台优先级 | **Windows 一等公民** |
 | 配套文档 | `AgentForge-PRD.md` |
-| 最后更新 | 2026-08-21 |
+| 最后更新 | 2026-08-30 |
 
 ---
 
@@ -902,7 +902,7 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 | 阶段 | 范围 |
 |------|------|
 | Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、`learning.auto_capture: prompt`（§7.4）、Commands 投影（§8.8）、Windows 门禁 |
-| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板；Commands 的命名空间与 `$1..$9` 归一化（§8.8.2）已落地 |
+| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板；其中 Commands 的命名空间与 `$1..$9` 归一化（§8.8.2）已提前落地 |
 | Phase 3 | Learning 启发式、`auto_capture: hook`（含 opencode plugin / pi extension 适配）、适配器插件化、WSL 说明 |
 
 ---
