@@ -21,7 +21,12 @@ import {
   resolveAutoCapture,
 } from '../learning/auto-capture';
 import type { OsContext } from '../paths';
-import { CODEX_PROJECT_COMMANDS_SKIP_REASON } from '../project/commands';
+import {
+  CODEX_PROJECT_COMMANDS_SKIP_REASON,
+  commandCanonicalName,
+  flattenCommandName,
+  parseCommandEntry,
+} from '../project/commands';
 import { readSyncMeta, SYNC_META_FILE } from '../project/sync-meta';
 import { renderRulesMd } from '../project/sync-prepare';
 import type { DoctorRoots } from './check-config';
@@ -245,7 +250,23 @@ export function checkCommandsExposure(results: DoctorCheckResult[], config: Effe
   }
 
   const always = config.profile.skills.always ?? [];
-  const missing = exposed.filter((name) => !always.includes(name));
+  let parsed: { namespace: string[]; name: string }[];
+  try {
+    parsed = exposed.map((entry) => parseCommandEntry(entry));
+  } catch (err) {
+    // 条目形态非法（空段 / .. / 非法字符）：sync 会以退出码 2 失败，doctor 先把原因说清
+    results.push({
+      section: 'config',
+      level: 'error',
+      code: ExitCode.Config,
+      item: 'skills-expose-as-command',
+      detail: `${err instanceof Error ? err.message : String(err)}（sync 将以退出码 2 失败）`,
+      hint: '写法为 <技能名> 或 <命名空间>/<技能名>（可多级）',
+    });
+    return;
+  }
+
+  const missing = parsed.map((item) => item.name).filter((name) => !always.includes(name));
   if (missing.length > 0) {
     results.push({
       section: 'config',
@@ -253,7 +274,7 @@ export function checkCommandsExposure(results: DoctorCheckResult[], config: Effe
       code: ExitCode.Config,
       item: 'skills-expose-as-command',
       detail: `expose_as_command 点名的 skill 不在 skills.always 中: ${missing.join(', ')}（sync 将以退出码 2 失败）`,
-      hint: '把这些名字加进 skills.always（或用 aforge skill add 安装），或从 expose_as_command 中移除',
+      hint: '把这些名字加进 skills.always（或用 aforge skill add 安装），或从 expose_as_command 中移除；命名空间前缀不参与该匹配',
     });
   } else {
     results.push({
@@ -261,6 +282,24 @@ export function checkCommandsExposure(results: DoctorCheckResult[], config: Effe
       level: 'ok',
       item: 'skills-expose-as-command',
       detail: `${exposed.join(', ')}（额外投影为命令/prompt 薄壳）`,
+    });
+  }
+
+  // §8.8.2：pi / codex 的命令目录平铺，命名空间只能拼进文件名——名字与 claude /
+  // opencode 侧不同，不提醒的话用户在 pi 里按 /ns/name 找不到命令
+  const namespaced = parsed.filter((item) => item.namespace.length > 0);
+  const flatTargets = config.profile.targets.filter(
+    (target) => target === 'pi' || target === 'codex',
+  );
+  if (namespaced.length > 0 && flatTargets.length > 0) {
+    results.push({
+      section: 'config',
+      level: 'warn',
+      item: 'commands/namespace-flattened',
+      detail: `${flatTargets.join(' / ')} 的命令目录平铺，带命名空间的命令会改名: ${namespaced
+        .map((item) => `${commandCanonicalName(item)} → ${flattenCommandName(item)}`)
+        .join('、')}`,
+      hint: 'claude / opencode 侧仍按命名空间调用（/ns:name、/ns/name）；平铺 target 用拼接后的名字调用',
     });
   }
 

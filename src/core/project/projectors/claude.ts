@@ -25,6 +25,7 @@ import type { McpServer } from '../../../schema';
 import { pathApiFor } from '../../paths';
 import { renderCommandShell } from '../commands';
 import {
+  type CommandArtifact,
   mainRuleAction,
   type ProjectContext,
   type ProjectionPlan,
@@ -74,15 +75,16 @@ export function claudeMcpPath(ctx: ProjectContext): string {
 /**
  * 单个命令薄壳的目标路径（§8.8 / §8.5 Commands 行）。
  *
- * 两个 scope 同构：project = `<root>\.claude\commands\<name>.md`；
- * user = `%USERPROFILE%\.claude\commands\<name>.md`（rootDir 分别为项目根 / 用户目录）。
+ * 两个 scope 同构：project = `<root>\.claude\commands\<ns...>\<name>.md`；
+ * user = `%USERPROFILE%\.claude\commands\<ns...>\<name>.md`（rootDir 分别为项目根 /
+ * 用户目录）。命名空间落成子目录——claude 的 `/ns:name` 调用语法由目录层级派生（§8.8.2）。
  */
-export function claudeCommandPath(ctx: ProjectContext, commandName: string): string {
+export function claudeCommandPath(ctx: ProjectContext, command: CommandArtifact): string {
   const api = pathApiFor(ctx.os);
   return commandFilePath(
     api,
     api.join(ctx.rootDir, CLAUDE_DIRNAME, CLAUDE_COMMANDS_DIRNAME),
-    commandName,
+    command,
   );
 }
 
@@ -131,7 +133,7 @@ export const claudeProjector: Projector = {
     // 走 §7.6 artifacts 记账 + prune（不用 marker）
     for (const command of ctx.commandsToExpose) {
       items.push({
-        path: claudeCommandPath(ctx, command.name),
+        path: claudeCommandPath(ctx, command),
         action: 'write',
         content: renderCommandShell(command),
       });

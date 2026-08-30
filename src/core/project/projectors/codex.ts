@@ -22,6 +22,7 @@ import type { McpServer } from '../../../schema';
 import { pathApiFor } from '../../paths';
 import { renderCommandShell } from '../commands';
 import {
+  type CommandArtifact,
   mainRuleAction,
   type ProjectContext,
   type ProjectionPlan,
@@ -29,7 +30,7 @@ import {
   type Projector,
   shouldWriteAgentsMd,
 } from '../types';
-import { commandFilePath, SKILLS_DIRNAME, skillDocPath } from './shared';
+import { flatCommandFilePath, SKILLS_DIRNAME, skillDocPath } from './shared';
 
 /** Spec §2.3 / §8.4 主规则文件名（project / user 两个 scope 同名）。 */
 export const CODEX_MAIN_RULE_FILENAME = 'AGENTS.md';
@@ -200,9 +201,10 @@ export function codexSkillPath(ctx: ProjectContext, skillName: string): string {
  * 调用方须自行保证 `ctx.scope === 'user'`；project scope 下调用只会得到一个
  * 不生效的路径（保留可计算性，便于 doctor 在提示里说明「本该落在哪」）。
  */
-export function codexCommandPath(ctx: ProjectContext, commandName: string): string {
+export function codexCommandPath(ctx: ProjectContext, command: CommandArtifact): string {
   const api = pathApiFor(ctx.os);
-  return commandFilePath(api, api.join(codexUserDir(ctx), CODEX_PROMPTS_DIRNAME), commandName);
+  // prompts\ 是平铺目录（codex 无命名空间概念），命名空间拼进文件名（§8.8.2 降级）
+  return flatCommandFilePath(api, api.join(codexUserDir(ctx), CODEX_PROMPTS_DIRNAME), command);
 }
 
 /** MCP 配置绝对路径（project 级 `<root>\.codex\config.toml`；user 级全局 config.toml）。 */
@@ -251,7 +253,7 @@ export const codexProjector: Projector = {
     if (ctx.scope === 'user') {
       for (const command of ctx.commandsToExpose) {
         items.push({
-          path: codexCommandPath(ctx, command.name),
+          path: codexCommandPath(ctx, command),
           action: 'write',
           content: renderCommandShell(command),
         });

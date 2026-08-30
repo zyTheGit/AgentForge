@@ -262,7 +262,7 @@ skills:
   always: [string]
   on_demand: [string]
   copy_mode: copy | symlink              # Windows 默认 copy
-  expose_as_command: [string]            # 额外投影成命令/prompt 的技能名（§8.8，缺省空）
+  expose_as_command: [string]            # 额外投影成命令/prompt 的技能名，可带 `ns/` 前缀（§8.8，缺省空）
 merge:
   strategy: overlay | replace
   arrays: append | replace
@@ -321,7 +321,7 @@ extensions: object
 
 **`skills.always` 的维护方：** 除手写外，`aforge skill add` 会把装入的技能名自动登记进**同一层** `profile.yaml` 的 `skills.always`（幂等，`--no-register` 关闭，见 §7.6）；`aforge skill remove <name>` 是其逆操作，只把名字从**同一层**的 `skills.always` 摘掉（profile-only：`skills\<name>\` 目录与已投影产物都不动，见 §7.6）。两者的回写都会重排整份 `profile.yaml` 的格式并丢弃注释（§7.6"写 `profile.yaml` 的副作用"）。
 
-**`skills.expose_as_command`（缺省空数组）：** 列出的技能名在 skill 投影之外**额外**投影一份命令/prompt 薄壳（落点与语义见 §8.8）。名单是 `skills.always` 的子集——点了名却不在 `skills.always` 里 → `sync` 报退出码 2（与"`skills.always` 点名却没装"同一口径）。默认空的理由见 §8.8：四个 target 都已把技能本身暴露成用户可调用入口，这份薄壳只为"强制调用"与"位置参数"两个额外能力存在。
+**`skills.expose_as_command`（缺省空数组）：** 列出的技能名在 skill 投影之外**额外**投影一份命令/prompt 薄壳（落点与语义见 §8.8）。条目可写 `<命名空间>/<技能名>`（§8.8.2），**最后一段**是技能名——它必须在 `skills.always` 里，点了名却不在 `skills.always` 里 → `sync` 报退出码 2（与"`skills.always` 点名却没装"同一口径）。默认空的理由见 §8.8：四个 target 都已把技能本身暴露成用户可调用入口，这份薄壳只为"强制调用"与"位置参数"两个额外能力存在。
 
 **`learning.auto_capture`（缺省 `off`）：** 控制"由谁触发 `aforge learn`"，三档语义见 §7.4。`off` 时行为与现状完全一致（只有人工敲命令）。该项与 `auto_promote` 正交：`auto_capture` 决定条目怎么产生，`auto_promote` 决定条目产生后是否顺手 promote，两者都为真时仍不投影（§7.4）。
 
@@ -791,21 +791,21 @@ interface Projector {
 **这一层解决的是另外两件事**，需要时才通过 `skills.expose_as_command`（§4.2）开启：
 
 1. **强制调用**：命令/prompt 是确定性的文本展开，不经模型裁量；技能触发依赖 description 匹配；
-2. **位置参数**：技能正文只有 `$ARGUMENTS` 一档（claude 实测支持，其余三家不保证），命令层可用 `$1..$N`。
+2. **位置参数**：技能正文只有 `$ARGUMENTS` 一档（claude 实测支持，其余三家不保证），命令层可用 `$1..$9`（§8.8.2）。
 
 #### 8.8.1 产物形态
 
 薄壳 Markdown，一名一文件，正文只做"加载技能 X，按其工作流执行，用户输入见 `$ARGUMENTS`"，不复制技能正文（避免两份内容漂移）。落点见 §2.3 与 §8.3–8.6 各表的 Commands 行。
 
-SoT 侧不新增目录：内容由 `skills\<name>\SKILL.md` 的 frontmatter 派生（`description` 直接透传，`argument-hint` 有则透传）。
+SoT 侧不新增目录：内容由 `skills\<name>\SKILL.md` 的 frontmatter 派生（`description` 直接透传，`argument-hint` 有则透传）。frontmatter 另给 `command-body` 时，该字段整段替换薄壳正文（用于位置参数，见 §8.8.2），且 `command-body` 本身不写进产物 frontmatter。
 
 #### 8.8.2 跨 target 归一化
 
 | 维度 | 归一化口径 |
 |------|------------|
-| 占位符 | SoT 只允许 `$ARGUMENTS` 与 `$1..$9`（四家交集）；`${N:-默认值}` 等 pi 专有语法不进 SoT |
+| 占位符 | SoT 只允许 `$ARGUMENTS` 与 `$1..$9`（四家交集）；`${N:-默认值}` 等 pi 专有语法不进 SoT——出现即 `sync` 退出码 2。默认薄壳正文只用 `$ARGUMENTS`；要用位置参数就在 `SKILL.md` frontmatter 写 `command-body`，该字段整段作为命令正文透传（本身不进薄壳 frontmatter） |
 | frontmatter | 只写 `description` 与 `argument-hint`；opencode 的 `agent` / `model` / `subtask`、claude 的 `allowed-tools` 由各 projector 按需补 |
-| 命名空间 | opencode `/`、claude `:`、pi 无（不投影带命名空间的名字）、codex 不适用。MVP **只投影平铺名**，不产生子目录 |
+| 命名空间 | 在 `expose_as_command` 里写 `<命名空间>/<技能名>`（可多级，最后一段必须是 `skills.always` 里的技能名）。claude / opencode 落成**子目录**（调用语法分别为 `/ns:name`、`/ns/name`）；pi / codex 目录平铺，降级为 `ns-name.md`（用 `-` 而非 `:`——`:` 在 Windows 文件名里非法），`doctor` 报 `commands/namespace-flattened` warn 说明改名后的形态。段内不得为空、不得是 `.` / `..` 或含 `\ : * ? " < > |`；扁平化后撞车（`a/x` 与 `a-x` 并存）→ 退出码 2 |
 | 命令名 | 取技能目录名。中文名四家实测均可用；但 GBK 代码页下终端输入困难，建议 SoT 侧用 ASCII 名，中文别名由用户自行追加（AgentForge 不自动生成别名文件） |
 
 #### 8.8.3 记账与清理
@@ -843,7 +843,7 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 - 检测 `skills/` 下断开的 symlink（MVP 投影恒为实体 copy，此类 symlink 来自手工创建或历史遗留 → warn）。
 - `profile.skills.copy_mode` 声明 `symlink` 时告警（已声明未实现，见 §4.2 / §12 Phase 2 → warn）。
 - 报告未解析的 template id、损坏的 YAML。
-- `skills.expose_as_command` 里的名字不在 `skills.always` 中 → 与"点名未装"同口径报错（§4.2）；project scope 且 target 含 codex 时报 `commands/codex-project-unsupported` warning（§8.8.4 → warn）。
+- `skills.expose_as_command` 里的名字（条目最后一段）不在 `skills.always` 中 → 与"点名未装"同口径报错（§4.2）；条目本身非法（空段、`.` / `..`、含 `\ : * ? " < > |`）→ 同样退出码 2；project scope 且 target 含 codex 时报 `commands/codex-project-unsupported` warning（§8.8.4 → warn）；带命名空间的条目遇到目录平铺的 target（pi / codex）时报 `commands/namespace-flattened` warning，列出 `ns/name → ns-name` 的改名结果（§8.8.2 → warn）。
 - `learning.auto_capture`（§7.4）报一条 `learning-auto-capture`：声明 `hook` → warn（**MVP 未实现任何 target 侧钩子写入**，行为等同 `off`；等 hook 落地后再按 target 细分成 `learning/hook-unsupported`）；`prompt` → `ok` 并说明投影正文含 `## Learning Protocol` 段；`CI` 为真 → 仍报 `ok`，附一句"本次运行不会写入任何 learnings"（护栏 3 只约束**写入**，不改变生效档位与渲染正文——否则同一份 SoT 在 CI 与本机的 `contentHash` 不同，跨环境 hash 比对全部失真）。
 
 ---
@@ -901,8 +901,8 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 
 | 阶段 | 范围 |
 |------|------|
-| Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、`learning.auto_capture: prompt`（§7.4）、Commands 投影（§8.8，平铺名）、Windows 门禁 |
-| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板、Commands 的命名空间与 `$1..$N` 归一化（§8.8.2） |
+| Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、`learning.auto_capture: prompt`（§7.4）、Commands 投影（§8.8）、Windows 门禁 |
+| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板；Commands 的命名空间与 `$1..$9` 归一化（§8.8.2）已落地 |
 | Phase 3 | Learning 启发式、`auto_capture: hook`（含 opencode plugin / pi extension 适配）、适配器插件化、WSL 说明 |
 
 ---

@@ -70,10 +70,20 @@ export interface SkillArtifact {
  * `description` / `argumentHint` 缺省即代表技能 frontmatter 里没有该键——不造默认值。
  */
 export interface CommandArtifact {
-  /** 命令名 = 技能目录名（§8.8.2：MVP 只投影平铺名，不产生子目录）。 */
+  /** 命令名（leaf）= 技能目录名（§8.8.2：expose 条目最后一段即技能名）。 */
   readonly name: string;
+  /**
+   * 命名空间段（§8.8.2）：`expose_as_command` 写 `review/code-review` 时的前缀部分，
+   * 平铺名为空数组。claude / opencode 落成子目录；pi / codex 目录扁平 → 拼接降级。
+   */
+  readonly namespace: readonly string[];
   readonly description?: string;
   readonly argumentHint?: string;
+  /**
+   * SoT 自定义命令正文（`SKILL.md` frontmatter 的 `command-body`，§8.8.2）。
+   * 缺省时用内置薄壳模板；给出时占位符已校验落在 `$ARGUMENTS` / `$1..$9` 交集内。
+   */
+  readonly body?: string;
 }
 
 /** Spec §8.1 ProjectContext：projector 计算投影计划所需的全部输入。 */
