@@ -7,7 +7,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   effectiveAutoCapture,
+  LEARNING_PROTOCOL_HEADING,
   LEARNING_PROTOCOL_SECTION,
+  rendersLearningProtocol,
   resolveAutoCapture,
 } from '../../../src/core/learning/auto-capture';
 import type { AutoCapture } from '../../../src/schema';
@@ -63,9 +65,22 @@ describe('resolveAutoCapture — 展示层状态（§7.4）', () => {
   });
 });
 
-describe('LEARNING_PROTOCOL_SECTION — 固定正文（§5.2 / §7.4 四条护栏）', () => {
-  it('以 ## Learning Protocol 起头，含可复制的 aforge learn 命令行', () => {
-    expect(LEARNING_PROTOCOL_SECTION.startsWith('## Learning Protocol')).toBe(true);
+describe('rendersLearningProtocol — 渲染判据（三处共用，§5.2）', () => {
+  it('prompt → true；off / hook 归并后 → false', () => {
+    expect(rendersLearningProtocol('prompt')).toBe(true);
+    expect(rendersLearningProtocol('off')).toBe(false);
+    // hook 先经 effectiveAutoCapture 归并为 off，渲染层不会直接拿到 hook
+    expect(rendersLearningProtocol(effectiveAutoCapture(profileWith('hook')))).toBe(false);
+  });
+});
+
+describe('LEARNING_PROTOCOL_SECTION — 固定正文（§5.2 / §7.4 五条护栏）', () => {
+  it('以标题常量起头（三处共用同一字面量）', () => {
+    expect(LEARNING_PROTOCOL_SECTION.startsWith(LEARNING_PROTOCOL_HEADING)).toBe(true);
+    expect(LEARNING_PROTOCOL_HEADING).toBe('## Learning Protocol');
+  });
+
+  it('含可复制的 aforge learn 命令行', () => {
     expect(LEARNING_PROTOCOL_SECTION).toContain('aforge learn --file -');
   });
 
@@ -76,6 +91,10 @@ describe('LEARNING_PROTOCOL_SECTION — 固定正文（§5.2 / §7.4 四条护�
 
   it('不指示 agent 自行 sync（护栏 1：进投影恒由人工）', () => {
     expect(LEARNING_PROTOCOL_SECTION).toContain('do not run it yourself');
+  });
+
+  it('明说被拒时不要重试（CI 下写入必被守卫拒掉，护栏 3）', () => {
+    expect(LEARNING_PROTOCOL_SECTION).toContain('do not retry');
   });
 
   it('纯 ASCII（Windows GBK 控制台与四家 target 均安全）', () => {

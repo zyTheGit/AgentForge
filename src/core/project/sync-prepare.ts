@@ -177,12 +177,12 @@ function renderLearningBody(learning: Learning): string {
  * 渲染路径计算当前 SoT contentHash，与 sync-meta 记录 / 投影区间比对（单一事实源，
  * 避免两处漂移）。
  *
- * @param os 宿主平台（`projection.path_style: auto` 的判据，§4.2）；缺省取当前进程
- *   平台——早期调用点（5 参形态）不必改签名即可保持生产语义正确。
- *
  * 刻意**不吃 EnvSnapshot**：正文必须与环境无关，否则同一份 SoT 在 CI 与本地会渲染出
  * 不同的 marker 区间（contentHash 不同），跨环境的 hash 比对全部失真。
  * `learning.auto_capture` 因此只经 effectiveAutoCapture（与 CI 无关，§7.4）。
+ *
+ * @param os 宿主平台（`projection.path_style: auto` 的判据，§4.2）；缺省取当前进程
+ *   平台——早期调用点（5 参形态）不必改签名即可保持生产语义正确。
  */
 export async function renderRulesMd(
   host: Host,

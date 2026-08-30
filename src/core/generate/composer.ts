@@ -22,7 +22,7 @@
 import { BASE_DEFAULT_TEMPLATE, BASE_DEFAULT_TEMPLATE_ID } from '../../assets/templates';
 import type { AutoCapture, Habits, PathStyle, Profile } from '../../schema';
 import { ConfigError } from '../errors';
-import { LEARNING_PROTOCOL_SECTION } from '../learning/auto-capture';
+import { LEARNING_PROTOCOL_SECTION, rendersLearningProtocol } from '../learning/auto-capture';
 import type { OsContext } from '../paths';
 import { renderTemplate, validateTemplate } from './renderer';
 
@@ -300,7 +300,7 @@ export async function composeRules(input: ComposeInput): Promise<string> {
 
   // ①' Learning Protocol（§5.2 / §7.4 prompt 档）：位置固定在第 ② 层之前，内容
   // 不受 SoT 影响。随 marker 区间整体替换 → 不产生独立产物、不进 §3.3 记账。
-  if (input.autoCapture === 'prompt') {
+  if (input.autoCapture !== undefined && rendersLearningProtocol(input.autoCapture)) {
     sections.push(LEARNING_PROTOCOL_SECTION);
   }
 

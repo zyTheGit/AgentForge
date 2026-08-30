@@ -35,8 +35,9 @@ export interface AutoCaptureState {
  * - `hook` → `off`：schema 收该值（避免既有 profile 加载失败），但 MVP 没有任何
  *   target 侧钩子写入，语义上等同 off。与 `copy_mode: symlink` 同一处理口径：
  *   照旧接受，由 doctor 明说"声明了但当前不生效"。
- * - **CI 不参与判定**：护栏 3「CI 降级为 off」约束的是*写入*路径（`aforge learn`
- *   在 CI 下被 store 守卫拒掉），不是渲染路径。若让 CI 也削掉这一段正文，同一份
+ * - **CI 不参与判定**：护栏 3「CI 为真时任何档位都不得产生 `learnings/` 写入」约束的是
+ *   *写入*路径（`aforge learn` 在 CI 下被 store 守卫拒掉，ConfigError(2)），不是渲染路径。
+ *   若让 CI 也削掉这一段正文，同一份
  *   SoT 在 CI 与本地就会渲染出不同的 marker 区间 → contentHash 不同 → 任何跨环境
  *   的 hash 比对（CI 里 `aforge doctor` 对着本机 sync 出的产物）都会误报漂移。
  *   投影产物因此保持环境无关；"CI 里不会真的采集"由 status / doctor 如实说明。
@@ -66,18 +67,40 @@ export function resolveAutoCapture(
 }
 
 /**
+ * `## Learning Protocol` 段的标题行。
+ *
+ * 单独导出是因为三处都要提到它：composer 渲染正文、`aforge status` 与 `aforge doctor`
+ * 各自向用户说明"投影正文里会多这一段"。三处手抄同一字面量时，改标题只会让后两处
+ * 静默变成假话（测试断言的是各自的措辞，不会失败）。
+ */
+export const LEARNING_PROTOCOL_HEADING = '## Learning Protocol';
+
+/**
+ * 该有效档位是否会让投影正文包含 `## Learning Protocol` 段（Spec §5.2）。
+ *
+ * composer 用它做渲染判据，status / doctor 用它决定是否向用户声明该段存在——
+ * 三处共用同一函数，渲染条件将来若扩大（例如 hook 落地后也渲染），说明文案不会
+ * 落后于实际行为。
+ */
+export function rendersLearningProtocol(effective: AutoCapture): boolean {
+  return effective === 'prompt';
+}
+
+/**
  * `## Learning Protocol` 段正文（Spec §5.2 / §7.4 `prompt` 档）。
  *
  * 固定内容、不受 SoT 影响：它是给 agent 的协议说明，不是用户沉淀。含触发条件
  * 与可直接复制的命令行；随 marker 区间整体替换，因此不产生独立产物、不进 §3.3 记账。
  *
- * 四条内容约束（对应 §7.4 的护栏）：
+ * 五条内容约束（对应 §7.4 的护栏）：
  * - 只让 agent 写 SoT（`aforge learn`），**不提** `aforge sync`——进投影恒由人工触发；
  * - 明说不要塞会话原文（凭据泄漏面 + 条目体积，护栏 4）；
  * - 不承诺晋升（`promote` 由人工或 auto_promote 决定，护栏 2）；
+ * - 明说命令被拒时不要重试：CI 下 store 守卫会拒掉写入（ConfigError(2)，护栏 3），
+ *   而正文与环境无关、照样渲染，不加这一句 agent 可能对着注定失败的命令反复重试；
  * - 纯 ASCII 命令行，Windows 终端可直接粘。
  */
-export const LEARNING_PROTOCOL_SECTION = `## Learning Protocol
+export const LEARNING_PROTOCOL_SECTION = `${LEARNING_PROTOCOL_HEADING}
 
 When you and the user establish a durable convention during this session - a tool
 choice, a project-specific gotcha, a workflow that must be repeated - record it so
@@ -94,4 +117,5 @@ Rules for what you write:
 - Structured summary only: one convention per entry, phrased as an instruction.
 - Never paste raw session transcripts, tool output, secrets or tokens.
 - Recording does not activate the rule. Projection stays a human step
-  (\`aforge sync\`), so do not run it yourself.`;
+  (\`aforge sync\`), so do not run it yourself.
+- If the command is refused (CI environment), do not retry it.`;

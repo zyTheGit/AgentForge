@@ -557,7 +557,7 @@ mcp: []
 `hook` 档的落点与限制：
 
 - claude → `settings.json` 的 `hooks`（`SessionEnd` / `Stop`）；codex → `config.toml` 的钩子段（上游事件含 `SessionStart` / `SessionEnd` / `UserPromptSubmit` / `SubagentStart` / `SubagentStop` / `Stop`）。这两家可落地；
-- opencode 需 plugin、pi 需 extension，两者都要求在 target 侧先装扩展，MVP 内按 **soft** 处理（不写、只在 `aforge status` 标注 "hook not supported - install adapter"），与 §8.6 pi MCP 的 soft 口径一致；
+- opencode 需 plugin、pi 需 extension，两者都要求在 target 侧先装扩展；**MVP 未实现任何 target 侧钩子写入**，声明 `hook` 时由 doctor 的 `learning-auto-capture` 统一报一条 warn（§9），`status` 只打「hook 未实现、行为等同 off」，不做 per-target 标注。hook 真正落地后再按 target 细分 soft 处理（不写、在 `aforge status` 标注 "hook not supported - install adapter"，与 §8.6 pi MCP 的 soft 口径一致）；
 - **claude 的 `settings.json` 可能存有明文凭据**（`env.ANTHROPIC_AUTH_TOKEN` 等）。写入必须走 §8.2 的 `merge_json`（未知键一律保留），且失败信息与 `--json` 输出**不得回显文件内容**，只报路径与键名。
 
 四条护栏（三档共用）：
@@ -852,7 +852,7 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 - MVP 模板仅为 Markdown，不执行模板内脚本。
 - Skill 中含可执行文件时文档警告；投影只 copy，不自动执行。
 - git URL 支持 https/ssh；默认不跟踪浮动 `main`（要求 ref/pin）。
-- 不在 CI 中写入 learnings（`learning.auto_capture` 三档在 `CI` 为真时一律降级为 `off`，§7.4）。
+- 不在 CI 中写入 learnings：`CI` 为真时任何 `learning.auto_capture` 取值都不产生 `learnings/` 写入（由唯一写入口的守卫强制，显式 `aforge learn` 在 CI 下被拒并退出码 2），**但不改变生效档位与渲染正文**（§7.4 护栏 3）。
 - `learning.auto_capture: hook` 写 target 侧钩子配置时，claude 的 `settings.json` 可能存有明文凭据：必须走 §8.2 的 `merge_json`（未知键一律保留），错误信息与 `--json` 输出只报路径与键名，**不回显文件内容**。
 - Commands 薄壳（§8.8）与技能一样只投影文本，不含可执行内容；`skills.expose_as_command` 不改变"投影只 copy、不自动执行"的口径。
 - 并发安全：非 dry-run 的 `sync` 在 SoT 根取进程级排他锁 `<sotRoot>\.sync.lock\`（**目录**，用非递归 `mkdir` 原子创建——Windows 与 POSIX 均原子，`EEXIST` 即败者，直接失败退出而不等待）。锁目录内 `meta.json` 记录持有者来源（pid / 机器 / 用户）与心跳时刻；心跳每 30 秒刷新，仅当心跳停摆超过 5 分钟**且**持有者进程已不存活时才判定陈旧并允许抢占（只看时间会误杀慢 sync）。投影产物落在 SoT 之外（user scope 投影、`CODEX_HOME` 覆盖）时额外取用户级 SoT 根的锁，按路径序加锁防死锁。`aforge source add` 等其他写命令暂未纳入锁保护。
@@ -900,8 +900,8 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 
 | 阶段 | 范围 |
 |------|------|
-| Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、Windows 门禁 |
-| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板、Commands 投影（§8.8）、`learning.auto_capture: prompt`（§7.4） |
+| Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、`learning.auto_capture: prompt`（§7.4）、Windows 门禁 |
+| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板、Commands 投影（§8.8） |
 | Phase 3 | Learning 启发式、`auto_capture: hook`（含 opencode plugin / pi extension 适配）、适配器插件化、WSL 说明 |
 
 ---

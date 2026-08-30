@@ -13,6 +13,8 @@
  *   与渲染素材口径一致：project 覆盖 user）；
  * - profile.skills 的 always / on_demand 清单——on_demand 在 MVP 中**只登记不物化**
  *   （Spec §4.2 注记），在此如实标注，避免该字段静默无效；
+ * - profile.learning.auto_capture 的声明值与生效值（§7.4）：`hook` 未实现时标出原因，
+ *   `prompt` 时说明投影正文含 `## Learning Protocol` 段，CI 下补一句"本次不会写入"；
  * - --json 输出机器可读 JSON（路径一律绝对路径）。
  *
  * 只读命令：不做渲染（profile.templates 未解析不影响路径展示，环境探测
@@ -24,13 +26,19 @@ import { resolveEffectiveConfig } from '../core/config/defaults';
 import { HABITS_FILE, PROFILE_FILE } from '../core/config/load';
 import { readEnv, type Scope } from '../core/env';
 import { ConfigError } from '../core/errors';
-import { type AutoCaptureState, resolveAutoCapture } from '../core/learning/auto-capture';
+import {
+  type AutoCaptureState,
+  LEARNING_PROTOCOL_HEADING,
+  rendersLearningProtocol,
+  resolveAutoCapture,
+} from '../core/learning/auto-capture';
 import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
 import { projectorRegistry } from '../core/project/projectors/registry';
 import { readSyncMeta } from '../core/project/sync-meta';
-import type { ProjectContext } from '../core/project/types';
+import type { ProjectContext, SkillInvokePrefix } from '../core/project/types';
 import { listDirSafe } from '../infra/fsutil';
 import type { FileStat, Host } from '../infra/host';
+import type { AutoCapture } from '../schema';
 import { type CommandContext, defaultCommandContext, printJson, renderList } from './context';
 import { resolveJsonFlag } from './flags';
 
@@ -42,10 +50,12 @@ export interface StatusTargetInfo {
   readonly targetId: string;
   readonly paths: readonly string[];
   /**
-   * 该 target 里调用已装技能的前缀（§6.1 要求 status 打印；§8.8 实测表）：
-   * codex 为 `$`，opencode / claude / pi 为 `/`。
+   * 该 target 里调用已装技能的前缀（§6.1 要求 status 打印；§8.8 实测表）。
+   *
+   * 取值域复用 Projector 契约的 SkillInvokePrefix，不宽化成 string——`--json` 的对外
+   * 类型契约与 core 侧保持同一精度，映射表也只有 projector 一处事实源。
    */
-  readonly skillInvokePrefix: string;
+  readonly skillInvokePrefix: SkillInvokePrefix;
 }
 
 /** custom / learnings / templates 计数（两层合并去重）。 */
@@ -87,8 +97,8 @@ export interface StatusResult {
    * 与投影正文不变**（否则 contentHash 跨环境不稳定）。
    */
   readonly autoCapture: Readonly<{
-    declared: string;
-    effective: string;
+    declared: AutoCapture;
+    effective: AutoCapture;
     reason: string | null;
     ciNote: string | null;
   }>;
@@ -279,7 +289,7 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
   };
 }
 
-/** auto_capture 声明值与生效值不同的原因（相同 → null）。 */
+/** 声明了 MVP 未实现的档位时给出原因（否则 null）。 */
 function describeAutoCaptureReason(state: AutoCaptureState): string | null {
   return state.unimplemented ? 'hook is not implemented in MVP - behaves as off' : null;
 }
@@ -316,8 +326,9 @@ export function formatStatus(result: StatusResult): string {
 
   lines.push(`targets (${result.enabledTargets.length} enabled):`);
   for (const target of result.targets) {
-    // 技能调用前缀（§6.1 / §8.8）：codex 是 `$<name>`，其余三家是 `/<name>`。
-    // 不打这一行，用户在 codex 里敲 `/name` 不展开，会以为投影没生效。
+    // 前缀取自 projector.skillInvokePrefix（映射表的单一事实源在各 projector 里，
+    // 见 core/project/types.ts 的 Projector 契约）。不打这一行，用户在 codex 里敲
+    // `/name` 不展开，会以为投影没生效。
     lines.push(`  ${target.targetId} (invoke skills as ${target.skillInvokePrefix}<name>):`);
     for (const file of target.paths) {
       lines.push(`    ${file}`);
@@ -355,8 +366,8 @@ export function formatStatus(result: StatusResult): string {
   if (capture.reason !== null) {
     lines.push(`                ${capture.reason}`);
   }
-  if (capture.effective === 'prompt') {
-    lines.push('                projected rules include a ## Learning Protocol section');
+  if (rendersLearningProtocol(capture.effective)) {
+    lines.push(`                projected rules include a ${LEARNING_PROTOCOL_HEADING} section`);
   }
   if (capture.ciNote !== null) {
     lines.push(`                ${capture.ciNote}`);

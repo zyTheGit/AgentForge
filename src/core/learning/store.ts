@@ -102,7 +102,13 @@ export interface CreateLearningInput {
 export interface CreateLearningResult {
   readonly learning: Learning;
   readonly file: string;
-  /** 内容重复的既有未晋升条目 id（§7.5：仍创建，命令层输出 warning）。 */
+  /**
+   * 内容重复的既有未晋升条目 id（§7.5：仍创建，命令层输出 warning）。
+   *
+   * **best-effort**：判重与写入不在同一把锁内（createLearning 全程无 SoT 锁），
+   * 并发 learn 时可能双方都判为"不重复"。这是有意的取舍——重复只影响一条提示，
+   * 为它引入锁会让 `auto_capture: prompt` 下的会话内写入与人工 sync 争锁。
+   */
   readonly duplicateOf: string | undefined;
 }
 
