@@ -564,7 +564,7 @@ mcp: []
 
 1. **只写 SoT，绝不自动 sync**：非 dry-run 的 `sync` 要取 `.sync.lock`（§11），会话中途触发会与人工 `sync` 撞锁，且 marker 指纹校验可能直接判 3。`auto_capture` 的终点是 `learnings/` 落盘（`auto_promote` 为真时再多一步 promote），进投影恒由人工 `aforge sync`；
 2. **不隐含晋升**：`auto_capture` 不改变 `auto_promote` 的缺省 `false`；
-3. **CI 禁写**：沿用 §11「不在 CI 中写入 learnings」——`CI` 为真时三档一律降级为 `off`，且不算错误（静默跳过，`status` 里标注原因）；
+3. **CI 禁写**：沿用 §11「不在 CI 中写入 learnings」——`CI` 为真时任何档位都不得产生 `learnings/` 写入，且不算错误（静默跳过，`status` 里标注原因）。**约束对象是写入，不是渲染**：`prompt` 档的 `## Learning Protocol` 段在 CI 下照样渲染，否则同一份 SoT 在 CI 与本机会产出不同的 marker 区间（`contentHash` 不同），§9 的 hash 比对与 §3.3 记账都会跨环境失真；
 4. **不落原始会话记录**：抽取器只允许写结构化的 `content` / `trigger`，禁止把 transcript 原文塞进条目（凭据泄漏面 + 条目体积）。
 
 
@@ -843,7 +843,7 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 - `profile.skills.copy_mode` 声明 `symlink` 时告警（已声明未实现，见 §4.2 / §12 Phase 2 → warn）。
 - 报告未解析的 template id、损坏的 YAML。
 - `skills.expose_as_command` 里的名字不在 `skills.always` 中 → 与"点名未装"同口径报错（§4.2）；project scope 且 target 含 codex 时报 `commands/codex-project-unsupported` warning（§8.8.4 → warn）。
-- `learning.auto_capture`（§7.4）报一条 `learning-auto-capture`：声明 `hook` → warn（**MVP 未实现任何 target 侧钩子写入**，行为等同 `off`；等 hook 落地后再按 target 细分成 `learning/hook-unsupported`）；`CI` 为真 → 三档一律降级为 `off`，报 `ok` 并在报告里说明原因（非错误）；`prompt` → `ok` 并说明投影正文含 `## Learning Protocol` 段。
+- `learning.auto_capture`（§7.4）报一条 `learning-auto-capture`：声明 `hook` → warn（**MVP 未实现任何 target 侧钩子写入**，行为等同 `off`；等 hook 落地后再按 target 细分成 `learning/hook-unsupported`）；`prompt` → `ok` 并说明投影正文含 `## Learning Protocol` 段；`CI` 为真 → 仍报 `ok`，附一句"本次运行不会写入任何 learnings"（护栏 3 只约束**写入**，不改变生效档位与渲染正文——否则同一份 SoT 在 CI 与本机的 `contentHash` 不同，跨环境 hash 比对全部失真）。
 
 ---
 

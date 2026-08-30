@@ -82,13 +82,15 @@ export interface StatusResult {
   /**
    * profile.learning.auto_capture 的声明值与生效值（§7.4）。
    *
-   * 同样是"避免字段静默无效"：`hook` 档 MVP 未实现、CI 为真时三档一律降级为 off，
-   * 两种情况下 declared 与 effective 会不同，`reason` 说明为什么。
+   * 同样是"避免字段静默无效"：`hook` 档 MVP 未实现，declared 与 effective 会不同，
+   * `reason` 说明为什么。`ciNote` 另说一件事——CI 下 learnings 恒不落盘，但**生效档位
+   * 与投影正文不变**（否则 contentHash 跨环境不稳定）。
    */
   readonly autoCapture: Readonly<{
     declared: string;
     effective: string;
     reason: string | null;
+    ciNote: string | null;
   }>;
 }
 
@@ -272,19 +274,26 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
       declared: autoCapture.declared,
       effective: autoCapture.effective,
       reason: describeAutoCaptureReason(autoCapture),
+      ciNote: describeAutoCaptureCiNote(autoCapture),
     },
   };
 }
 
 /** auto_capture 声明值与生效值不同的原因（相同 → null）。 */
 function describeAutoCaptureReason(state: AutoCaptureState): string | null {
-  if (state.ciDowngraded) {
-    return 'CI detected - downgraded to off (learnings are never written in CI)';
-  }
-  if (state.unimplemented) {
-    return 'hook is not implemented in MVP - behaves as off';
-  }
-  return null;
+  return state.unimplemented ? 'hook is not implemented in MVP - behaves as off' : null;
+}
+
+/**
+ * 当前环境下会不会真的采集（非 CI → null）。
+ *
+ * 与 reason 分开：CI 只挡*写入*（§7.4 护栏 3），不改变生效档位与投影正文——
+ * 否则同一份 SoT 在 CI 与本地会渲染出不同的 contentHash。
+ */
+function describeAutoCaptureCiNote(state: AutoCaptureState): string | null {
+  return state.ciNoCapture
+    ? 'CI detected - no learnings will be written (projected rules are unchanged)'
+    : null;
 }
 
 /** SoT 根描述行：`<绝对路径> (initialized|not initialized)`。 */
@@ -338,7 +347,7 @@ export function formatStatus(result: StatusResult): string {
 
   lines.push('');
   lines.push('learning (profile.learning):');
-  // 声明值与生效值分开打：hook 未实现、CI 降级两种情况下二者不同，只打一个会骗人
+  // 声明值与生效值分开打：hook 未实现时二者不同，只打一个会骗人
   const capture = result.autoCapture;
   lines.push(
     `  auto_capture: ${capture.declared}${capture.declared === capture.effective ? '' : ` -> ${capture.effective}`}`,
@@ -348,6 +357,9 @@ export function formatStatus(result: StatusResult): string {
   }
   if (capture.effective === 'prompt') {
     lines.push('                projected rules include a ## Learning Protocol section');
+  }
+  if (capture.ciNote !== null) {
+    lines.push(`                ${capture.ciNote}`);
   }
 
   return lines.join('\n');

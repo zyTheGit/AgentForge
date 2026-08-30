@@ -56,9 +56,10 @@ export interface ComposeInput {
   /**
    * `learning.auto_capture` 的**有效**档位（§7.4；缺省 off）。
    *
-   * 契约：调用方先经 core/learning/auto-capture.resolveAutoCapture 完成 CI 降级与
+   * 契约：调用方先经 core/learning/auto-capture.effectiveAutoCapture 完成
    * "hook 未实现"的归并，composer 只按 `prompt` 决定是否插 `## Learning Protocol`
-   * 段（§5.2）。判定不落在这里，是为了让 status / doctor 与渲染层共用同一口径。
+   * 段（§5.2）。判定不落在这里，是为了让 status / doctor 与渲染层共用同一口径；
+   * 该口径**与环境无关**（CI 也照渲染），正文因此跨环境稳定。
    */
   readonly autoCapture?: AutoCapture;
 }

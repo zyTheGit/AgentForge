@@ -30,7 +30,8 @@
  *   路径 token 分隔符与家目录变量）；
  * - projection.gitignore_generated → core/project/engine 的 .gitignore 标记段写入；
  * - learning.default_scope → commands/learn 的默认落层；
- * - learning.auto_capture → core/learning/auto-capture.resolveAutoCapture（CI 降级）
+ * - learning.auto_capture → core/learning/auto-capture（effectiveAutoCapture 供渲染，
+ *   resolveAutoCapture 供 status / doctor 展示）
  *   → `prompt` 档由 core/generate/composer 插入 `## Learning Protocol` 段
  *   （§5.2 / §7.4）；`hook` 档 MVP 未实现，由 doctor 的 learning-auto-capture
  *   条目显式告警，不静默失效；

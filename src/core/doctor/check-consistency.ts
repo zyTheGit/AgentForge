@@ -25,15 +25,14 @@ import { type DoctorCheckResult, errHint, errMessage, toDoctorCode } from './che
 /**
  * 当前 SoT 渲染（hash 基准；与 sync 共用 sync-prepare.renderRulesMd）。失败 → error 并返回 undefined。
  *
- * @param env 环境快照：与 sync 取同一个 CI 值，`learning.auto_capture: prompt` 的
- *   降级判定才不会在两侧分叉（否则 doctor 会把"少一段 Learning Protocol"误报成漂移）。
+ * 不传 EnvSnapshot：渲染正文与环境无关（`learning.auto_capture` 只经
+ * effectiveAutoCapture），CI 与本地渲染同一份 SoT 得到同一个 contentHash。
  */
 export async function renderForDoctor(
   host: Host,
   results: DoctorCheckResult[],
   roots: DoctorRoots,
   config: EffectiveConfig,
-  env?: EnvSnapshot,
 ): Promise<string | undefined> {
   try {
     return await renderRulesMd(
@@ -42,8 +41,6 @@ export async function renderForDoctor(
       roots.projectSoTRoot,
       config.habits,
       config.profile,
-      undefined,
-      env,
     );
   } catch (err) {
     results.push({
@@ -158,10 +155,11 @@ export function checkSkillsCopyMode(results: DoctorCheckResult[], config: Effect
 /**
  * profile.learning.auto_capture：声明档位 vs 实际生效档位（Spec §7.4 / §9）。
  *
- * 两种"声明了但不生效"都必须说出来，口径同 skills-copy-mode：
+ * 两件"声明了但不完全生效"都必须说出来，口径同 skills-copy-mode：
  * - `hook`：MVP 没有任何 target 侧钩子写入（§12 Phase 3）→ warn，行为等同 off；
- * - `CI` 为真：三档一律降级为 off（§7.4 护栏 3 / §10）→ **不是错误**，报 ok 并说明
- *   原因（CI 里 learnings 本就禁写，降级是预期行为，不该污染 doctor 的告警面）。
+ * - `CI` 为真：learnings 恒不落盘（§7.4 护栏 3 / §10）→ **不是错误**，报 ok 并补一句
+ *   原因。注意这只影响*写入*，投影正文不变（`prompt` 档在 CI 下照样渲染
+ *   `## Learning Protocol` 段），这样 contentHash 才跨环境稳定。
  *
  * 恒不影响退出码：投影结果本身是自洽的，只是与声明不符。
  */
@@ -182,13 +180,15 @@ export function checkLearningAutoCapture(
     });
     return;
   }
+  const projected = state.effective === 'prompt' ? '（投影正文含 ## Learning Protocol 段）' : '';
+  const ciNote = state.ciNoCapture
+    ? '；CI 为真 → 本次运行不会写入任何 learnings（§7.4 护栏 3，投影正文不受影响）'
+    : '';
   results.push({
     section: 'config',
     level: 'ok',
     item: 'learning-auto-capture',
-    detail: state.ciDowngraded
-      ? `profile.learning.auto_capture: ${state.declared}（CI 为真 → 降级为 off，§7.4 护栏 3：CI 禁写 learnings）`
-      : `profile.learning.auto_capture: ${state.effective}${state.effective === 'prompt' ? '（投影正文含 ## Learning Protocol 段）' : ''}`,
+    detail: `profile.learning.auto_capture: ${state.effective}${projected}${ciNote}`,
   });
 }
 

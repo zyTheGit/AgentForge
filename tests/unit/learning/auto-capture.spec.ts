@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  effectiveAutoCapture,
   LEARNING_PROTOCOL_SECTION,
   resolveAutoCapture,
 } from '../../../src/core/learning/auto-capture';
@@ -20,44 +21,45 @@ function profileWith(autoCapture?: AutoCapture) {
   });
 }
 
-describe('resolveAutoCapture — 有效档位（§7.4）', () => {
-  it('缺省 → off（schema 默认），无降级', () => {
+describe('effectiveAutoCapture — 渲染层口径与环境无关（§7.4）', () => {
+  it('缺省 → off（schema 默认）', () => {
+    expect(effectiveAutoCapture(profileWith())).toBe('off');
+  });
+
+  it('prompt → prompt', () => {
+    expect(effectiveAutoCapture(profileWith('prompt'))).toBe('prompt');
+  });
+
+  it('hook → off（MVP 无 target 侧钩子写入）', () => {
+    expect(effectiveAutoCapture(profileWith('hook'))).toBe('off');
+  });
+});
+
+describe('resolveAutoCapture — 展示层状态（§7.4）', () => {
+  it('缺省 → off，无未实现声明、非 CI', () => {
     expect(resolveAutoCapture(profileWith(), { ci: false })).toEqual({
       declared: 'off',
       effective: 'off',
-      ciDowngraded: false,
+      ciNoCapture: false,
       unimplemented: false,
     });
   });
 
-  it('prompt 且非 CI → 原样生效', () => {
-    const state = resolveAutoCapture(profileWith('prompt'), { ci: false });
-    expect(state.effective).toBe('prompt');
-    expect(state.ciDowngraded).toBe(false);
-    expect(state.unimplemented).toBe(false);
-  });
-
-  it('hook → 降级为 off 并标记未实现（MVP 无 target 侧钩子写入）', () => {
+  it('hook → 生效 off 并标记未实现', () => {
     const state = resolveAutoCapture(profileWith('hook'), { ci: false });
     expect(state.declared).toBe('hook');
     expect(state.effective).toBe('off');
     expect(state.unimplemented).toBe(true);
-    expect(state.ciDowngraded).toBe(false);
   });
 
-  it('CI 为真 → 三档一律降级为 off（护栏 3），且标出 ciDowngraded', () => {
+  it('CI 为真 → 只标 ciNoCapture，**不改变生效档位**（hash 跨环境稳定）', () => {
     for (const declared of ['off', 'prompt', 'hook'] as const) {
-      const state = resolveAutoCapture(profileWith(declared), { ci: true });
-      expect(state.effective).toBe('off');
-      expect(state.ciDowngraded).toBe(true);
-      expect(state.declared).toBe(declared);
+      const inCi = resolveAutoCapture(profileWith(declared), { ci: true });
+      const local = resolveAutoCapture(profileWith(declared), { ci: false });
+      expect(inCi.ciNoCapture).toBe(true);
+      expect(inCi.effective).toBe(local.effective);
+      expect(inCi.declared).toBe(declared);
     }
-  });
-
-  it('CI 优先于 hook 的未实现判定，但 hook 仍标记为未实现（两条原因可同时成立）', () => {
-    const state = resolveAutoCapture(profileWith('hook'), { ci: true });
-    expect(state.ciDowngraded).toBe(true);
-    expect(state.unimplemented).toBe(true);
   });
 });
 

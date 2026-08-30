@@ -185,7 +185,6 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     config.habits,
     config.profile,
     os,
-    env, // §7.4 护栏 3：CI 为真时 auto_capture 降级为 off（不渲染 Learning Protocol 段）
   );
   // M8：skills.always 物化数据源（§7.6 实体 copy；同名 project > user，§5.3）
   const skillsToMaterialize = await readSkillsToMaterialize(

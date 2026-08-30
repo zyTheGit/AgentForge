@@ -315,7 +315,7 @@ learning:
 
 - **概率性**：模型可能不执行——这一档只是把协议写进规则，不是钩子；
 - **只写 SoT，不投影**：agent 写完的条目仍要人工 `aforge promote` + `aforge sync` 才进投影；
-- **CI 里自动降级为 `off`**：`CI` 为真时不渲染该段（CI 环境本来就禁写 learnings），`aforge status` / `doctor` 会说明原因。
+- **CI 里不会真的采集**：`CI` 为真时 `aforge learn` 被拒（learnings 恒不落盘），但**这一段照样渲染**——投影产物与环境无关，同一份 SoT 在 CI 与本机的 `contentHash` 一致，`aforge doctor` 的 hash 比对才不会误报漂移。`status` / `doctor` 会补一句"本次不会写入"。
 
 `auto_capture: hook`（由 target 侧会话钩子确定性触发）**当前未实现**，行为等同 `off`，`aforge doctor` 会报一条 warn 而不是静默失效。
 

@@ -565,10 +565,18 @@ describe('syncOnce — learning.auto_capture: prompt 端到端（Spec §5.2 / §
     expect(after).toContain('keep me');
   });
 
-  it('CI 为真 → 不渲染该段（§7.4 护栏 3：三档降级为 off）', async () => {
-    const host = createSyncHost({ CI: '1' });
-    await seedWithProfile(host, PROMPT_PROFILE);
-    await syncOnce(syncOptions(host));
-    expect(host.files.get(CLAUDE_MD) as string).not.toContain('## Learning Protocol');
+  it('CI 为真 → 照样渲染该段，且与非 CI 逐字节一致（contentHash 跨环境稳定）', async () => {
+    const inCi = createSyncHost({ CI: '1' });
+    await seedWithProfile(inCi, PROMPT_PROFILE);
+    await syncOnce(syncOptions(inCi));
+
+    const local = createSyncHost();
+    await seedWithProfile(local, PROMPT_PROFILE);
+    await syncOnce(syncOptions(local));
+
+    // 护栏 3 只挡 learnings 写入，不挡渲染：否则同一份 SoT 在 CI 与本地产出不同
+    // 的 marker 区间，跨环境 hash 比对会误报漂移
+    expect(inCi.files.get(CLAUDE_MD) as string).toContain('## Learning Protocol');
+    expect(inCi.files.get(CLAUDE_MD)).toBe(local.files.get(CLAUDE_MD));
   });
 });

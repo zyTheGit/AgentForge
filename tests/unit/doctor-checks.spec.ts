@@ -263,14 +263,15 @@ describe('runDoctorChecks — learning.auto_capture（§7.4 / §9）', () => {
     expect(r.detail).toContain('Learning Protocol');
   });
 
-  it('CI 为真 → 降级为 off 且报 ok（§7.4 护栏 3：不算错误）', async () => {
+  it('CI 为真 → 生效档位不变，仅补一句"本次不会写入"（护栏 3 只挡写入）', async () => {
     const host = createDoctorHost({ CI: '1' });
     await seedProjectSoT(host, profileWithCapture('prompt'));
     const report = await runDoctorChecks(doctorOpts(host));
     const r = resultOf(report, 'learning-auto-capture');
     expect(r.level).toBe('ok');
+    expect(r.detail).toContain('prompt');
+    expect(r.detail).toContain('Learning Protocol');
     expect(r.detail).toContain('CI');
-    expect(r.detail).toContain('off');
     expect(report.exitCode).toBe(0);
   });
 

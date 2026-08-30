@@ -148,7 +148,7 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       // Spec §4.2 skills.always / skills.on_demand（新增展示字段）
       alwaysSkills: ['code-review'],
       onDemandSkills: ['deep-research'],
-      autoCapture: { declared: 'off', effective: 'off', reason: null },
+      autoCapture: { declared: 'off', effective: 'off', reason: null, ciNote: null },
     });
     expect(text).toContain('aforge status');
     expect(text).toContain(USER_SOT);
@@ -166,7 +166,7 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
     // §6.1 / §8.8：技能调用前缀必须打印——codex 是 `$<name>`，其余三家 `/<name>`
     expect(text).toContain('claude (invoke skills as /<name>):');
     expect(text).toContain('codex (invoke skills as $<name>):');
-    // §7.4：auto_capture 生效档位（缺省 off，无降级原因行）
+    // §7.4：auto_capture 生效档位（缺省 off，无附加说明行）
     expect(text).toContain('auto_capture: off');
     expect(text).not.toContain('## Learning Protocol');
     // biome-ignore lint/suspicious/noControlCharactersInRegex: 断言输出仅含 ASCII，字符类必须显式覆盖控制字符区间（\x00-\x1F）
@@ -186,7 +186,7 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       counts: { custom: 0, learnings: 0, templates: 0 },
       alwaysSkills: [],
       onDemandSkills: [],
-      autoCapture: { declared: 'off', effective: 'off', reason: null },
+      autoCapture: { declared: 'off', effective: 'off', reason: null, ciNote: null },
     });
     expect(text).toContain('(unresolvable - see aforge doctor)');
     expect(text).toContain('last sync: (never - run aforge sync)');
@@ -195,7 +195,7 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
     expect(text).toContain('on_demand : (none)');
   });
 
-  it('auto_capture 声明值与生效值不同时，打出箭头与降级原因（§7.4）', () => {
+  it('auto_capture 声明值与生效值不同时，打出箭头与原因（§7.4）', () => {
     const text = formatStatus({
       effectiveScope: 'project',
       userSoTRoot: USER_SOT,
@@ -212,6 +212,7 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
         declared: 'hook',
         effective: 'off',
         reason: 'hook is not implemented in MVP - behaves as off',
+        ciNote: null,
       },
     });
     expect(text).toContain('auto_capture: hook -> off');
@@ -231,10 +232,37 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       counts: { custom: 0, learnings: 0, templates: 0 },
       alwaysSkills: [],
       onDemandSkills: [],
-      autoCapture: { declared: 'prompt', effective: 'prompt', reason: null },
+      autoCapture: { declared: 'prompt', effective: 'prompt', reason: null, ciNote: null },
     });
     expect(text).toContain('auto_capture: prompt');
     expect(text).toContain('projected rules include a ## Learning Protocol section');
+  });
+
+  it('CI 下 prompt 仍生效，仅追加"不会写入"提示（投影正文不变）', () => {
+    const text = formatStatus({
+      effectiveScope: 'project',
+      userSoTRoot: USER_SOT,
+      projectSoTRoot: PROJECT_SOT,
+      initialized: { user: false, project: true },
+      enabledTargets: [],
+      targets: [],
+      skippedTargets: [],
+      lastSyncAt: null,
+      counts: { custom: 0, learnings: 0, templates: 0 },
+      alwaysSkills: [],
+      onDemandSkills: [],
+      autoCapture: {
+        declared: 'prompt',
+        effective: 'prompt',
+        reason: null,
+        ciNote: 'CI detected - no learnings will be written (projected rules are unchanged)',
+      },
+    });
+    // 生效档位不变 → 不打箭头；只多一行环境说明
+    expect(text).toContain('auto_capture: prompt');
+    expect(text).not.toContain('->');
+    expect(text).toContain('projected rules include a ## Learning Protocol section');
+    expect(text).toContain('CI detected - no learnings will be written');
   });
 });
 

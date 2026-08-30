@@ -15,7 +15,7 @@ import type { EnvSnapshot } from '../env';
 import { ConfigError } from '../errors';
 import { composeRules, type TemplateContent } from '../generate/composer';
 import { resolveTemplate } from '../generate/resolver';
-import { resolveAutoCapture } from '../learning/auto-capture';
+import { effectiveAutoCapture } from '../learning/auto-capture';
 import { readLearningLayer } from '../learning/store';
 import { currentOs, type OsContext } from '../paths';
 import { ALL_TARGET_IDS, type SyncItemStatus } from './sync-types';
@@ -179,9 +179,10 @@ function renderLearningBody(learning: Learning): string {
  *
  * @param os 宿主平台（`projection.path_style: auto` 的判据，§4.2）；缺省取当前进程
  *   平台——早期调用点（5 参形态）不必改签名即可保持生产语义正确。
- * @param env 环境快照（`learning.auto_capture` 的 CI 降级判据，§7.4 护栏 3）；
- *   缺省按"非 CI"解释——省略时 `prompt` 档照声明渲染，是两种缺省里更安全的一侧
- *   （宁可多渲染一段协议说明，也不要在本机静默丢掉用户显式开启的配置）。
+ *
+ * 刻意**不吃 EnvSnapshot**：正文必须与环境无关，否则同一份 SoT 在 CI 与本地会渲染出
+ * 不同的 marker 区间（contentHash 不同），跨环境的 hash 比对全部失真。
+ * `learning.auto_capture` 因此只经 effectiveAutoCapture（与 CI 无关，§7.4）。
  */
 export async function renderRulesMd(
   host: Host,
@@ -190,7 +191,6 @@ export async function renderRulesMd(
   habits: Habits,
   profile: Profile,
   os: OsContext = currentOs(),
-  env: EnvSnapshot | undefined = undefined,
 ): Promise<string> {
   const customContents = await readCustomContents(host, userSoTRoot, projectSoTRoot);
   const promotedLearnings = await readPromotedLearnings(host, userSoTRoot, projectSoTRoot, profile);
@@ -214,8 +214,8 @@ export async function renderRulesMd(
     promotedLearnings, // M8：learn → promote → sync 后注入 ## Learnings 段（§5.2 第 ② 层）
     templateContents,
     os,
-    // §7.4 prompt 档：有效档位（含 CI 降级 / hook 未实现的归并）由 learning 层判定
-    autoCapture: resolveAutoCapture(profile, { ci: env?.ci ?? false }).effective,
+    // §7.4 prompt 档：有效档位（含 hook 未实现的归并）由 learning 层判定，与环境无关
+    autoCapture: effectiveAutoCapture(profile),
   });
 }
 

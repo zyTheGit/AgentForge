@@ -14,8 +14,8 @@
  * 9. profile.skills.on_demand 清单（信息项：MVP 只登记不物化，§4.2 注记）；
  * 10. pi 的 MCP 历史落点残留（`.pi\settings.json` 含 `mcpServers` → warn，只诊断不删）；
  * 11. profile.skills.copy_mode 声明 `symlink`（已声明未实现 → warn，§4.2 注记 / §12 Phase 2）；
- * 12. profile.learning.auto_capture：`hook` 已声明未实现 → warn；CI 为真时的降级 → ok
- *     并说明原因（§7.4 护栏 3 / §10）。
+ * 12. profile.learning.auto_capture：`hook` 已声明未实现 → warn；CI 为真时补一句
+ *     "本次不会写入 learnings" → ok（§7.4 护栏 3 / §10；投影正文不受 CI 影响）。
  *
  * 设计原则：
  * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题；
@@ -159,8 +159,9 @@ async function runConfigDependentChecks(
   config: EffectiveConfig,
 ): Promise<void> {
   // ---- 当前 SoT 渲染（hash 基准；与 sync 共用 sync-prepare.renderRulesMd，不经 engine 门面）----
-  // env 必须注入：auto_capture 的 CI 降级要与 sync 取同一个值，否则 hash 比对会误报
-  const rendered = await renderForDoctor(host, results, roots, config, env);
+  // 不注入 env：渲染正文与环境无关（auto_capture 只经 effectiveAutoCapture），
+  // 因此 CI 与本地对同一份 SoT 得到同一个 contentHash，hash 比对跨环境成立
+  const rendered = await renderForDoctor(host, results, roots, config);
 
   // ---- §9 第 1 条：各 target 解析后的绝对路径（project + user scope）----
   checkTargetPaths(results, os, cwd, rendered, config, env);
@@ -174,7 +175,7 @@ async function runConfigDependentChecks(
   // ---- profile.skills.copy_mode：symlink 已声明未实现（§4.2 注记 / §12 Phase 2）----
   checkSkillsCopyMode(results, config);
 
-  // ---- profile.learning.auto_capture：hook 未实现 / CI 降级（§7.4 / §9）----
+  // ---- profile.learning.auto_capture：hook 未实现 / CI 不写入（§7.4 / §9）----
   checkLearningAutoCapture(results, config, env);
 
   // ---- sync-meta 读取（损坏 → error(2)；不存在 → 信息性 ok）----
