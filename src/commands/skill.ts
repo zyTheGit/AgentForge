@@ -28,8 +28,9 @@ import { claudeSkillPath } from '../core/project/projectors/claude';
 import { codexSkillPath } from '../core/project/projectors/codex';
 import { opencodeSkillPath } from '../core/project/projectors/opencode';
 import { piSkillPath } from '../core/project/projectors/pi';
+import { projectorRegistry } from '../core/project/projectors/registry';
 import { withSotLock } from '../core/project/sync-lock';
-import type { ProjectContext } from '../core/project/types';
+import type { ProjectContext, SkillInvokePrefix } from '../core/project/types';
 import {
   type AddSkillResult,
   addSkill,
@@ -200,6 +201,27 @@ function projectedSkillDocPaths(
   ];
 }
 
+/**
+ * "装完怎么调用"提示（Spec §8.8）：按 projector 的 skillInvokePrefix 聚合 target。
+ *
+ * 映射表的事实源在各 projector（`Projector.skillInvokePrefix`），这里只做聚合展示——
+ * 硬编码 `codex: $` 会出现第二份事实源，改了一处忘另一处就骗人。
+ * 必须打这一行：codex 是四家里唯一用 `$` 的，敲 `/<name>` 不展开，
+ * 用户会以为 `skill add` + `sync` 没生效（`aforge status` 打的是同一份信息）。
+ */
+function describeInvokeHint(skillName: string): string {
+  const idsByPrefix = new Map<SkillInvokePrefix, string[]>();
+  for (const projector of projectorRegistry.list()) {
+    const ids = idsByPrefix.get(projector.skillInvokePrefix) ?? [];
+    ids.push(projector.id);
+    idsByPrefix.set(projector.skillInvokePrefix, ids);
+  }
+  const parts = [...idsByPrefix].map(
+    ([prefix, ids]) => `${prefix}${skillName} (${ids.join(', ')})`,
+  );
+  return `then invoke it in a session: ${parts.join(' / ')}`;
+}
+
 export function registerSkillCommand(program: Command): void {
   const cmd = program
     .command('skill')
@@ -262,6 +284,7 @@ export function registerSkillCommand(program: Command): void {
             }`,
             '',
             'next: run `aforge sync` to project it to your agents',
+            `      ${describeInvokeHint(result.name)}`,
           );
         }
         console.log(lines.join('\n'));

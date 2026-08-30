@@ -135,7 +135,7 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
   // ---- OneDrive 检测（§2.1.1 → warn）----
   checkOneDrive(results, env, host);
 
-  // ---- PI_CODING_AGENT_DIR 置位提示（§2.2 已知限制 → warn）----
+  // ---- PI_CODING_AGENT_DIR 置位确认（§2.2：user scope 落点按它解析 → ok）----
   checkPiCodingAgentDir(results, env);
 
   // ---- §9 symlink 失败检查：扫描 SoT skills/ 目录，检测断开的 symlink → warn ----

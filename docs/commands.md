@@ -32,7 +32,7 @@
 | `AGF_LINE_ENDING` | 覆盖投影换行风格（`crlf` / `lf`），优先级高于 `profile.yaml` |
 | `AGF_OFFLINE` | 设为 `1` 声明离线模式，需要网络的操作尽早失败（退出码 5） |
 | `CI` | 为真时 `aforge learn` 被拒（退出码 2），learnings 恒不落盘；不影响投影正文 |
-| `PI_CODING_AGENT_DIR` | **当前不生效**：pi 的 user scope 落点仍硬编码为 `.pi/agent`；置位时 `aforge doctor` 报 warn |
+| `PI_CODING_AGENT_DIR` | 覆盖 pi 的 agent 目录：user scope 的 `AGENTS.md` / `skills/` / `mcp.json` 整体跟随；`aforge doctor` 打出生效目录 |
 
 有效 scope 的解析顺序：显式 `--scope` > `AGF_SCOPE` > project 层在用 > user 层在用 > `project`。
 

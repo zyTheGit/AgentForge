@@ -612,7 +612,7 @@ describe('runDoctorChecks — broken symlink（§9 symlink 失败检查）', () 
     expect(report.exitCode).toBe(0); // warn 不抬升退出码
   });
 
-  it('PI_CODING_AGENT_DIR 置位 → warn（未置位时不产出该项）', async () => {
+  it('PI_CODING_AGENT_DIR 置位 → ok 并打出生效目录（未置位时不产出该项）', async () => {
     const withVar = createFakeHost({
       HOME,
       PI_CODING_AGENT_DIR: path.join(HOME, 'custom-pi'),
@@ -620,10 +620,9 @@ describe('runDoctorChecks — broken symlink（§9 symlink 失败检查）', () 
     await seedProjectSoT(withVar);
     const withVarReport = await runDoctorChecks(doctorOpts(withVar));
     const r = resultOf(withVarReport, 'pi-coding-agent-dir');
-    expect(r.level).toBe('warn');
+    expect(r.level).toBe('ok');
     expect(r.detail).toContain('custom-pi');
-    expect(r.hint).toContain('user scope');
-    expect(withVarReport.exitCode).toBe(0); // warn 不抬升退出码
+    expect(withVarReport.exitCode).toBe(0);
 
     // 未置位：不产出该项（避免给没用 pi 的用户增加噪音）
     const without = createFakeHost({ HOME });

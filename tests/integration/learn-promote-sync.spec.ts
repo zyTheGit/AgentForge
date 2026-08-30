@@ -668,6 +668,9 @@ describe('aforge learn/promote/source/skill（子进程端到端）', () => {
     const skill = runCli(['skill', 'add', 'pdf', '--from', 'vendor'], root);
     expect(skill.status).toBe(0);
     expect(skill.stdout).toContain('skill installed: pdf');
+    // §8.8：codex 是唯一用 $ 的，提示里必须写清差异（否则用户以为 codex 没生效）
+    expect(skill.stdout).toContain('/pdf (opencode, claude, pi)');
+    expect(skill.stdout).toContain('$pdf (codex)');
 
     const sotSkill = path.join(root, '.agentforge', 'skills', 'pdf', 'SKILL.md');
     expect(statSync(sotSkill).isFile()).toBe(true);

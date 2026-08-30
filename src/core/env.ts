@@ -29,13 +29,12 @@ export interface EnvSnapshot {
   /** CODEX_HOME：Codex 根目录覆盖（Spec §2.2）。 */
   readonly codexHome: string | undefined;
   /**
-   * PI_CODING_AGENT_DIR：pi 适配器的 agent 目录覆盖（Spec §2.2 已知限制）。
+   * PI_CODING_AGENT_DIR：pi 的 agent 目录覆盖（Spec §2.2）。
    *
-   * 声明为可选而非必填：pi projector 目前仍把 user scope 落点硬编码为 `.pi\agent`，
-   * 该字段只被 doctor 用来提示"这份投影落在 pi 不读的路径上"，尚未参与路径解析。
-   * 等 pi projector 真正认它时再收紧为必填。
+   * 与 `codexHome` 同构：置位时 pi 的 user scope 落点（AGENTS.md / skills / mcp.json）
+   * 整体改到它指向的目录——上游 pi 与 pi-mcp-adapter 也是按这个变量找 agent 目录的。
    */
-  readonly piCodingAgentDir?: string;
+  readonly piCodingAgentDir: string | undefined;
   /**
    * 用户目录（Spec §2.4）：win32 上 USERPROFILE 优先、类 Unix 上 HOME 优先；
    * 两者皆缺时退回 host.homedir()。全都取不到才是 undefined（路径解析层报
