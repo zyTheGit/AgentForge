@@ -1,5 +1,5 @@
 /**
- * M9 最终验收 e2e（Spec §11.2，13 条）：覆盖需新增 / 补强的 5 条端到端——
+ * M9 最终验收 e2e（Spec §11.2）：覆盖需新增 / 补强的 5 条端到端——
  *
  * - §11.2.1 init -i 交互（edit 分支确认为声明）→ 真实探测 fnm/uv → 投影含
  *   变量渲染，且改声明后输出跟随变化（证明非内置写死）；
@@ -11,8 +11,8 @@
  * - §11.2.13 import 闭环：AGENTS.md 导入 → detected.import 映射 → 用户提升
  *   声明 → sync 投影（子进程端到端）。
  *
- * 其余 8 条（§11.2.2/3/4/6/7/9/10/12）由既有测试覆盖，映射与结果见
- * tests/e2e/ACCEPTANCE.md。
+ * 其余各条（§11.2.2/3/4/6/7/9/10/12/14/15/16）由既有单元与集成测试覆盖，映射与
+ * 结果见 tests/e2e/ACCEPTANCE.md。
  */
 import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';

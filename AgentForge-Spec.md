@@ -885,7 +885,7 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 13. `aforge import` 从 AGENTS.md 导入工具链声明，映射到 habits detected 字段。
 14. `skills.expose_as_command` 点名一个已装技能后 sync，opencode / claude / pi 各落一份命令文件、codex 报 skip；从名单摘掉后再 sync，三份产物被 prune 删除，手工改过的那份保留并进 `prune skipped`（§8.8.3）。
 15. `learning.auto_capture: prompt` 时投影正文含 `## Learning Protocol` 段且位置固定；置 `off` 后该段消失，marker 外内容不受影响（§5.2）。
-16. `CI=1` 环境下 `auto_capture` 任意取值都不写 `learnings/`，且不以错误退出（§10）。
+16. `CI=1` 环境下 `auto_capture` 任意取值都不写 `learnings/`：`sync` / 投影链路不受影响、照常成功退出（渲染正文与环境无关，§7.4 护栏 3），显式 `aforge learn` 由唯一写入口的守卫拒掉并退出码 2（§10）。
 
 ---
 
