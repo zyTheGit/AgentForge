@@ -40,6 +40,8 @@ export function buildPlanCtx(
     habits: config.habits,
     profile: config.profile,
     skillsToMaterialize: [],
+    // §8.8：doctor 只看主规则/MCP 路径，命令薄壳路径不参与此处比对
+    commandsToExpose: [],
     mcpServers: config.profile.mcp.servers ?? [],
     dryRun: true,
     lineEnding: config.profile.projection.line_ending,

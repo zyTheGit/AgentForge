@@ -7,6 +7,7 @@
  * | CLAUDE.md（§8.7 可选） | `<root>\CLAUDE.md` | `~\.config\opencode\CLAUDE.md` |
  * | Skills   | `.opencode\skills\<name>\SKILL.md` | `~\.config\opencode\skills\` |
  * | MCP      | `<root>\opencode.json`（merge_json） | `~\.config\opencode\opencode.json` |
+ * | Commands | `.opencode\command\<name>.md` | `~\.config\opencode\command\` |
  *
  * - 主规则动作按 profile.projection.marker_mode（§4.2）：merge_marker 时 marker 外
  *   用户内容保留（§8.2），none 时整文件 write；区间内容为同一 SoT 渲染一次的
@@ -24,6 +25,7 @@
  */
 import type { McpServer } from '../../../schema';
 import { pathApiFor } from '../../paths';
+import { renderCommandShell } from '../commands';
 import {
   mainRuleAction,
   type ProjectContext,
@@ -33,7 +35,7 @@ import {
   shouldWriteAgentsMd,
   shouldWriteOptionalClaudeMd,
 } from '../types';
-import { SKILLS_DIRNAME, skillDocPath } from './shared';
+import { commandFilePath, SKILLS_DIRNAME, skillDocPath } from './shared';
 
 /** Spec §2.3 / §8.3 主规则文件名（project / user 两个 scope 同名）。 */
 export const OPENCODE_MAIN_RULE_FILENAME = 'AGENTS.md';
@@ -49,6 +51,12 @@ export const OPENCODE_USER_DIR_SEGMENTS = ['.config', 'opencode'] as const;
 
 /** Spec §2.3 / §8.3 MCP 配置文件（project 级项目根下；user 级全局目录下）。 */
 export const OPENCODE_MCP_FILENAME = 'opencode.json';
+
+/**
+ * Spec §8.3 Commands 目录名（§8.8）：取**单数** `command`。
+ * §8.8.5 实测 `command\` 与 `commands\` 均生效，取单数与上游文档一致。
+ */
+export const OPENCODE_COMMANDS_DIRNAME = 'command';
 
 /**
  * user scope 的 opencode 全局目录（`<home>\.config\opencode`，
@@ -127,6 +135,21 @@ export function opencodeMcpPath(ctx: ProjectContext): string {
   return api.join(base, OPENCODE_MCP_FILENAME);
 }
 
+/**
+ * 单个命令薄壳的目标路径（§8.8 / §8.3 Commands 行）。
+ *
+ * 目录名取**单数** `command\`：§8.8.5 实测 `command\` 与 `commands\` 均生效，
+ * 取单数与上游文档一致，避免同一技能在两个目录下各留一份。
+ */
+export function opencodeCommandPath(ctx: ProjectContext, commandName: string): string {
+  const api = pathApiFor(ctx.os);
+  const commandsRoot =
+    ctx.scope === 'project'
+      ? api.join(ctx.rootDir, OPENCODE_DIRNAME, OPENCODE_COMMANDS_DIRNAME)
+      : api.join(opencodeUserDir(ctx), OPENCODE_COMMANDS_DIRNAME);
+  return commandFilePath(api, commandsRoot, commandName);
+}
+
 /** OpenCode projector 实例（纯函数 plan；apply 由引擎统一执行）。 */
 export const opencodeProjector: Projector = {
   id: 'opencode',
@@ -162,6 +185,16 @@ export const opencodeProjector: Projector = {
         path: opencodeSkillPath(ctx, skill.name),
         action: 'write',
         content: skill.content,
+      });
+    }
+
+    // Commands 薄壳（§8.8）：expose_as_command 点名时才产出；整文件 write，
+    // 走 §7.6 artifacts 记账 + prune（不用 marker）
+    for (const command of ctx.commandsToExpose) {
+      items.push({
+        path: opencodeCommandPath(ctx, command.name),
+        action: 'write',
+        content: renderCommandShell(command),
       });
     }
 

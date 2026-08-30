@@ -8,6 +8,8 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { EffectiveConfig } from '../../src/core/config/defaults';
+import { checkCommandsExposure } from '../../src/core/doctor/check-consistency';
 import {
   type DoctorCheckResult,
   type DoctorReport,
@@ -15,8 +17,10 @@ import {
   runDoctorChecks,
 } from '../../src/core/doctor/checks';
 import { readEnv } from '../../src/core/env';
+import { ExitCode } from '../../src/core/errors';
 import { currentOs } from '../../src/core/paths';
 import { syncOnce } from '../../src/core/project/engine';
+import { HabitsSchema, ProfileSchema } from '../../src/schema';
 import { createFakeHost, errnoError, type FakeHost } from './test-utils';
 
 const OS = currentOs();
@@ -629,5 +633,69 @@ describe('runDoctorChecks — broken symlink（§9 symlink 失败检查）', () 
     await seedProjectSoT(without);
     const withoutReport = await runDoctorChecks(doctorOpts(without));
     expect(withoutReport.results.some((x) => x.item === 'pi-coding-agent-dir')).toBe(false);
+  });
+});
+
+describe('skills.expose_as_command 诊断（§8.8）', () => {
+  function config(
+    scope: 'project' | 'user',
+    profileInput: Record<string, unknown>,
+  ): EffectiveConfig {
+    return {
+      profile: ProfileSchema.parse({ version: 1, ...profileInput }),
+      habits: HabitsSchema.parse({ version: 1 }),
+      userSoTRoot: USER_SOT,
+      projectSoTRoot: PROJECT_SOT,
+      effectiveScope: scope,
+    };
+  }
+
+  it('未声明 → 单条 ok', () => {
+    const results: DoctorCheckResult[] = [];
+    checkCommandsExposure(results, config('project', { targets: ['claude'] }));
+    expect(results).toHaveLength(1);
+    expect(results[0]?.level).toBe('ok');
+    expect(results[0]?.detail).toContain('未声明');
+  });
+
+  it('名单不是 skills.always 子集 → error(2) 并列出缺失名', () => {
+    const results: DoctorCheckResult[] = [];
+    checkCommandsExposure(
+      results,
+      config('project', {
+        targets: ['claude'],
+        skills: { always: ['tdd'], expose_as_command: ['tdd', 'nope'] },
+      }),
+    );
+    const r = results.find((x) => x.item === 'skills-expose-as-command');
+    expect(r?.level).toBe('error');
+    expect(r?.code).toBe(ExitCode.Config);
+    expect(r?.detail).toContain('nope');
+  });
+
+  it('project scope + codex 启用 → warn（该 target 的命令薄壳被跳过）', () => {
+    const results: DoctorCheckResult[] = [];
+    checkCommandsExposure(
+      results,
+      config('project', {
+        targets: ['claude', 'codex'],
+        skills: { always: ['tdd'], expose_as_command: ['tdd'] },
+      }),
+    );
+    const warn = results.find((x) => x.item === 'commands/codex-project-unsupported');
+    expect(warn?.level).toBe('warn');
+    expect(doctorExitCode(results)).toBe(0); // warn 不抬升退出码
+  });
+
+  it('user scope → 不产出 codex 告警（user 级 prompts 目录是生效落点）', () => {
+    const results: DoctorCheckResult[] = [];
+    checkCommandsExposure(
+      results,
+      config('user', {
+        targets: ['codex'],
+        skills: { always: ['tdd'], expose_as_command: ['tdd'] },
+      }),
+    );
+    expect(results.some((x) => x.item === 'commands/codex-project-unsupported')).toBe(false);
   });
 });

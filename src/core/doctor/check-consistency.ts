@@ -21,6 +21,7 @@ import {
   resolveAutoCapture,
 } from '../learning/auto-capture';
 import type { OsContext } from '../paths';
+import { CODEX_PROJECT_COMMANDS_SKIP_REASON } from '../project/commands';
 import { readSyncMeta, SYNC_META_FILE } from '../project/sync-meta';
 import { renderRulesMd } from '../project/sync-prepare';
 import type { DoctorRoots } from './check-config';
@@ -214,6 +215,62 @@ export function checkLearningAutoCapture(
       detail:
         'auto_capture: prompt 与 auto_promote: true 并存：agent 照协议执行的 aforge learn 会连带 promote，而 promote 取的是与 sync 同一把 .sync.lock，与人工 aforge sync 并发时报 ConflictError(3)',
       hint: '让 agent 改用 aforge learn --no-auto-promote，或把 learning.auto_promote 置回 false（晋升仍可人工 aforge promote）',
+    });
+  }
+}
+
+/**
+ * profile.skills.expose_as_command：名单合法性 + codex project scope 不支持（§8.8）。
+ *
+ * 两件事一次说完：
+ * - **名单必须是 `skills.always` 的子集** → 否则 sync 会以 ConfigError(2) 失败，
+ *   doctor 提前以 error(2) 报出（口径同 template 未解析：能预判的 sync 失败就预判）。
+ *   注意这里比对的是静态的 `skills.always`，而 sync 比对的是实际可物化的技能——
+ *   名字在 `always` 里但技能没装时 doctor 这项过、sync 仍会失败，那种情况由
+ *   skills 物化自身的报错负责，不在此处重复判定；
+ * - **codex + project scope → warn**：§8.8.5 实测 codex 只读 `$CODEX_HOME\prompts\`，
+ *   项目级放进去 `/name` 不展开，因此该 target 整项跳过（不写用户目录——那会把
+ *   项目级配置泄漏成全局配置）。codex 侧用 `$<skill-name>` 直接调技能即可。
+ */
+export function checkCommandsExposure(results: DoctorCheckResult[], config: EffectiveConfig): void {
+  const exposed = config.profile.skills.expose_as_command ?? [];
+  if (exposed.length === 0) {
+    results.push({
+      section: 'config',
+      level: 'ok',
+      item: 'skills-expose-as-command',
+      detail: 'profile.skills.expose_as_command 未声明（不产出命令/prompt 薄壳）',
+    });
+    return;
+  }
+
+  const always = config.profile.skills.always ?? [];
+  const missing = exposed.filter((name) => !always.includes(name));
+  if (missing.length > 0) {
+    results.push({
+      section: 'config',
+      level: 'error',
+      code: ExitCode.Config,
+      item: 'skills-expose-as-command',
+      detail: `expose_as_command 点名的 skill 不在 skills.always 中: ${missing.join(', ')}（sync 将以退出码 2 失败）`,
+      hint: '把这些名字加进 skills.always（或用 aforge skill add 安装），或从 expose_as_command 中移除',
+    });
+  } else {
+    results.push({
+      section: 'config',
+      level: 'ok',
+      item: 'skills-expose-as-command',
+      detail: `${exposed.join(', ')}（额外投影为命令/prompt 薄壳）`,
+    });
+  }
+
+  if (config.effectiveScope === 'project' && config.profile.targets.includes('codex')) {
+    results.push({
+      section: 'config',
+      level: 'warn',
+      item: 'commands/codex-project-unsupported',
+      detail: CODEX_PROJECT_COMMANDS_SKIP_REASON,
+      hint: 'codex 侧直接用 $<skill-name> 调用技能；需要命令文件请在 user scope（AGF_HOME 层）声明 expose_as_command',
     });
   }
 }

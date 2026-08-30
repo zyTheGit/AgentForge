@@ -54,6 +54,18 @@ export interface SyncTargetResult {
   readonly statuses: readonly SyncItemStatus[];
 }
 
+/**
+ * 某 target 的命令薄壳本轮整项跳过（§8.8.4）：目前唯一来源是 codex 的 project scope。
+ *
+ * 刻意不并进 `warnings`：writeSyncMetaOnSuccess 按 `warnings` 的 targetId 判定
+ * 「该 target 投影不完整 → 不记账」，而这里的跳过是**设计如此**、投影仍然完整，
+ * 混进去会让 codex 的 artifacts 记账整轮丢失（下一轮就永远不清理它的产物）。
+ */
+export interface SyncCommandSkip {
+  readonly targetId: string;
+  readonly reason: string;
+}
+
 /** syncOnce 结果：命令层据此打印绝对路径与摘要。 */
 export interface SyncResult {
   readonly scope: Scope;
@@ -71,6 +83,8 @@ export interface SyncResult {
   readonly targets: readonly SyncTargetResult[];
   /** profile.targets 中已启用但注册表无 projector 的 target（提示用，非失败）。 */
   readonly skippedTargets: readonly string[];
+  /** 命令薄壳被整项跳过的 target（§8.8.4：codex + project scope；提示用，非失败）。 */
+  readonly commandSkips: readonly SyncCommandSkip[];
   /** soft 项（§8.6）apply 失败收集的 warning（不阻塞 sync）。 */
   readonly warnings: readonly SyncWarning[];
   /**

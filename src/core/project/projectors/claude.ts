@@ -6,6 +6,7 @@
  * | 主规则   | `<root>\CLAUDE.md`          | `%USERPROFILE%\.claude\CLAUDE.md` |
  * | Skills   | `.claude\skills\<name>\SKILL.md` | `%USERPROFILE%\.claude\skills\` |
  * | MCP      | `.mcp.json`（mcpServers）   | 对应全局配置                  |
+ * | Commands | `.claude\commands\<name>.md` | `%USERPROFILE%\.claude\commands\` |
  *
  * M6 范围：主规则（merge_marker）+ MCP（`.mcp.json` merge_json）+ skills write 项。
  * - 主规则动作按 profile.projection.marker_mode（§4.2；merge_marker 时 marker 外
@@ -22,6 +23,7 @@
  */
 import type { McpServer } from '../../../schema';
 import { pathApiFor } from '../../paths';
+import { renderCommandShell } from '../commands';
 import {
   mainRuleAction,
   type ProjectContext,
@@ -31,7 +33,7 @@ import {
   shouldWriteClaudeMd,
 } from '../types';
 import { buildMcpServersObject } from './mcp-payload';
-import { SKILLS_DIRNAME, skillDocPath } from './shared';
+import { commandFilePath, SKILLS_DIRNAME, skillDocPath } from './shared';
 
 /** Spec §8.5 主规则文件名（project / user 两个 scope 同名）。 */
 export const CLAUDE_MAIN_RULE_FILENAME = 'CLAUDE.md';
@@ -41,6 +43,9 @@ export const CLAUDE_DIRNAME = '.claude';
 
 /** Spec §8.5 MCP 配置文件（project 级根下）。 */
 export const CLAUDE_MCP_FILENAME = '.mcp.json';
+
+/** Spec §8.5 Commands 目录名（§8.8：claude 用复数 `commands`）。 */
+export const CLAUDE_COMMANDS_DIRNAME = 'commands';
 
 /** 主规则投影根：project → 项目根；user → `<userHome>\.claude`（Spec §8.5）。 */
 function claudeBaseDir(ctx: ProjectContext): string {
@@ -64,6 +69,21 @@ export function claudeSkillPath(ctx: ProjectContext, skillName: string): string 
 /** MCP 配置绝对路径（project 根下 .mcp.json；user scope 同样落在 rootDir 基准，全局策略 Phase 2 对齐）。 */
 export function claudeMcpPath(ctx: ProjectContext): string {
   return pathApiFor(ctx.os).join(ctx.rootDir, CLAUDE_MCP_FILENAME);
+}
+
+/**
+ * 单个命令薄壳的目标路径（§8.8 / §8.5 Commands 行）。
+ *
+ * 两个 scope 同构：project = `<root>\.claude\commands\<name>.md`；
+ * user = `%USERPROFILE%\.claude\commands\<name>.md`（rootDir 分别为项目根 / 用户目录）。
+ */
+export function claudeCommandPath(ctx: ProjectContext, commandName: string): string {
+  const api = pathApiFor(ctx.os);
+  return commandFilePath(
+    api,
+    api.join(ctx.rootDir, CLAUDE_DIRNAME, CLAUDE_COMMANDS_DIRNAME),
+    commandName,
+  );
 }
 
 /**
@@ -104,6 +124,16 @@ export const claudeProjector: Projector = {
         path: claudeSkillPath(ctx, skill.name),
         action: 'write',
         content: skill.content,
+      });
+    }
+
+    // Commands 薄壳（§8.8）：expose_as_command 点名时才产出；整文件 write，
+    // 走 §7.6 artifacts 记账 + prune（不用 marker）
+    for (const command of ctx.commandsToExpose) {
+      items.push({
+        path: claudeCommandPath(ctx, command.name),
+        action: 'write',
+        content: renderCommandShell(command),
       });
     }
 

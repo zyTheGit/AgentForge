@@ -66,6 +66,38 @@ codex 是四家里唯一用 `$` 的，`/<name>` 不展开。`aforge skill add` �
 - 装到 user 层时注意 §5.3 合并语义：`merge.arrays: replace`（缺省）下 project 层自己写了 `skills.always` 就会整体覆盖 user 层那份；
 - 附属文件（脚本、参考资料）会拷进 SoT，但当前只有 `SKILL.md` 正文参与投影。
 
+## 额外投影成命令（expose_as_command）
+
+装好的技能四家都能直接调（上表），所以命令薄壳**默认不产出**。只有需要下面两件事时才开：
+
+- **强制调用**：`/<name>` 是确定性文本展开，不经模型判断该不该触发；
+- **位置参数**：技能正文只有 `$ARGUMENTS` 一档，命令层可用 `$1..$9`。
+
+在 `profile.yaml` 里点名（必须是 `skills.always` 的子集，否则 `sync` 退出码 2）：
+
+```yaml
+skills:
+  always:
+    - code-review
+  expose_as_command:
+    - code-review
+```
+
+`sync` 后各 target 的落点（一名一文件，注意 opencode 是单数 `command`）：
+
+| target | 落点（project scope） |
+|---|---|
+| opencode | `.opencode\command\<name>.md` |
+| claude | `.claude\commands\<name>.md` |
+| pi | `.pi\prompts\<name>.md` |
+| codex | **不产出**（只认 user 级 `%CODEX_HOME%\prompts\`） |
+
+薄壳只写「加载技能 X、按其工作流执行、用户输入见 `$ARGUMENTS`」，不复制技能正文（避免两份漂移）；frontmatter 只透传 `SKILL.md` 的 `description` 与 `argument-hint`。
+
+- codex 在 project scope 被整项跳过，`sync` 输出里有一行 `[codex] commands skipped: ...`，`aforge doctor` 报 `commands/codex-project-unsupported`（warn，不影响退出码）。codex 侧直接用 `$<name>` 调技能即可；要命令文件就在 user scope（`AGF_HOME` 层）声明；
+- 命令文件是整文件产物：从 `expose_as_command` 摘名后由下一次 `sync` 删除并列进 `pruned`，手工改过的那份保留并进 `prune skipped`（同技能投影，Spec §7.6）；
+- MVP 只投影平铺名，不生成命名空间子目录。
+
 ## 注销技能
 
 不想再让某个技能被投影时用 `skill remove`——它**只**把名字从该层 `profile.yaml` 的 `skills.always` 摘掉，`skills\<name>\` 目录原样留在磁盘上：

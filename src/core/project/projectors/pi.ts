@@ -6,6 +6,7 @@
  * | 主规则        | `<root>\AGENTS.md`          | `<pi agent dir>\AGENTS.md`      |
  * | Skills        | `.pi\skills\<name>\SKILL.md` | `<pi agent dir>\skills\`       |
  * | MCP           | `.pi\mcp.json`（soft）       | `<pi agent dir>\mcp.json`（soft）|
+ * | Commands      | `.pi\prompts\<name>.md`      | `<pi agent dir>\prompts\`      |
  *
  * user 级的 `<pi agent dir>` = `PI_CODING_AGENT_DIR` 覆盖，否则 `%USERPROFILE%\.pi\agent`
  * （Spec §2.2，同 codex 的 `CODEX_HOME`）。
@@ -30,6 +31,7 @@
  */
 import type { McpServer } from '../../../schema';
 import { type OsContext, pathApiFor } from '../../paths';
+import { renderCommandShell } from '../commands';
 import {
   mainRuleAction,
   type ProjectContext,
@@ -39,7 +41,7 @@ import {
   shouldWriteAgentsMd,
 } from '../types';
 import { buildMcpServersObject } from './mcp-payload';
-import { SKILLS_DIRNAME, skillDocPath } from './shared';
+import { commandFilePath, SKILLS_DIRNAME, skillDocPath } from './shared';
 
 /** Spec §2.3 / §8.6 主规则文件名（project / user 两个 scope 同名）。 */
 export const PI_MAIN_RULE_FILENAME = 'AGENTS.md';
@@ -52,6 +54,12 @@ export const PI_USER_DIR_SEGMENTS = ['.pi', 'agent'] as const;
 
 /** Spec §2.3 / §8.6 MCP 配置文件（pi 私有覆盖位，由 pi-mcp-adapter 读取）。 */
 export const PI_MCP_FILENAME = 'mcp.json';
+
+/**
+ * Spec §8.6 Commands 目录名（§8.8）：pi 用 `prompts` 而非 `commands`。
+ * 上游启动时会把遗留的 `commands\` 自动 rename 成 `prompts\`（§8.6 实测）。
+ */
+export const PI_PROMPTS_DIRNAME = 'prompts';
 
 /**
  * user scope 的 pi agent 目录：`PI_CODING_AGENT_DIR` 覆盖，否则 `<home>\.pi\agent`
@@ -115,6 +123,20 @@ export function piMcpPath(ctx: ProjectContext): string {
   return api.join(base, PI_MCP_FILENAME);
 }
 
+/**
+ * 单个命令薄壳的目标路径（§8.8 / §8.6 Commands 行）。
+ *
+ * 目录名是 `prompts` 而非 `commands`：pi 启动时会把遗留的 `commands\` 自动 rename
+ * 成 `prompts\`（`dist/migrations.js` 的 migrateCommandsToPrompts），写 `commands\`
+ * 等于把产物交给上游迁移逻辑搬家，记账路径随即失真。
+ * project = `<root>\.pi\prompts\<name>.md`；user = `<pi agent dir>\prompts\<name>.md`。
+ */
+export function piCommandPath(ctx: ProjectContext, commandName: string): string {
+  const api = pathApiFor(ctx.os);
+  const base = ctx.scope === 'project' ? api.join(ctx.rootDir, PI_DIRNAME) : piUserDir(ctx);
+  return commandFilePath(api, api.join(base, PI_PROMPTS_DIRNAME), commandName);
+}
+
 /** Pi projector 实例（纯函数 plan；apply 由引擎统一执行）。 */
 export const piProjector: Projector = {
   id: 'pi',
@@ -141,6 +163,18 @@ export const piProjector: Projector = {
         path: piSkillPath(ctx, skill.name),
         action: 'write',
         content: skill.content,
+      });
+    }
+
+    // Commands 薄壳（§8.8）：expose_as_command 点名时才产出；整文件 write，
+    // 走 §7.6 artifacts 记账 + prune（不用 marker）。
+    // 不标 soft：命令文件是普通 Markdown，pi 原生扫描 prompts\ 即可，
+    // 不依赖 pi-mcp-adapter 那类扩展，因此没有 MCP 项那种「装了才生效」的前提
+    for (const command of ctx.commandsToExpose) {
+      items.push({
+        path: piCommandPath(ctx, command.name),
+        action: 'write',
+        content: renderCommandShell(command),
       });
     }
 
