@@ -12,7 +12,7 @@ aforge learn --file - < notes.md
 # 看 / 改 / 删
 aforge learnings list
 aforge learnings show <id>
-aforge learnings edit <id>
+aforge learnings edit <id>   # 交互终端里拉起 $EDITOR（缺省 notepad）
 aforge learnings rm <id>
 
 # 晋升为 custom 规则或 skill，再投影
@@ -21,6 +21,8 @@ aforge sync
 ```
 
 `learn` 只写 SoT 的 `learnings/`，不动投影产物；`promote` 也只写 SoT——真正落到各 Agent 规则文件里要靠 `aforge sync`。`profile.yaml` 里 `learning.auto_promote: true` 时 `learn` 会顺手 promote，`--no-auto-promote` 可单次关掉。
+
+`learnings edit <id>` 在交互终端（stdin/stdout 都是 TTY）里用 `$EDITOR`（缺省 `notepad`）打开条目 yaml，等编辑器退出后立刻重校验：内容不合 §4.3 → 退出码 2 并指出问题字段；文件被删掉 → 只提示，不报错。三种情况退回「打印文件路径 + 正文」的手工编辑提示而**不**报错：非交互环境（CI / 管道）、`--json`、`$EDITOR` 在 PATH 上解析不到。
 
 `CI` 为真时 `aforge learn` 一律被拒（退出码 2），learnings 恒不落盘。
 

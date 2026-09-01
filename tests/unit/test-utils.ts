@@ -5,6 +5,8 @@
  * - dirs：经 mkdirExclusive 原子创建的目录集合（互斥锁语义所需，见下）；
  * - clearReadonlyCalls：记录 clearReadonly 调用的路径（断言"只读属性去除"路径用）；
  * - copyModeCalls：记录 copyMode 的 `from>to`（断言"原权限位被带到临时文件上"）；
+ * - spawnInteractiveCalls：记录 spawnInteractive 的 `{ cmd, args }`（断言
+ *   `learnings edit` 拉起的编辑器与参数；默认返回退出码 0）；
  * - createScriptedPrompt：按序返回预设应答的 PromptApi（驱动 init -i 五步流程）。
  */
 import path from 'node:path';
@@ -29,12 +31,20 @@ export function abs(...segments: string[]): string {
   return path.join(ABS_ROOT, ...segments);
 }
 
+/** spawnInteractive 的调用记录（断言拉起的可执行文件与参数）。 */
+export interface SpawnInteractiveCall {
+  readonly cmd: string;
+  readonly args: readonly string[];
+  readonly cwd: string | undefined;
+}
+
 export interface FakeHost extends Host {
   readonly files: Map<string, string>;
   /** 已存在的「目录」集合（内存 fs 无目录概念，仅 mkdirExclusive 的互斥判据需要）。 */
   readonly dirs: Set<string>;
   readonly clearReadonlyCalls: string[];
   readonly copyModeCalls: string[];
+  readonly spawnInteractiveCalls: SpawnInteractiveCall[];
 }
 
 export function createFakeHost(envMap: Readonly<Record<string, string>> = {}): FakeHost {
@@ -42,6 +52,7 @@ export function createFakeHost(envMap: Readonly<Record<string, string>> = {}): F
   const dirs = new Set<string>();
   const clearReadonlyCalls: string[] = [];
   const copyModeCalls: string[] = [];
+  const spawnInteractiveCalls: SpawnInteractiveCall[] = [];
 
   /** 目录是否"存在"：显式创建过，或其下有任意文件键（对齐真实 fs 的目录语义）。 */
   const dirExists = (p: string): boolean => {
@@ -57,6 +68,7 @@ export function createFakeHost(envMap: Readonly<Record<string, string>> = {}): F
     dirs,
     clearReadonlyCalls,
     copyModeCalls,
+    spawnInteractiveCalls,
     async readFile(p) {
       const content = files.get(p);
       if (content === undefined) {
@@ -149,6 +161,11 @@ export function createFakeHost(envMap: Readonly<Record<string, string>> = {}): F
     },
     async exec() {
       return { stdout: '', stderr: '', code: 0 };
+    },
+    async spawnInteractive(cmd, args, opts) {
+      // 只记账不起进程：默认退出码 0（编辑器正常退出）；需要非零码的用例自行覆盖
+      spawnInteractiveCalls.push({ cmd, args: [...args], cwd: opts?.cwd });
+      return 0;
     },
     now() {
       return new Date(0);
