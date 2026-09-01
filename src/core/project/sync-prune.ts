@@ -26,7 +26,7 @@
  */
 import { atomicWrite, normalizeLineEnding, sha256Hex } from '../../infra/fsutil';
 import type { SyncArtifact, SyncMeta } from '../../schema';
-import { enabledMcpServerNames } from './projectors/mcp-transport';
+import { buildMcpServersObject } from './projectors/mcp-payload';
 import type { PlannedTarget } from './sync-prepare';
 import { backupTarget, recordDelete, recordWrite, type SyncTransaction } from './sync-transaction';
 import type { ProjectContext } from './types';
@@ -89,7 +89,7 @@ export function accountArtifacts(planned: readonly PlannedTarget[]): SyncArtifac
 
 /** 本轮投影出的 MCP server 名（口径与 merge_json 载荷同源：enabled=false 不投影）。 */
 export function accountMcpServers(ctx: ProjectContext): string[] {
-  return enabledMcpServerNames(ctx.mcpServers);
+  return Object.keys(buildMcpServersObject(ctx.mcpServers));
 }
 
 /**
@@ -200,7 +200,7 @@ async function pruneArtifacts(
  *
  * 只动 merge_json 项（opencode.json 的 `mcp`、`.mcp.json` / `.pi\mcp.json` 的
  * `mcpServers`）。codex 走 merge_toml——标记段每轮整段重写，被摘掉的
- * `[mcp_servers.*]` 表本来就不会残留，不需要 prune。
+ * `[[mcp_servers.*]]` 表本来就不会残留，不需要 prune。
  *
  * 要摘哪个键不额外声明，从**本项的管理载荷**现算：载荷的顶层对象键就是该 target
  * 存放 server 映射的位置（opencode `mcp` / 其余 `mcpServers`）。这样新增 target

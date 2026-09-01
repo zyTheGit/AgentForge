@@ -158,22 +158,6 @@ describe('opencodeMcpPayload（OpenCode mcp 键惯例）', () => {
     });
   });
 
-  it('sse → 同样落 remote 形态（上游无法区分 SSE，降级由 doctor / sync 显式告警）', () => {
-    const server = McpServerSchema.parse({
-      name: 'ev',
-      transport: 'sse',
-      url: 'https://example.com/sse',
-    });
-    const payload = JSON.parse(opencodeMcpPayload([server])) as {
-      mcp: Record<string, unknown>;
-    };
-    expect(payload.mcp.ev).toEqual({
-      type: 'remote',
-      url: 'https://example.com/sse',
-      enabled: true,
-    });
-  });
-
   it('enabled=false 的 server 不投影', () => {
     const payload = JSON.parse(
       opencodeMcpPayload([stdioServer({ enabled: false }), stdioServer()]),

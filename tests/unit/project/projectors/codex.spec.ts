@@ -159,14 +159,14 @@ describe('codexProjector.plan（Spec §8.4 主规则 / MCP 标记段 / skills）
   });
 });
 
-describe('serializeMcpServersToml（[mcp_servers.<name>] 单表手写序列化）', () => {
+describe('serializeMcpServersToml（[[mcp_servers.<name>]] 手写序列化）', () => {
   it('空 servers → 空字符串（标记段为空块，保留管理段声明）', () => {
     expect(serializeMcpServersToml([])).toBe('');
   });
 
-  it('stdio → [mcp_servers.fs] + command / args 数组', () => {
+  it('stdio → [[mcp_servers.fs]] + command / args 数组', () => {
     const toml = serializeMcpServersToml([stdioServer()]);
-    expect(toml).toBe('[mcp_servers.fs]\ncommand = "npx"\nargs = ["-y", "server-fs"]');
+    expect(toml).toBe('[[mcp_servers.fs]]\ncommand = "npx"\nargs = ["-y", "server-fs"]');
   });
 
   it('stdio + env → env inline table', () => {
@@ -174,22 +174,10 @@ describe('serializeMcpServersToml（[mcp_servers.<name>] 单表手写序列化�
     expect(toml).toContain('env = { KEY = "v", "weird key" = "x" }');
   });
 
-  it('http → url + http_headers（codex 的 header 键名；写 headers 会被静默忽略）', () => {
+  it('http → url + headers（inline table）', () => {
     const toml = serializeMcpServersToml([httpServer({ headers: { Authorization: 'Bearer x' } })]);
     expect(toml).toBe(
-      '[mcp_servers.docs]\nurl = "https://example.com/mcp"\nhttp_headers = { Authorization = "Bearer x" }',
-    );
-  });
-
-  it('sse → 整条跳过（codex 只支持 STDIO 与 Streamable HTTP）', () => {
-    const sse = McpServerSchema.parse({
-      name: 'ev',
-      transport: 'sse',
-      url: 'https://example.com/sse',
-    });
-    expect(serializeMcpServersToml([sse])).toBe('');
-    expect(serializeMcpServersToml([stdioServer(), sse])).toBe(
-      '[mcp_servers.fs]\ncommand = "npx"\nargs = ["-y", "server-fs"]',
+      '[[mcp_servers.docs]]\nurl = "https://example.com/mcp"\nheaders = { Authorization = "Bearer x" }',
     );
   });
 
@@ -197,19 +185,19 @@ describe('serializeMcpServersToml（[mcp_servers.<name>] 单表手写序列化�
     const toml = serializeMcpServersToml([stdioServer(), httpServer()]);
     const blocks = toml.split('\n\n');
     expect(blocks).toHaveLength(2);
-    expect(blocks[0]).toContain('[mcp_servers.fs]');
-    expect(blocks[1]).toContain('[mcp_servers.docs]');
+    expect(blocks[0]).toContain('[[mcp_servers.fs]]');
+    expect(blocks[1]).toContain('[[mcp_servers.docs]]');
   });
 
   it('enabled=false 的 server 不投影', () => {
     const toml = serializeMcpServersToml([stdioServer({ enabled: false }), stdioServer()]);
     expect(toml).not.toContain('enabled');
-    expect(toml).toBe('[mcp_servers.fs]\ncommand = "npx"\nargs = ["-y", "server-fs"]');
+    expect(toml).toBe('[[mcp_servers.fs]]\ncommand = "npx"\nargs = ["-y", "server-fs"]');
   });
 
   it('含点/空格的 server 名 → quoted key', () => {
     const toml = serializeMcpServersToml([stdioServer({ name: 'my.server x' })]);
-    expect(toml).toContain('[mcp_servers."my.server x"]');
+    expect(toml).toContain('[[mcp_servers."my.server x"]]');
   });
 
   it('command 中的特殊字符 → basic string 转义', () => {

@@ -90,19 +90,8 @@ export const PathStyle = z.enum(['auto', 'windows', 'posix']);
 /** path_style 的类型形态（core/generate/composer 的路径风格归一化消费）。 */
 export type PathStyle = z.output<typeof PathStyle>;
 
-/**
- * Spec §4.2 mcp.servers[].transport。
- *
- * 三个取值就是 AgentForge 侧的 transport 语义，**不随上游客户端能力变化**：
- * 各家目标格式对 `http`（streamable HTTP）与 `sse` 的表达力不同（codex 只支持
- * streamable HTTP、opencode 的 remote 形态无法区分两者），这类差异由投影层的
- * core/project/projectors/mcp-transport 归一化并显式降级，不靠往 enum 里加值解决
- * （加值是破坏性变更：老 profile 里已有的 http/sse 语义会被重新定义）。
- */
+/** Spec §4.2 mcp.servers[].transport。 */
 export const Transport = z.enum(['stdio', 'http', 'sse']);
-
-/** transport 的类型形态（投影层的 transport 归一化表消费）。 */
-export type Transport = z.output<typeof Transport>;
 
 /**
  * Spec §4.2 mcp.servers[] 元素。

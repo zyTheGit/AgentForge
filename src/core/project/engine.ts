@@ -63,7 +63,6 @@
  * - `sync-transaction`：备份与回滚；`sync-recovery`：崩溃恢复与备份保全；
  * - `sync-abort`：信号处理器用的同步回滚；`sync-verify`：冲突预检查与 sync-meta；
  * - `sync-residuals`：残留物盘点；`sync-gitignore`：生成物 .gitignore 段；
- * - `sync-notices`：plan 派生的附带结论（命令跳过 / MCP transport 能力落差）；
  * - `sync-prune`：上一轮投影产物的差集清理（§7.6）。
  *
  * 这些符号在此 re-export：既有调用方（命令层 / doctor / 测试）继续从 `./engine`
@@ -76,11 +75,10 @@ import { ConfigError } from '../errors';
 import { renderedSectionHash } from '../markers';
 import { resolveProjectSoT, resolveUserSoT } from '../paths';
 import { readSkillsToMaterialize } from '../sources/skill';
-import { resolveCommandsToExpose } from './commands';
+import { CODEX_PROJECT_COMMANDS_SKIP_REASON, resolveCommandsToExpose } from './commands';
 import { projectorRegistry } from './projectors/registry';
 import { buildGitignoreItem, GITIGNORE_MARKERS, GITIGNORE_TARGET_ID } from './sync-gitignore';
 import { acquireSyncLocks, releaseSyncLocks, resolveLockRoots } from './sync-lock';
-import { collectCommandSkips, collectPlanMcpTransportNotices } from './sync-notices';
 import {
   assertInitialized,
   filterTargets,
@@ -106,6 +104,7 @@ import {
 import {
   ALL_TARGET_IDS,
   attachFailureReport,
+  type SyncCommandSkip,
   type SyncFailureReport,
   type SyncOptions,
   type SyncResult,
@@ -240,9 +239,13 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
 
   const contentHash = renderedSectionHash(renderedRulesMd, ctx.markerBegin, ctx.markerEnd);
 
-  // ---- plan 派生的附带结论（§8.8.4 命令跳过 + Phase 2 MCP 能力落差；dry-run 也给）----
-  const commandSkips = collectCommandSkips(planned, ctx);
-  const mcpTransportNotices = collectPlanMcpTransportNotices(planned, ctx);
+  // ---- §8.8.4：codex 的 project scope 不支持命令文件 → 记一条 skipped 供命令层打印 ----
+  const commandSkips: SyncCommandSkip[] =
+    commandsToExpose.length > 0 &&
+    ctx.scope === 'project' &&
+    planned.some((t) => t.targetId === 'codex')
+      ? [{ targetId: 'codex', reason: CODEX_PROJECT_COMMANDS_SKIP_REASON }]
+      : [];
 
   const sotRoot = config.effectiveScope === 'project' ? projectSoTRoot : userSoTRoot;
 
@@ -277,7 +280,6 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
       skippedTargets,
       commandSkips,
       warnings: [],
-      mcpTransportNotices,
       transactionWarnings: [],
       gitignore:
         gitignoreItem === undefined
@@ -473,7 +475,6 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
       skippedTargets,
       commandSkips,
       warnings,
-      mcpTransportNotices,
       transactionWarnings: transactionWarningsOf(tx, sotRoot, recovery.preservedDir),
       gitignore: gitignoreResult,
       recovered,

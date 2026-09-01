@@ -11,10 +11,9 @@
  *   保留，Spec §8.2；none 时整文件 write）；`write_agents_md: false` 关闭该项；
  * - MCP 用 merge_toml：只替换 `# BEGIN AGENTFORGE MCP` / `# END AGENTFORGE MCP`
  *   标记段（标记段外用户 TOML 与注释原样保留，Spec §8.4 / §8.2）；
- *   片段为 `[mcp_servers.<name>]` **单表**（不是 `[[...]]` 数组表——codex 的
- *   `mcp_servers` 是 name → table 的映射，写成数组表会让整个 config.toml 加载失败）；
- *   字段名与跳过判据由 projectors/mcp-transport 给出，本文件只负责 TOML 文本化
- *   （手写序列化，无 TOML 库依赖：basic string 转义 / bare key 判定 / inline table / 数组）；
+ *   片段为 `[[mcp_servers.<name>]]` 表 + stdio（command/args/env）或
+ *   http/sse（url/headers）键值文本——手写序列化，无 TOML 库依赖
+ *   （含 basic string 转义 / bare key 判定 / inline table / 数组）；
  * - skills：write 实体 copy（Spec §7.6 默认不使用 symlink）；
  * - plan 为纯函数：不做任何 IO，路径按注入 os 选择分隔符（Spec §2.1）；
  *   CODEX_HOME 经 ctx.env（engine 注入，Spec §2.4）覆盖。
@@ -31,7 +30,6 @@ import {
   type Projector,
   shouldWriteAgentsMd,
 } from '../types';
-import { type CodexMcpEntry, codexMcpEntries } from './mcp-transport';
 import { flatCommandFilePath, SKILLS_DIRNAME, skillDocPath } from './shared';
 
 /** Spec §2.3 / §8.4 主规则文件名（project / user 两个 scope 同名）。 */
@@ -134,40 +132,43 @@ function tomlInlineTable(values: Readonly<Record<string, string>>): string {
 /**
  * MCP servers → TOML 片段（merge_toml 的 item.content，标记段内正文）。
  *
- * 条目模型（含 enabled=false 过滤、transport 字段名、sse 跳过）来自
- * projectors/mcp-transport.codexMcpEntries；本函数只做 TOML 文本化：
- * - 每个 server 一个 `[mcp_servers.<name>]` **单表**（codex 的 `mcp_servers` 是
- *   name → table 映射；写成 `[[...]]` 数组表会让 codex 整份 config.toml 报
- *   "invalid type: map, expected a string" 而拒绝加载）；
- * - stdio → command / args / env；streamable HTTP → url / http_headers；
- * - 空 entries → 空字符串（标记段为空块 `BEGIN\nEND`，保留管理段声明）；
+ * - enabled=false 的 server 不投影（Spec §4.2 语义）；
+ * - stdio → `[[mcp_servers.<name>]]` + command / args / env；
+ * - http / sse → `[[mcp_servers.<name>]]` + url / headers；
+ * - 空 servers → 空字符串（标记段为空块 `BEGIN\nEND`，保留管理段声明）；
  * - 多个 server 的表块之间以空行分隔。
  */
 export function serializeMcpServersToml(servers: readonly McpServer[]): string {
-  return codexMcpEntries(servers)
-    .map((entry) => codexEntryBlock(entry))
-    .join('\n\n');
-}
-
-/** 单个 `[mcp_servers.<name>]` 表块（键序固定，保证 sync 幂等）。 */
-function codexEntryBlock(entry: CodexMcpEntry): string {
-  const lines: string[] = [`[mcp_servers.${tomlKey(entry.name)}]`];
-  if (entry.command !== undefined) {
-    lines.push(`command = ${tomlBasicString(entry.command)}`);
+  const blocks: string[] = [];
+  for (const server of servers) {
+    if (server.enabled === false) {
+      continue;
+    }
+    const lines: string[] = [`[[mcp_servers.${tomlKey(server.name)}]]`];
+    if (server.transport === 'stdio') {
+      lines.push(`command = ${tomlBasicString(server.command ?? '')}`);
+      if (server.args !== undefined && server.args.length > 0) {
+        lines.push(`args = ${tomlStringArray(server.args)}`);
+      }
+      if (server.env !== undefined) {
+        const entries = Object.entries(server.env);
+        if (entries.length > 0) {
+          lines.push(`env = ${tomlInlineTable(server.env)}`);
+        }
+      }
+    } else {
+      // http / sse → url 形态（transport 差异由工具端按 url 识别，Phase 2 MCP 对齐）
+      lines.push(`url = ${tomlBasicString(server.url ?? '')}`);
+      if (server.headers !== undefined) {
+        const entries = Object.entries(server.headers);
+        if (entries.length > 0) {
+          lines.push(`headers = ${tomlInlineTable(server.headers)}`);
+        }
+      }
+    }
+    blocks.push(lines.join('\n'));
   }
-  if (entry.args !== undefined && entry.args.length > 0) {
-    lines.push(`args = ${tomlStringArray(entry.args)}`);
-  }
-  if (entry.env !== undefined && Object.keys(entry.env).length > 0) {
-    lines.push(`env = ${tomlInlineTable(entry.env)}`);
-  }
-  if (entry.url !== undefined) {
-    lines.push(`url = ${tomlBasicString(entry.url)}`);
-  }
-  if (entry.httpHeaders !== undefined && Object.keys(entry.httpHeaders).length > 0) {
-    lines.push(`http_headers = ${tomlInlineTable(entry.httpHeaders)}`);
-  }
-  return lines.join('\n');
+  return blocks.join('\n\n');
 }
 
 /** 主规则绝对路径（`status` / `init` 打印"实际将写入的路径"也用它，Spec §2.2）。 */

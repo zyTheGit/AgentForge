@@ -164,7 +164,7 @@ describe('piProjector.plan（Spec §8.6 主规则 / MCP soft / skills）', () =>
   });
 });
 
-describe('piMcpPayload（mcpServers 管理键；顶层键与 Claude Code 同名，条目形状不同构）', () => {
+describe('piMcpPayload（mcpServers 管理键，pi-mcp-adapter 与 Claude Code 同构）', () => {
   it('空 servers → {"mcpServers":{}}（管理键声明保留）', () => {
     expect(piMcpPayload([])).toBe('{"mcpServers":{}}');
   });
@@ -188,7 +188,7 @@ describe('piMcpPayload（mcpServers 管理键；顶层键与 Claude Code 同名�
     expect(payload.mcpServers.fs).toEqual({ command: 'npx' });
   });
 
-  it('http → url / headers 键（无 type：适配器按 command / url 互斥判定 transport）', () => {
+  it('http → type / url / headers 键', () => {
     const server = McpServerSchema.parse({
       name: 'docs',
       transport: 'http',
@@ -199,23 +199,9 @@ describe('piMcpPayload（mcpServers 管理键；顶层键与 Claude Code 同名�
       mcpServers: Record<string, unknown>;
     };
     expect(payload.mcpServers.docs).toEqual({
+      type: 'http',
       url: 'https://example.com/mcp',
       headers: { Authorization: 'Bearer x' },
-    });
-  });
-
-  it('sse → httpTransport: "sse"（强制 SSE 并禁用 streamable HTTP 回退）', () => {
-    const server = McpServerSchema.parse({
-      name: 'ev',
-      transport: 'sse',
-      url: 'https://example.com/sse',
-    });
-    const payload = JSON.parse(piMcpPayload([server])) as {
-      mcpServers: Record<string, unknown>;
-    };
-    expect(payload.mcpServers.ev).toEqual({
-      url: 'https://example.com/sse',
-      httpTransport: 'sse',
     });
   });
 
