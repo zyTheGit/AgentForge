@@ -182,6 +182,7 @@ describe('buildImportDetected（detected.import 建议对象，§7.7-4）', () =
       nodeManager: 'fnm',
       pythonManager: undefined,
       packageManagers: ['pnpm', 'bun'],
+      extraToolchains: {},
     };
     const detected = buildImportDetected(suggestions, 'AGENTS.md', '2026-08-21T00:00:00.000Z');
 
@@ -198,11 +199,78 @@ describe('buildImportDetected（detected.import 建议对象，§7.7-4）', () =
 
   it('全部未命中 → 仅元信息键', () => {
     const detected = buildImportDetected(
-      { nodeManager: undefined, pythonManager: undefined, packageManagers: [] },
+      {
+        nodeManager: undefined,
+        pythonManager: undefined,
+        packageManagers: [],
+        extraToolchains: {},
+      },
       'CLAUDE.md',
       'now',
     );
     expect(Object.keys(detected).sort()).toEqual(['imported_at', 'imported_from', 'source']);
+  });
+
+  it('新增类别写入各自新键（既有键结构不动）', () => {
+    const parsed = parseImportedFile(
+      ['## 工具链', '- Rust: cargo + rustup', '- Go: 见 go.mod', '- CI: GitHub Actions', ''].join(
+        '\n',
+      ),
+    );
+    const detected = buildImportDetected(parsed.suggestions, 'GEMINI.md', 'now');
+
+    expect(detected.rust).toEqual([
+      { name: 'cargo', source: 'import' },
+      { name: 'rustup', source: 'import' },
+    ]);
+    expect(detected.go).toEqual([{ name: 'go.mod', source: 'import' }]);
+    expect(detected.ci).toEqual([{ name: 'github actions', source: 'import' }]);
+    // 未命中的类别不写键
+    expect(detected.java).toBeUndefined();
+    expect(detected.dotnet).toBeUndefined();
+    expect(detected.monorepo).toBeUndefined();
+    // 既有键在未命中时同样不出现
+    expect(detected.node).toBeUndefined();
+    expect(detected.package_managers).toBeUndefined();
+  });
+});
+
+describe('新增工具链类别（Phase 2）', () => {
+  it('extraToolchains 按类别聚合全部命中', () => {
+    const parsed = parseImportedFile(
+      [
+        '## 工具链',
+        '- 后端 Java 用 Gradle（gradlew 包装器）。',
+        '- 桌面端 dotnet + nuget。',
+        '- monorepo 用 turborepo。',
+        '- 钩子：husky + lint-staged。',
+        '',
+      ].join('\n'),
+    );
+
+    expect(parsed.suggestions.extraToolchains).toEqual({
+      java: ['gradle', 'gradlew', 'java'],
+      dotnet: ['dotnet', 'nuget'],
+      monorepo: ['turborepo'],
+      ci: ['husky', 'lint-staged'],
+    });
+    // 既有三键不受影响
+    expect(parsed.suggestions.nodeManager).toBeUndefined();
+    expect(parsed.suggestions.packageManagers).toEqual([]);
+  });
+
+  it('只命中新增类别时 hasAnySuggestion 为真（会写 detected.import）', () => {
+    const parsed = parseImportedFile('## 构建\n用 cargo build\n');
+    expect(hasAnySuggestion(parsed.suggestions)).toBe(true);
+    expect(parsed.suggestions.extraToolchains.rust).toEqual(['cargo']);
+    // 命中关键词的块不进 custom
+    expect(parsed.customBlocks).toHaveLength(0);
+  });
+
+  it('无命中 → extraToolchains 为空对象', () => {
+    const parsed = parseImportedFile('## 风格\n简洁。\n');
+    expect(parsed.suggestions.extraToolchains).toEqual({});
+    expect(hasAnySuggestion(parsed.suggestions)).toBe(false);
   });
 });
 

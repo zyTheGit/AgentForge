@@ -1,12 +1,14 @@
 /**
- * Import 解析器（Spec §7.7 MVP 基础版，M9）：从既有 AGENTS.md / CLAUDE.md
- * 提取工具链声明与剩余内容块。
+ * Import 解析器（Spec §7.7；Phase 2 扩展）：从既有规则文件（AGENTS.md /
+ * CLAUDE.md / GEMINI.md / .cursorrules / .cursor/rules/*.mdc / .windsurfrules /
+ * .github/copilot-instructions.md / opencode.md）提取工具链声明与剩余内容块。
  *
  * 纯函数模块（零 IO、不依赖 TTY）：
- * 1. identifyImportFile：按文件名识别 AGENTS.md / CLAUDE.md（大小写不敏感）；
- * 2. parseImportedFile：剥除全部 AgentForge marker 区间（§7.7-7）→ 按 `## `
+ * 1. 文件识别：见 ./file-kinds（声明式规则表，含父目录判据）；
+ * 2. 关键词表：见 ./keywords（单一事实源，本文件只消费不定义）；
+ * 3. parseImportedFile：剥除全部 AgentForge marker 区间（§7.7-7）→ 按 `## `
  *    标题分块（§7.7-3）→ 工具链关键词识别（词边界匹配，避免 uvicorn 误报 uv）；
- * 3. 映射产出：
+ * 4. 映射产出：
  *    - 命中工具链关键词的块 → habits.detected.import 建议字段
  *      （source: 'import'，需用户确认，§7.7-4）；
  *    - 其余块 → custom/imported-<timestamp>.md 素材（原样保留各块标题）。
@@ -16,44 +18,24 @@
  */
 import { normalizeLineEnding } from '../../infra/fsutil';
 import { splitByMarkers } from '../markers';
-import { toPosixSeparators } from '../paths';
+import {
+  ALL_KEYWORDS,
+  EXTRA_TOOLCHAIN_CATEGORIES,
+  matchesKeyword,
+  NODE_MANAGER_KEYWORDS,
+  PACKAGE_MANAGER_KEYWORDS,
+  PYTHON_MANAGER_KEYWORDS,
+} from './keywords';
 
-/** Node 版本管理器关键词（§7.7-3；命中顺序即优先级序）。 */
-export const NODE_MANAGER_KEYWORDS = ['fnm', 'nvm', 'volta', 'mise'] as const;
-
-/** Python 工具链关键词（§7.7-3）。 */
-export const PYTHON_MANAGER_KEYWORDS = ['uv', 'poetry', 'pipenv', 'conda', 'pyenv'] as const;
-
-/** JS 包管理器关键词（§7.7-3）。 */
-export const PACKAGE_MANAGER_KEYWORDS = ['pnpm', 'bun', 'npm', 'yarn'] as const;
-
-/** 全部关键词（块级命中判定用）。 */
-const ALL_KEYWORDS: readonly string[] = [
-  ...NODE_MANAGER_KEYWORDS,
-  ...PYTHON_MANAGER_KEYWORDS,
-  ...PACKAGE_MANAGER_KEYWORDS,
-];
-
-/** 关键词 → 词边界正则（大小写不敏感；`uv` 不命中 `uvicorn`、`nvm` 命中 `nvm-windows`）。 */
-const KEYWORD_RES: ReadonlyMap<string, RegExp> = new Map(
-  ALL_KEYWORDS.map((kw) => [kw, new RegExp(`\\b${kw}\\b`, 'i')]),
-);
-
-/** 支持导入的文件类型（按文件名识别，§7.7-2）。 */
-export type ImportFileKind = 'AGENTS.md' | 'CLAUDE.md';
-
-/** 按文件名识别导入类型：basename 大小写不敏感匹配；其余 → undefined。 */
-export function identifyImportFile(fileName: string): ImportFileKind | undefined {
-  const base = toPosixSeparators(fileName).split('/').pop() ?? '';
-  const lower = base.toLowerCase();
-  if (lower === 'agents.md') {
-    return 'AGENTS.md';
-  }
-  if (lower === 'claude.md') {
-    return 'CLAUDE.md';
-  }
-  return undefined;
-}
+export {
+  IMPORT_FILE_RULES,
+  type ImportFileKind,
+  type ImportFileRule,
+  identifyImportFile,
+  importFileTool,
+  supportedImportFileHint,
+  supportedImportFileKinds,
+} from './file-kinds';
 
 /** Markdown 内容块（`## ` 标题切分；首块可能无标题——文件头散文本）。 */
 export interface ImportBlock {
@@ -72,6 +54,13 @@ export interface ImportSuggestions {
   readonly pythonManager: string | undefined;
   /** 命中的 JS 包管理器（全部，按优先级序）。 */
   readonly packageManagers: readonly string[];
+  /**
+   * 新增类别命中（category id → 命中关键词，按表内顺序）；无命中的类别不出现。
+   *
+   * 单独开一个字段而不是把 6 个类别摊平成 6 个字段：类别表是数据驱动的，
+   * 加一类只该动 keywords.ts 一处。
+   */
+  readonly extraToolchains: Readonly<Record<string, readonly string[]>>;
 }
 
 /** parseImportedFile 结果。 */
@@ -98,13 +87,7 @@ function stripAllMarkerSections(content: string): string {
 
 /** 构造内容块：词边界关键词命中收集。 */
 function makeBlock(content: string, heading: string | null): ImportBlock {
-  const lower = content.toLowerCase();
-  const hits: string[] = [];
-  for (const kw of ALL_KEYWORDS) {
-    if (KEYWORD_RES.get(kw)?.test(lower) === true) {
-      hits.push(kw);
-    }
-  }
+  const hits = ALL_KEYWORDS.filter((keyword) => matchesKeyword(content, keyword));
   return { heading, content, toolchainHits: hits };
 }
 
@@ -165,8 +148,21 @@ export function hasAnySuggestion(suggestions: ImportSuggestions): boolean {
   return (
     suggestions.nodeManager !== undefined ||
     suggestions.pythonManager !== undefined ||
-    suggestions.packageManagers.length > 0
+    suggestions.packageManagers.length > 0 ||
+    Object.keys(suggestions.extraToolchains).length > 0
   );
+}
+
+/** 新增类别的命中聚合（无命中的类别不进结果，保持 detected.import 干净）。 */
+function collectExtraToolchains(blocks: readonly ImportBlock[]): Record<string, readonly string[]> {
+  const extras: Record<string, readonly string[]> = {};
+  for (const category of EXTRA_TOOLCHAIN_CATEGORIES) {
+    const hits = allHits(blocks, category.keywords);
+    if (hits.length > 0) {
+      extras[category.id] = hits;
+    }
+  }
+  return extras;
 }
 
 /**
@@ -186,8 +182,21 @@ export function parseImportedFile(content: string): ImportParseResult {
       nodeManager: firstHit(blocks, NODE_MANAGER_KEYWORDS),
       pythonManager: firstHit(blocks, PYTHON_MANAGER_KEYWORDS),
       packageManagers: allHits(blocks, PACKAGE_MANAGER_KEYWORDS),
+      extraToolchains: collectExtraToolchains(blocks),
     },
   };
+}
+
+/** 新增类别 → detected.import 的键值（每项与既有 package_managers 同构）。 */
+function extraDetectedEntries(suggestions: ImportSuggestions): Record<string, unknown> {
+  const entries: Record<string, unknown> = {};
+  for (const category of EXTRA_TOOLCHAIN_CATEGORIES) {
+    const hits = suggestions.extraToolchains[category.id];
+    if (hits !== undefined && hits.length > 0) {
+      entries[category.detectedKey] = hits.map((name) => ({ name, source: 'import' as const }));
+    }
+  }
+  return entries;
 }
 
 /** habits.detected.import 建议对象（source: 'import'，§7.7-4；仅写入命中的键）。 */
@@ -214,6 +223,7 @@ export function buildImportDetected(
           })),
         }
       : {}),
+    ...extraDetectedEntries(suggestions),
   };
 }
 

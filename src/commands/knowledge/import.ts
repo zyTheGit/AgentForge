@@ -1,10 +1,11 @@
 /**
- * aforge import 命令（Spec §7.7 Import MVP，M9）：从既有 AGENTS.md / CLAUDE.md
+ * aforge import 命令（Spec §7.7 Import，M9 + Phase 2 扩展）：从既有规则文件
  * 导入工具链声明与规则内容。
  *
  * `aforge import <path> [--json]`：
  * - 未初始化（effective scope 层 SoT 无 profile.yaml）→ ConfigError(2)；
- * - 文件不存在 / 不可读 / 文件名不是 AGENTS.md|CLAUDE.md → ConfigError(2)；
+ * - 文件不存在 / 不可读 / 路径不在可识别文件表内 → ConfigError(2)
+ *   （可识别全集见 core/importer/file-kinds，报错 hint 会列出来）；
  * - 解析（纯函数，见 core/importer/importer）：
  *   · 工具链声明 → habits.yaml 的 detected.import 建议字段（source: 'import'）；
  *   · 其余内容块 → `<SoT>\custom\imported-<timestamp>.md`（原样保留块标题）；
@@ -26,7 +27,9 @@ import {
   identifyImportFile,
   importTimestamp,
   parseImportedFile,
+  supportedImportFileHint,
 } from '../../core/importer/importer';
+import { EXTRA_TOOLCHAIN_CATEGORIES } from '../../core/importer/keywords';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
 import { atomicWrite } from '../../infra/fsutil';
 import { getUi, type Ui } from '../../infra/ui';
@@ -86,11 +89,12 @@ export async function runImport(ctx: ImportCommandContext, pathArg: string): Pro
     });
   }
 
-  // §7.7-2：按文件名识别类型（MVP 仅 AGENTS.md / CLAUDE.md）
-  const kind = identifyImportFile(path.basename(importFile));
+  // §7.7-2：按识别表判定类型（传完整路径——`.cursor/rules/*.mdc`、
+  // `.github/copilot-instructions.md` 的判据含父目录，只给 basename 会漏判）
+  const kind = identifyImportFile(importFile);
   if (kind === undefined) {
     throw new ConfigError(`不支持的导入文件: ${path.basename(importFile)}`, {
-      hint: 'MVP 仅支持 AGENTS.md / CLAUDE.md（按文件名识别）',
+      hint: supportedImportFileHint(),
       details: { importFile },
     });
   }
@@ -132,23 +136,31 @@ export async function runImport(ctx: ImportCommandContext, pathArg: string): Pro
 /** 建议摘要行的 label 宽度（`package managers` 最长，冒号同列）。 */
 const SUGGESTION_LABEL_WIDTH = 17;
 
-/** 建议摘要行（两列对齐；无命中时输出暗色 '(none)'）。 */
+/**
+ * 建议摘要行（两列对齐）：三个既有类别恒定输出（无命中时暗色 '(none)'），
+ * 新增类别只在命中时追加一行——否则默认输出会被一串 '(none)' 淹掉。
+ */
 function suggestionSummary(s: ImportSuggestions, ui: Ui): string[] {
   const pms = s.packageManagers.join(', ');
   const none = ui.dim('(none)');
-  return [
+  const lines = [
     ui.kv('node manager', s.nodeManager ?? none, SUGGESTION_LABEL_WIDTH),
     ui.kv('python manager', s.pythonManager ?? none, SUGGESTION_LABEL_WIDTH),
     ui.kv('package managers', pms === '' ? none : pms, SUGGESTION_LABEL_WIDTH),
   ];
+  for (const category of EXTRA_TOOLCHAIN_CATEGORIES) {
+    const hits = s.extraToolchains[category.id];
+    if (hits !== undefined && hits.length > 0) {
+      lines.push(ui.kv(category.label, hits.join(', '), SUGGESTION_LABEL_WIDTH));
+    }
+  }
+  return lines;
 }
 
 export function registerImportCommand(program: Command): void {
   program
     .command('import <path>')
-    .description(
-      'import toolchain declarations and rule blocks from an existing AGENTS.md / CLAUDE.md',
-    )
+    .description('import toolchain declarations and rule blocks from an existing rule file')
     .option('--json', 'machine-readable output (absolute paths) - Spec 6.2')
     .action(async (pathArg: string, options: { json?: boolean }, command: Command) => {
       const result = await runImport(defaultCommandContext(), pathArg);
