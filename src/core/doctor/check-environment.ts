@@ -1,6 +1,6 @@
 /**
- * 环境类诊断（Spec §9 第 6/7 条 + symlink 失败检查）：声明值 vs detected 快照、
- * OneDrive 检测、skills/ 下断开的 symlink。
+ * 环境类诊断（Spec §9 第 6/7 条 + skills/ symlink 检查）：声明值 vs detected 快照、
+ * OneDrive 检测、skills/ 下的 symlink 条目。
  *
  * 为什么单独成模块：这三项检查的对象是**机器环境**而非 SoT 配置内容——它们不依赖
  * projector / plan，OneDrive 与 symlink 两项甚至在 EffectiveConfig 装配失败时仍要
@@ -108,8 +108,18 @@ export function checkPiCodingAgentDir(results: DoctorCheckResult[], env: EnvSnap
   });
 }
 
-/** §9 symlink 失败检查：扫描 SoT skills/ 目录，检测断开的 symlink → warn。 */
-export async function checkBrokenSymlinks(
+/**
+ * §9 symlink 检查：扫描 SoT skills/ 顶层，**任何** symlink 条目都报 warn。
+ *
+ * 为什么不只报断开的：手工 symlink 进 SoT 的技能会落进一个三方口径不一致的缝里——
+ * `skill list` 用 stat 能看见它、`sync` 走 host.exists 照常物化它，但 `bundle export`
+ * 按 §7.9「symlink 一律不跟随」把它整个跳过。只报断开的，等于让用户直到迁移那一刻
+ * 才发现这个技能没被带走。有效的 symlink 因此同样要报，hint 里点明它不会进 bundle。
+ *
+ * 投影恒为实体 copy 且 `copy_mode: symlink` 已决定不实现（§4.2），所以 skills/ 下的
+ * symlink 不可能由 AgentForge 自己产生，报 warn 不会误伤正常安装。
+ */
+export async function checkSkillsSymlinks(
   host: Host,
   results: DoctorCheckResult[],
   userSoTRoot: string | undefined,
@@ -120,7 +130,8 @@ export async function checkBrokenSymlinks(
     skillsDirs.push(path.join(userSoTRoot, SKILLS_DIRNAME));
   }
   skillsDirs.push(path.join(projectSoTRoot, SKILLS_DIRNAME));
-  const brokenSymlinks: string[] = [];
+  const broken: string[] = [];
+  const intact: string[] = [];
   for (const dir of skillsDirs) {
     let entries: string[];
     try {
@@ -139,34 +150,44 @@ export async function checkBrokenSymlinks(
       if (!lstatResult.isSymbolicLink) {
         continue;
       }
-      // 是 symlink，检查目标是否存在
       let target: string;
       try {
         target = await host.readlink(entryPath);
       } catch {
         continue; // readlink 失败：跳过
       }
-      // 检查 symlink 目标是否存在（用 exists，它会跟随 symlink）
-      const targetExists = await host.exists(entryPath);
-      if (!targetExists) {
-        brokenSymlinks.push(`${entryPath} -> ${target}`);
+      // exists 跟随 symlink：目标不存在即断开
+      if (await host.exists(entryPath)) {
+        intact.push(`${entryPath} -> ${target}`);
+      } else {
+        broken.push(`${entryPath} -> ${target}`);
       }
     }
   }
-  if (brokenSymlinks.length > 0) {
-    results.push({
-      section: 'environment',
-      level: 'warn',
-      item: 'broken-symlink',
-      detail: `发现 ${brokenSymlinks.length} 个断开的 symlink:\n${brokenSymlinks.join('\n')}`,
-      hint: '建议设置 skills.copy_mode: copy（避免 symlink 跨平台问题），或删除无效 symlink 后重新 skill add',
-    });
-  } else {
+  if (broken.length === 0 && intact.length === 0) {
     results.push({
       section: 'environment',
       level: 'ok',
-      item: 'broken-symlink',
-      detail: '未发现断开的 symlink（skills/ 目录）',
+      item: 'skills-symlink',
+      detail: '未发现 symlink 条目（skills/ 目录）',
     });
+    return;
   }
+  const lines: string[] = [];
+  if (broken.length > 0) {
+    lines.push(`断开的 symlink ${broken.length} 个:`, ...broken);
+  }
+  if (intact.length > 0) {
+    lines.push(`仍有效的 symlink ${intact.length} 个:`, ...intact);
+  }
+  results.push({
+    section: 'environment',
+    level: 'warn',
+    item: 'skills-symlink',
+    detail: `skills/ 下发现 ${broken.length + intact.length} 个 symlink 条目:\n${lines.join('\n')}`,
+    hint:
+      intact.length > 0
+        ? 'skills/ 下的 symlink 不会被 aforge bundle export 带走（§7.9 一律不跟随），迁移时会静默丢失该技能；把它换成实体目录（aforge skill add 的实体 copy）。断开的条目请直接删除后重新 add'
+        : '删除这些断开的 symlink 后重新 aforge skill add（投影恒为实体 copy，copy_mode: symlink 不予实现，见 §4.2）',
+  });
 }

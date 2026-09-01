@@ -219,7 +219,7 @@ describe('runDoctorChecks — 未解析模板（§9 第 5 条）', () => {
   });
 });
 
-describe('runDoctorChecks — skills.copy_mode 已声明未实现（§4.2 注记 / §12 Phase 2）', () => {
+describe('runDoctorChecks — skills.copy_mode: symlink 恒被忽略且不实现（§4.2）', () => {
   it('copy_mode: symlink → skills-copy-mode warn，且不影响退出码', async () => {
     const host = createDoctorHost();
     await seedProjectSoT(
@@ -565,55 +565,77 @@ describe('runDoctorChecks — 可写性探针（P3：残留清理 + 并发安全
   });
 });
 
-describe('runDoctorChecks — broken symlink（§9 symlink 失败检查）', () => {
-  it('skills/ 目录无 symlink → broken-symlink ok', async () => {
+describe('runDoctorChecks — skills/ symlink（§9）', () => {
+  it('skills/ 目录无 symlink → skills-symlink ok', async () => {
     const host = createDoctorHost();
     await seedProjectSoT(host);
     const report = await runDoctorChecks(doctorOpts(host));
-    const r = resultOf(report, 'broken-symlink');
+    const r = resultOf(report, 'skills-symlink');
     expect(r.level).toBe('ok');
-    expect(r.detail).toContain('未发现断开');
+    expect(r.detail).toContain('未发现 symlink');
   });
 
-  it('skills/ 目录有断开的 symlink → broken-symlink warn', async () => {
-    const base = createDoctorHost();
-    await seedProjectSoT(base);
-    // 模拟一个 broken symlink：lstat 返回 isSymbolicLink=true，exists 返回 false
-    const brokenLink = path.join(PROJECT_SOT, 'skills', 'broken-skill');
-    const host: FakeHost = {
+  /** skills/ 下放一个 symlink 条目：targetExists 决定它是断开的还是仍有效的。 */
+  function hostWithSkillSymlink(
+    base: FakeHost,
+    name: string,
+    target: string,
+    targetExists: boolean,
+  ): FakeHost {
+    const link = path.join(PROJECT_SOT, 'skills', name);
+    return {
       ...base,
       async listDir(p) {
         if (p === path.join(PROJECT_SOT, 'skills')) {
-          return ['broken-skill'];
+          return [name];
         }
         return base.listDir(p);
       },
       async lstat(p) {
-        if (p === brokenLink) {
+        if (p === link) {
           return { isFile: false, isDirectory: false, isSymbolicLink: true, size: 0, mtimeMs: 0 };
         }
         return base.lstat(p);
       },
       async readlink(p) {
-        if (p === brokenLink) {
-          return '/nonexistent/target';
+        if (p === link) {
+          return target;
         }
         return base.readlink(p);
       },
       async exists(p) {
-        if (p === brokenLink) {
-          return false; // symlink 目标不存在
+        if (p === link) {
+          return targetExists;
         }
         return base.exists(p);
       },
     };
+  }
+
+  it('skills/ 目录有断开的 symlink → skills-symlink warn', async () => {
+    const base = createDoctorHost();
+    await seedProjectSoT(base);
+    const host = hostWithSkillSymlink(base, 'broken-skill', '/nonexistent/target', false);
     const report = await runDoctorChecks(doctorOpts(host));
-    const r = resultOf(report, 'broken-symlink');
+    const r = resultOf(report, 'skills-symlink');
     expect(r.level).toBe('warn');
     expect(r.detail).toContain('断开');
     expect(r.detail).toContain('broken-skill');
     expect(r.hint).toContain('copy_mode');
     expect(report.exitCode).toBe(0); // warn 不抬升退出码
+  });
+
+  it('仍有效的 symlink 同样报 warn，并点明不会被 bundle export 带走', async () => {
+    const base = createDoctorHost();
+    await seedProjectSoT(base);
+    const host = hostWithSkillSymlink(base, 'linked-skill', '/elsewhere/linked-skill', true);
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'skills-symlink');
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain('仍有效');
+    expect(r.detail).toContain('linked-skill');
+    expect(r.hint).toContain('bundle export');
+    expect(report.exitCode).toBe(0);
   });
 
   it('PI_CODING_AGENT_DIR 置位 → ok 并打出生效目录（未置位时不产出该项）', async () => {

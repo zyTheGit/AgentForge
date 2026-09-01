@@ -62,6 +62,8 @@ codex 是四家里唯一用 `$` 的，`/<name>` 不展开。`aforge skill add` �
 - 源仓库布局须为 `<源根>\skills\<name>\SKILL.md`；
 - 目标 `skills\<name>` 已有内容 → 退出码 3，先手删该目录再装；
 - 源里的 symlink 一律跳过不跟随（防私钥等被读进 SoT），跳过项在输出的 `skipped` 里列出；
+- `profile.yaml` 里的 `skills.copy_mode: symlink` **恒被忽略**（投影与安装恒为实体 copy），且已决定**不予实现**（Spec §4.2：与 §7.6 prune 的 hash 判据冲突、Windows 默认无创建权限、四家客户端读取行为未实测）。写了该值 `aforge doctor` 会报 `skills-copy-mode` warn；
+- 自己手工 symlink 进 `.agentforge\skills\` 的技能能被 `skill list` 看见、也会被 `sync` 投影，但 `aforge bundle export` 会**整个跳过**它（symlink 一律不跟随），迁移时会丢。`aforge doctor` 现在把这类条目一并报成 `skills-symlink` warn；
 - `skills.always` 点了名却没装 → `sync` 直接报错退出码 2；
 - 装到 user 层时注意 §5.3 合并语义：`merge.arrays: replace`（缺省）下 project 层自己写了 `skills.always` 就会整体覆盖 user 层那份；
 - 附属文件（脚本、参考资料）会拷进 SoT，但当前只有 `SKILL.md` 正文参与投影。
