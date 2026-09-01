@@ -103,6 +103,13 @@
           "default": "copy",
           "type": "string",
           "enum": ["copy", "symlink"]
+        },
+        "expose_as_command": {
+          "description": "额外投影成命令/prompt 薄壳的 skill 名（Spec §8.8）：必须是 skills.always 的子集，否则 sync 退出码 2；codex 的 project scope 不支持命令文件，按 skip + doctor warn 处理",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
