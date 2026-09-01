@@ -29,8 +29,11 @@ export interface PackageManagerField {
 /** pyproject.toml 文本级 [tool.*] 段线索。 */
 export type PythonManagerClue = 'uv' | 'poetry' | 'pipenv';
 
-/** 取首个非空、非 `#` 注释行并剥掉 v 前缀（.node-version / .python-version 共用）。 */
-function parseFirstVersionLine(content: string): string | undefined {
+/**
+ * 取首个非空、非 `#` 注释行并剥掉 v 前缀
+ * （.node-version / .python-version / .java-version 共用）。
+ */
+export function parseFirstVersionLine(content: string): string | undefined {
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (line === '' || line.startsWith('#')) {

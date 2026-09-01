@@ -18,7 +18,10 @@ import { resolveJsonFlag } from '../_shared/flags';
 export function registerDetectCommand(program: Command): void {
   program
     .command('detect')
-    .description('probe local toolchain (node/python/package managers/shell) without side effects')
+    .description(
+      'probe local toolchain (node/python/java/dotnet/package managers/monorepo/CI/shell) ' +
+        'without side effects',
+    )
     .option('--json', 'print machine-readable JSON (absolute paths)')
     .action(async (options: { json?: boolean }, command: Command) => {
       const snapshot = await runDetection({
@@ -92,6 +95,18 @@ function printHuman(snapshot: DetectedSnapshot, ui: Ui = getUi()): void {
 
   lines.push('', ui.bold('Go'));
   printTool(lines, snapshot.go, ui);
+
+  lines.push('', ui.bold('Java'));
+  printRuntime(lines, snapshot.java, ui);
+
+  lines.push('', ui.bold('.NET'));
+  printRuntime(lines, snapshot.dotnet, ui);
+
+  lines.push('', ui.bold('Monorepo'));
+  printTool(lines, snapshot.monorepo, ui);
+
+  lines.push('', ui.bold('CI'));
+  printTool(lines, snapshot.ci, ui);
 
   lines.push('', ui.bold('Existing rule files'));
   if (snapshot.existing_rules.length === 0) {
