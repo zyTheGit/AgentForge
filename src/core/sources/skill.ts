@@ -386,27 +386,13 @@ async function locateSourceSkillDir(
 }
 
 /**
- * manifest.skills 条目取 name（§4.5 loose 结构：字段可缺失 / 非字符串）。
- *
- * 提成命名函数而非内联三元箭头：条目形状是 unknown，取值要经两次类型收窄，
- * 内联写法在 map 里挤成一个无花括号的条件体（可读性 + biome useBlockStatements）。
- *
- * @returns name 字段的字符串值；缺失或非字符串 → `''`（调用方过滤空名）。
- */
-function manifestSkillName(entry: unknown): string {
-  const name = (entry as { name?: unknown } | null)?.name;
-  if (typeof name === 'string') {
-    return name;
-  }
-  return '';
-}
-
-/**
  * skill 清单（SoT skills\ + 源 skills 清单）：
  * - SoT 侧列 skills\ 直接子目录名（project 层与 user 层分别标注，同名时
  *   两层都列出——project 优先生效，§5.3）；
- * - 源侧优先读 manifest（含 skills 数组则取其 name 字段；loose 结构），
- *   无 manifest / 无 skills 字段时直接列源 skills\ 目录名。
+ * - 源侧优先读 manifest（含 skills 数组则取其 name 字段；§4.5 已强约束
+ *   name 必填非空，缺 name 的条目在 loadSourceManifest 就报 ConfigError(2)，
+ *   不再像早期那样被静默跳过），无 manifest / 无 skills 字段时直接列源
+ *   skills\ 目录名。
  */
 export async function listSkills(ctx: SkillContext): Promise<SkillListItem[]> {
   const items: SkillListItem[] = [];
@@ -448,7 +434,7 @@ export async function listSkills(ctx: SkillContext): Promise<SkillListItem[]> {
     const declared = manifest?.skills ?? [];
     const names =
       declared.length > 0
-        ? declared.map(manifestSkillName).filter((n) => n !== '')
+        ? declared.map((entry) => entry.name)
         : await listDirSafe(ctx.host, path.join(root, SKILLS_DIRNAME));
     for (const name of [...new Set(names)].sort()) {
       items.push({ name, status: 'available', origin: source.id });

@@ -46,8 +46,16 @@
       "type": "array",
       "items": {
         "type": "object",
-        "properties": {},
-        "additionalProperties": {}
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": ["name"]
       }
     },
     "mcp": {
@@ -55,8 +63,51 @@
       "type": "array",
       "items": {
         "type": "object",
-        "properties": {},
-        "additionalProperties": {}
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "transport": {
+            "type": "string",
+            "enum": ["stdio", "http", "sse"]
+          },
+          "command": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "env": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "url": {
+            "type": "string"
+          },
+          "headers": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["name", "transport"]
       }
     }
   },

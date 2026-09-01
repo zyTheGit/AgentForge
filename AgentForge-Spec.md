@@ -415,9 +415,22 @@ templates:
   - id: tools/modern-js
     path: templates/tools/modern-js.md
     description: string
-skills: []
-mcp: []
+skills:
+  - name: pdf
+    description: string
+mcp:
+  - name: fetch
+    enabled: true
+    transport: stdio
+    command: npx
+    args: [-y, mcp-server-fetch]
 ```
+
+- `templates[]`：`id` / `path` / `description` 三字段均必填。
+- `skills[]`：`name` 必填且为非空字符串，取值即包内 `skills/<name>/SKILL.md` 的目录名；`description` 可选字符串。未知键忽略（向前兼容）。
+- `mcp[]`：元素结构与 §4.2 `mcp.servers[]` 完全一致——`name`（必填）、`enabled`（缺省 `true`）、`transport`（`stdio | http | sse`，必填）、`command` / `args` / `env`（stdio）、`url` / `headers`（http/sse），复用同一套字段定义与校验。
+- 三个数组均可缺省，缺省视为 `[]`；`skills` 缺省或为空时，skill 清单退化为扫描包内 `skills/` 目录。
+- **校验时机与错误码**：manifest 由源加载路径（`loadSourceManifest`）在读取时按上述契约校验。文件不存在不算错误（目录型源可只放 `skills/`）；YAML 语法错误或 schema 不通过 → `ConfigError`，**退出码 2**，逐条列出出错字段路径。
 
 ---
 
