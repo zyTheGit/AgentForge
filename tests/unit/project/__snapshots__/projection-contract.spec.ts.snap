@@ -1,0 +1,58 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`投影产物字节级不变（四内置 target × project/user） > project scope 的 plan items 指纹 1`] = `
+{
+  "claude": [
+    "merge_marker C:\\proj\\CLAUDE.md sha256:047e812b294fc882",
+    "write C:\\proj\\.claude\\skills\\demo\\SKILL.md sha256:aab47e994e7773d5",
+    "write C:\\proj\\.claude\\commands\\demo.md sha256:753211be67d527b8",
+    "merge_json C:\\proj\\.mcp.json sha256:8cb81b5439bd19e9",
+  ],
+  "codex": [
+    "merge_marker C:\\proj\\AGENTS.md sha256:047e812b294fc882",
+    "write C:\\proj\\.agents\\skills\\demo\\SKILL.md sha256:aab47e994e7773d5",
+    "merge_toml C:\\proj\\.codex\\config.toml sha256:bb20695d710a00ec",
+  ],
+  "opencode": [
+    "merge_marker C:\\proj\\AGENTS.md sha256:047e812b294fc882",
+    "write C:\\proj\\.opencode\\skills\\demo\\SKILL.md sha256:aab47e994e7773d5",
+    "write C:\\proj\\.opencode\\command\\demo.md sha256:753211be67d527b8",
+    "merge_json C:\\proj\\opencode.json sha256:c7bd46a26904cb4a",
+  ],
+  "pi": [
+    "merge_marker C:\\proj\\AGENTS.md sha256:047e812b294fc882",
+    "write C:\\proj\\.pi\\skills\\demo\\SKILL.md sha256:aab47e994e7773d5",
+    "write C:\\proj\\.pi\\prompts\\demo.md sha256:753211be67d527b8",
+    "merge_json(soft) C:\\proj\\.pi\\mcp.json sha256:566c349135ab6ee1",
+  ],
+}
+`;
+
+exports[`投影产物字节级不变（四内置 target × project/user） > user scope 的 plan items 指纹 1`] = `
+{
+  "claude": [
+    "merge_marker C:\\Users\\u\\.claude\\CLAUDE.md sha256:047e812b294fc882",
+    "write C:\\Users\\u\\.claude\\skills\\demo\\SKILL.md sha256:aab47e994e7773d5",
+    "write C:\\Users\\u\\.claude\\commands\\demo.md sha256:753211be67d527b8",
+    "merge_json C:\\Users\\u\\.mcp.json sha256:8cb81b5439bd19e9",
+  ],
+  "codex": [
+    "merge_marker C:\\Users\\u\\.codex\\AGENTS.md sha256:047e812b294fc882",
+    "write C:\\Users\\u\\.codex\\skills\\demo\\SKILL.md sha256:aab47e994e7773d5",
+    "write C:\\Users\\u\\.codex\\prompts\\demo.md sha256:753211be67d527b8",
+    "merge_toml C:\\Users\\u\\.codex\\config.toml sha256:bb20695d710a00ec",
+  ],
+  "opencode": [
+    "merge_marker C:\\Users\\u\\.config\\opencode\\AGENTS.md sha256:047e812b294fc882",
+    "write C:\\Users\\u\\.config\\opencode\\skills\\demo\\SKILL.md sha256:aab47e994e7773d5",
+    "write C:\\Users\\u\\.config\\opencode\\command\\demo.md sha256:753211be67d527b8",
+    "merge_json C:\\Users\\u\\.config\\opencode\\opencode.json sha256:c7bd46a26904cb4a",
+  ],
+  "pi": [
+    "merge_marker C:\\Users\\u\\.pi\\agent\\AGENTS.md sha256:047e812b294fc882",
+    "write C:\\Users\\u\\.pi\\agent\\skills\\demo\\SKILL.md sha256:aab47e994e7773d5",
+    "write C:\\Users\\u\\.pi\\agent\\prompts\\demo.md sha256:753211be67d527b8",
+    "merge_json(soft) C:\\Users\\u\\.pi\\agent\\mcp.json sha256:566c349135ab6ee1",
+  ],
+}
+`;

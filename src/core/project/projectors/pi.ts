@@ -104,16 +104,19 @@ export function piMainRulePath(ctx: ProjectContext): string {
   return api.join(base, PI_MAIN_RULE_FILENAME);
 }
 
+/** skills 根目录（project / user 两个 scope 不同）。 */
+export function piSkillsDir(ctx: ProjectContext): string {
+  const api = pathApiFor(ctx.os);
+  // §2.3：project = `<root>\.pi\skills`
+  // §8.6：user = `~\.pi\agent\skills`
+  return ctx.scope === 'project'
+    ? api.join(ctx.rootDir, PI_DIRNAME, SKILLS_DIRNAME)
+    : api.join(piUserDir(ctx), SKILLS_DIRNAME);
+}
+
 /** 单个 skill 的目标 SKILL.md 路径（project / user 两个 scope 的 skills 根不同）。 */
 export function piSkillPath(ctx: ProjectContext, skillName: string): string {
-  const api = pathApiFor(ctx.os);
-  // §2.3：project = `<root>\.pi\skills\<name>\SKILL.md`
-  // §8.6：user = `~\.pi\agent\skills\<name>\SKILL.md`
-  const skillsRoot =
-    ctx.scope === 'project'
-      ? api.join(ctx.rootDir, PI_DIRNAME, SKILLS_DIRNAME)
-      : api.join(piUserDir(ctx), SKILLS_DIRNAME);
-  return skillDocPath(api, skillsRoot, skillName);
+  return skillDocPath(pathApiFor(ctx.os), piSkillsDir(ctx), skillName);
 }
 
 /**
@@ -148,6 +151,9 @@ export const piProjector: Projector = {
 
   /** §8.8 实测：交互模式把 skillCommandList 并入补全候选，按 `/<name>` 调用。 */
   skillInvokePrefix: '/',
+
+  skillDir: piSkillsDir,
+  skillPath: piSkillPath,
 
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];

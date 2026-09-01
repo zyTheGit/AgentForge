@@ -23,7 +23,7 @@ import { DEFAULT_PROJECTION_MARKERS, type ProjectionMarkers } from './writer';
 export const GITIGNORE_FILE = '.gitignore';
 
 /**
- * .gitignore 在 SyncResult 里的伪 target id（不属于 ALL_TARGET_IDS，
+ * .gitignore 在 SyncResult 里的伪 target id（不在 `registeredTargetIds()` 内，
  * 也不写 sync-meta.targets——仅用于命令层输出标注）。
  */
 export const GITIGNORE_TARGET_ID = 'gitignore';

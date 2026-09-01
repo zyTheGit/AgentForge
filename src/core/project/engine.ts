@@ -77,7 +77,7 @@ import { renderedSectionHash } from '../markers';
 import { resolveProjectSoT, resolveUserSoT } from '../paths';
 import { readSkillsToMaterialize } from '../sources/skill';
 import { resolveCommandsToExpose } from './commands';
-import { projectorRegistry } from './projectors/registry';
+import { projectorRegistry, registeredTargetIds } from './projectors/registry';
 import { buildGitignoreItem, GITIGNORE_MARKERS, GITIGNORE_TARGET_ID } from './sync-gitignore';
 import { acquireSyncLocks, releaseSyncLocks, resolveLockRoots } from './sync-lock';
 import { collectCommandSkips, collectPlanMcpTransportNotices } from './sync-notices';
@@ -104,7 +104,6 @@ import {
   transactionWarningsOf,
 } from './sync-transaction';
 import {
-  ALL_TARGET_IDS,
   attachFailureReport,
   type SyncFailureReport,
   type SyncOptions,
@@ -121,6 +120,11 @@ import {
 import type { ProjectContext } from './types';
 import { applyItem } from './writer';
 
+export {
+  BUILTIN_TARGET_IDS,
+  type BuiltinTargetId,
+  registeredTargetIds,
+} from './projectors/registry';
 export { rollbackActiveSyncTransactionSync } from './sync-abort';
 export {
   buildGitignoreItem,
@@ -148,9 +152,7 @@ export {
   SYNC_BACKUP_JOURNAL_FILE,
 } from './sync-transaction';
 export {
-  ALL_TARGET_IDS,
   getSyncFailureReport,
-  REGISTERED_PROJECTORS,
   type SyncCommandSkip,
   type SyncFailureReport,
   type SyncItemStatus,
@@ -233,7 +235,7 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
 
   if (planned.length === 0) {
     throw new ConfigError('没有可同步的 target', {
-      hint: `注册表中可用的 target: ${ALL_TARGET_IDS.join(', ')}`,
+      hint: `注册表中可用的 target: ${registeredTargetIds().join(', ')}`,
       details: { requested, skippedTargets },
     });
   }

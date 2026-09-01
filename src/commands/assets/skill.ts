@@ -24,10 +24,6 @@ import { defaultHabits, windowsDefaultProfile } from '../../core/config/defaults
 import { resolveWriteTargetLayer, type TargetLayer } from '../../core/config/target-layer';
 import { type EnvSnapshot, readEnv, type Scope } from '../../core/env';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
-import { claudeSkillPath } from '../../core/project/projectors/claude';
-import { codexSkillPath } from '../../core/project/projectors/codex';
-import { opencodeSkillPath } from '../../core/project/projectors/opencode';
-import { piSkillPath } from '../../core/project/projectors/pi';
 import { projectorRegistry } from '../../core/project/projectors/registry';
 import { withSotLock } from '../../core/project/sync-lock';
 import type { ProjectContext, SkillInvokePrefix } from '../../core/project/types';
@@ -159,20 +155,24 @@ function skillLine(item: SkillListItem, ui: Ui): string {
 }
 
 /**
- * 本次写入那一层上、四个 target 实际会落 `skills\<name>\SKILL.md` 的绝对路径。
+ * 本次写入那一层上，**各已注册 target** 实际会落 `skills\<name>\SKILL.md` 的绝对路径。
  *
- * 路径一律取自 projector 的 skills 解析函数（Spec §2.3 / §8.3-8.6 是它们的唯一出处）：
+ * 路径一律取自 `Projector.skillPath`（Spec §2.3 / §8.3-8.6 是它的唯一出处）：
  * 命令层原先写死的 `.claude / .opencode / .agents / .pi` 只对 project 层成立，
  * `--scope user` 时 opencode（`~\.config\opencode`）、codex（`CODEX_HOME` 或
  * `~\.codex`）的全局根根本不在项目根下，用户照那行提示找不到要删的文件。
  *
- * projector 的签名要 ProjectContext，但这几个函数只读 os / scope / rootDir / env；
+ * 顺序 = 注册顺序（opencode → codex → claude → pi）。走注册表而非 import 四个
+ * `*SkillPath`（Phase 3）：新增 target 时这里自动跟上，不会静默漏一条路径。
+ * 顺序本身也是契约（用户照这几行去删文件），故导出以便测试固化条数与顺序。
+ *
+ * projector 的签名要 ProjectContext，但 skillPath 只读 os / scope / rootDir / env；
  * profile 与 habits 仅为满足类型用默认值填充（同 init -i 的 targetMainRulePaths），
  * 不参与路径计算，也不落盘。
  *
  * @param env 由调用方传入（命令层已读过一次），避免同一条命令里重复 readEnv。
  */
-function projectedSkillDocPaths(
+export function projectedSkillDocPaths(
   ctx: SkillCommandContext,
   env: EnvSnapshot,
   scope: Scope,
@@ -195,15 +195,10 @@ function projectedSkillDocPaths(
     markerBegin: profile.projection.marker_begin,
     markerEnd: profile.projection.marker_end,
     markerMode: profile.projection.marker_mode,
-    // env 必须注入：codexSkillPath 走 ctx.env?.codexHome 分支，缺了会忽略 CODEX_HOME
+    // env 必须注入：codex 的 skillPath 走 ctx.env?.codexHome 分支，缺了会忽略 CODEX_HOME
     env,
   };
-  return [
-    opencodeSkillPath(planCtx, skillName),
-    codexSkillPath(planCtx, skillName),
-    claudeSkillPath(planCtx, skillName),
-    piSkillPath(planCtx, skillName),
-  ];
+  return projectorRegistry.list().map((projector) => projector.skillPath(planCtx, skillName));
 }
 
 /**

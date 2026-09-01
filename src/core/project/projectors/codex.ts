@@ -177,16 +177,19 @@ export function codexMainRulePath(ctx: ProjectContext): string {
   return api.join(base, CODEX_MAIN_RULE_FILENAME);
 }
 
+/** skills 根目录（project / user 两个 scope 不同）。 */
+export function codexSkillsDir(ctx: ProjectContext): string {
+  const api = pathApiFor(ctx.os);
+  // §2.3：project = `<root>\.agents\skills`
+  // §8.4：user = `CODEX_HOME\skills` 或 `~\.codex\skills`
+  return ctx.scope === 'project'
+    ? api.join(ctx.rootDir, CODEX_PROJECT_SKILLS_DIRNAME, SKILLS_DIRNAME)
+    : api.join(codexUserDir(ctx), SKILLS_DIRNAME);
+}
+
 /** 单个 skill 的目标 SKILL.md 路径（project / user 两个 scope 的 skills 根不同）。 */
 export function codexSkillPath(ctx: ProjectContext, skillName: string): string {
-  const api = pathApiFor(ctx.os);
-  // §2.3：project = `<root>\.agents\skills\<name>\SKILL.md`
-  // §8.4：user = `CODEX_HOME\skills\` 或 `~\.codex\skills\`
-  const skillsRoot =
-    ctx.scope === 'project'
-      ? api.join(ctx.rootDir, CODEX_PROJECT_SKILLS_DIRNAME, SKILLS_DIRNAME)
-      : api.join(codexUserDir(ctx), SKILLS_DIRNAME);
-  return skillDocPath(api, skillsRoot, skillName);
+  return skillDocPath(pathApiFor(ctx.os), codexSkillsDir(ctx), skillName);
 }
 
 /**
@@ -222,6 +225,9 @@ export const codexProjector: Projector = {
    * `/<name>` 不展开。status 必须显式提示，否则用户会以为 codex 没生效。
    */
   skillInvokePrefix: '$',
+
+  skillDir: codexSkillsDir,
+  skillPath: codexSkillPath,
 
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];

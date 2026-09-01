@@ -42,10 +42,23 @@
  */
 import { z } from 'zod';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../core/markers';
+import { BUILTIN_TARGET_IDS } from '../core/project/target-ids';
 import { SchemaVersion, ScopeEnum } from './common';
 
-/** Spec §4.2 targets 元素：四个投影目标。 */
-export const TargetEnum = z.enum(['opencode', 'codex', 'claude', 'pi']);
+/**
+ * Spec §4.2 targets 元素：内置的四个投影目标。
+ *
+ * 取值域直接来自 `core/project/target-ids`（与 projector 注册表的装配表同一份元组），
+ * 不再另抄一遍字面量：加第五个内置 projector 时忘改这里，症状会是「新 target 能用
+ * `--targets`、却写不进 profile.yaml」这种没有编译错误的静默偏差。
+ *
+ * 之所以取那个**叶子**模块而不是 `projectors/registry`：registry → projectors/* →
+ * project/types → schema/profile 已经是一条依赖链，从这里反向 import registry 会成环。
+ *
+ * 注意本枚举只认内置 id：运行时后补注册的第三方 target 目前进不了 profile.yaml
+ * （roadmap Phase 3 第二层放开外部适配器加载时再议）。
+ */
+export const TargetEnum = z.enum(BUILTIN_TARGET_IDS);
 
 /**
  * Spec §4.2 skills.copy_mode。

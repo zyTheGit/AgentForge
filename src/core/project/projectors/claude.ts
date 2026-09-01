@@ -59,12 +59,17 @@ export function claudeMainRulePath(ctx: ProjectContext): string {
   return pathApiFor(ctx.os).join(claudeBaseDir(ctx), CLAUDE_MAIN_RULE_FILENAME);
 }
 
+/** skills 根目录：`<rootDir>\.claude\skills`（project / user 两个 scope 同构）。 */
+export function claudeSkillsDir(ctx: ProjectContext): string {
+  const api = pathApiFor(ctx.os);
+  // §8.5：project = `<root>\.claude\skills`；user = `<home>\.claude\skills`
+  // 两个 scope 同构（rootDir 分别为项目根 / 用户目录）
+  return api.join(ctx.rootDir, CLAUDE_DIRNAME, SKILLS_DIRNAME);
+}
+
 /** 单个 skill 的目标路径（M5 仅定义契约；M8 物化时由 projector 产出 write 项）。 */
 export function claudeSkillPath(ctx: ProjectContext, skillName: string): string {
-  const api = pathApiFor(ctx.os);
-  // §8.5：project = `<root>\.claude\skills\<name>\SKILL.md`；user = `<home>\.claude\skills\...`
-  // 两个 scope 同构（rootDir 分别为项目根 / 用户目录）
-  return skillDocPath(api, api.join(ctx.rootDir, CLAUDE_DIRNAME, SKILLS_DIRNAME), skillName);
+  return skillDocPath(pathApiFor(ctx.os), claudeSkillsDir(ctx), skillName);
 }
 
 /**
@@ -113,6 +118,9 @@ export const claudeProjector: Projector = {
 
   /** §8.8 实测：`claude --help` 明写 "Skills still resolve via /skill-name"。 */
   skillInvokePrefix: '/',
+
+  skillDir: claudeSkillsDir,
+  skillPath: claudeSkillPath,
 
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];

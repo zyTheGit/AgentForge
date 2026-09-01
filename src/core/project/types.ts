@@ -157,6 +157,21 @@ export interface Projector {
   readonly skillInvokePrefix: SkillInvokePrefix;
   plan(ctx: ProjectContext): ProjectionPlan;
   /**
+   * 该 target 的 skills 根目录（`<...>/skills`，随 scope 变化）。
+   *
+   * 与 skillPath 一起进契约（Phase 3）：命令层原先 import 四个具体 projector 模块的
+   * `*SkillPath` 函数来算「sync 会把技能投影到哪」，等于绕过 Projector 接口直连实现——
+   * 第五个 target 出现时那四行 import 不会报错，只会**静默漏一条路径**。挂在接口上后
+   * 新 target 漏实现即编译失败，命令层只认 `projectorRegistry`。
+   *
+   * **当前没有生产调用点**（命令层只用 `skillPath`，四个内置 projector 只做赋值）：
+   * 保留它是为第三方 target 与后续 doctor 检查（「skills 根存在 / 有残留」这类需要
+   * 目录本身而非单个文件的诊断）预留——不是死代码，删了第二层还得加回来。
+   */
+  skillDir(ctx: ProjectContext): string;
+  /** 单个技能的 `SKILL.md` 绝对路径（= `<skillDir>/<name>/SKILL.md`）。 */
+  skillPath(ctx: ProjectContext, skillName: string): string;
+  /**
    * M5 不实现（引擎统一执行）；返回类型 never 表示当前版本调用即视为契约违规。
    * M6 全事务化（plan 全部 target → 逐一 apply → 失败回滚）时再评估是否下放。
    */

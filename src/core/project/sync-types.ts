@@ -12,15 +12,8 @@ import type { Host } from '../../infra/host';
 import type { EnvSnapshot, Scope } from '../env';
 import type { OsContext } from '../paths';
 import type { McpTransportNotice } from './projectors/mcp-transport';
-import { projectorRegistry } from './projectors/registry';
 import type { SyncPrunedEntry, SyncPruneSkip } from './sync-prune';
-import type { ProjectionPlanItem, Projector } from './types';
-
-/** Spec §4.2 targets 全集（--targets 合法性校验基准）。 */
-export const ALL_TARGET_IDS = ['opencode', 'codex', 'claude', 'pi'] as const;
-
-/** 已注册的 projector（M6 起四件套齐备；经注册表获取，注册顺序即投影顺序）。 */
-export const REGISTERED_PROJECTORS: readonly Projector[] = projectorRegistry.list();
+import type { ProjectionPlanItem } from './types';
 
 /** syncOnce 输入（host/os/cwd 由命令层注入；测试可注入 fake host 与任意平台）。 */
 export interface SyncOptions {

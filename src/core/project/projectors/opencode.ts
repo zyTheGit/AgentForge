@@ -96,16 +96,19 @@ export function opencodeClaudeRulePath(ctx: ProjectContext): string {
   return api.join(base, OPENCODE_CLAUDE_RULE_FILENAME);
 }
 
+/** skills 根目录（project / user 两个 scope 不同）。 */
+export function opencodeSkillsDir(ctx: ProjectContext): string {
+  const api = pathApiFor(ctx.os);
+  // §2.3：project = `<root>\.opencode\skills`
+  // §8.3：user = `~\.config\opencode\skills`
+  return ctx.scope === 'project'
+    ? api.join(ctx.rootDir, OPENCODE_DIRNAME, SKILLS_DIRNAME)
+    : api.join(opencodeUserDir(ctx), SKILLS_DIRNAME);
+}
+
 /** 单个 skill 的目标 SKILL.md 路径（project / user 两个 scope 的 skills 根不同）。 */
 export function opencodeSkillPath(ctx: ProjectContext, skillName: string): string {
-  const api = pathApiFor(ctx.os);
-  // §2.3：project = `<root>\.opencode\skills\<name>\SKILL.md`
-  // §8.3：user = `~\.config\opencode\skills\<name>\SKILL.md`
-  const skillsRoot =
-    ctx.scope === 'project'
-      ? api.join(ctx.rootDir, OPENCODE_DIRNAME, SKILLS_DIRNAME)
-      : api.join(opencodeUserDir(ctx), SKILLS_DIRNAME);
-  return skillDocPath(api, skillsRoot, skillName);
+  return skillDocPath(pathApiFor(ctx.os), opencodeSkillsDir(ctx), skillName);
 }
 
 /** MCP 配置绝对路径（project 级项目根下 opencode.json，Spec §2.3 二选一取项目根）。 */
@@ -137,6 +140,9 @@ export const opencodeProjector: Projector = {
 
   /** §8.8 实测：`GET /command` 里技能以 `source: "skill"` 出现，按 `/<name>` 调用。 */
   skillInvokePrefix: '/',
+
+  skillDir: opencodeSkillsDir,
+  skillPath: opencodeSkillPath,
 
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];

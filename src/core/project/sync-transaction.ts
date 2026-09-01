@@ -417,7 +417,7 @@ export function detachTransaction(tx: SyncTransaction): void {
   }
 }
 
-/** transactionWarnings 的伪 targetId（不属于 ALL_TARGET_IDS，不参与 sync-meta 记账）。 */
+/** transactionWarnings 的伪 targetId（不在 `registeredTargetIds()` 内，不参与 sync-meta 记账）。 */
 const TRANSACTION_WARNING_TARGET_ID = '(transaction)';
 
 /**
