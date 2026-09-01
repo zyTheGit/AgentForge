@@ -12,7 +12,10 @@
  * 而下游 resolveWriteTargetLayer 的入参是 `Scope` 联合类型。校验 + 收窄这一步在
  * 每个带 `--scope` 的子命令 action 里都一样，故收敛为 parseScopeOption。
  *
- * `init` 的运行模式（交互 / 静默）同样是一次纯标志判定，故与上两者同列（见
+ * `--confidence` 同理：commander 交上来是裸字符串，而下游要的是 [0,1] 的数字，
+ * 且"没给"与"给错了"必须区分开（见 parseConfidenceOption）。
+ *
+ * `init` 的运行模式（交互 / 静默）同样是一次纯标志判定，故与上几者同列（见
  * resolveInitMode）——放在 action 里内联会让「四个输入的优先级」这一条契约既不可
  * 单测也没有单一出处。
  */
@@ -62,6 +65,29 @@ export function parseScopeOption(raw: string | undefined): Scope | undefined {
     });
   }
   return raw;
+}
+
+/**
+ * `--confidence <0-1>` 的解析与范围校验（Spec §4.3 confidence）。
+ *
+ * 未指定 → undefined，由 `createLearning` 走启发式自动打分（core/learning/scoring）。
+ * 拼错的值绝不静默退化成"那就自动打分吧"——用户点名给了一个值却被忽略，比报错
+ * 难查得多；空串同理（`--confidence ""` 是敲错了，不是"我不想给"）。
+ *
+ * @throws ConfigError(2) 非数字 / 非有限值 / 越界 [0,1]。
+ */
+export function parseConfidenceOption(raw: string | undefined): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const value = Number.parseFloat(raw.trim());
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new ConfigError(`非法 confidence: ${raw}`, {
+      hint: '取值为 0 到 1 之间的小数（如 0.8）；省略该选项则由启发式自动打分',
+      details: { confidence: raw },
+    });
+  }
+  return value;
 }
 
 /**

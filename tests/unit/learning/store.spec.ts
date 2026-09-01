@@ -2,18 +2,21 @@
  * learning store 单测（Spec §4.3 / §7.4 / §7.5 / §10 / §11.2.3 前置）。
  *
  * 覆盖：id 生成与校验（正则 / Windows 非法字符）、createLearning 默认值与
- * CI 守卫、重复检测（§7.5 仍创建）、CRUD、YAML 往返（长行不折行）。
+ * CI 守卫、confidence 的自动打分与显式覆盖、相似度判重两档（§7.5 仍创建）、
+ * 老 YAML（无 confidence_source）向后兼容、CRUD、YAML 往返（长行不折行）。
  */
 
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { ConfigError } from '../../../src/core/errors';
+import { scoreConfidence } from '../../../src/core/learning/scoring';
 import {
   createLearning,
   generateId,
   learningFilePath,
   listLearnings,
+  parseLearningText,
   removeLearning,
   showLearning,
   updateLearning,
@@ -105,20 +108,20 @@ describe('validateLearningId', () => {
 });
 
 describe('createLearning', () => {
-  it('默认值：promoted:false / scope:project / category:other / confidence:0.5 / source:manual / trigger:"" / promote_target:custom_rule；created_at=updated_at=now', async () => {
+  it('默认值：promoted:false / scope:project / category:other / source:manual / trigger:"" / promote_target:custom_rule；created_at=updated_at=now', async () => {
     const host = createDirAwareHost();
-    const { learning, file, duplicateOf } = await createLearning(
+    const { learning, file, duplicateOf, similarTo } = await createLearning(
       { host, sotRoot: SOT },
       { content: '规则内容' },
     );
 
     expect(duplicateOf).toBeUndefined();
+    expect(similarTo).toBeUndefined();
     expect(learning.id).toMatch(LearningIdPattern);
     expect(learning.promoted).toBe(false);
     expect(learning.promoted_at).toBeNull();
     expect(learning.scope).toBe('project');
     expect(learning.category).toBe('other');
-    expect(learning.confidence).toBe(0.5);
     expect(learning.source).toBe('manual');
     expect(learning.trigger).toBe('');
     expect(learning.promote_target).toBe('custom_rule');
@@ -131,6 +134,81 @@ describe('createLearning', () => {
     expect(host.files.get(file)).toBeDefined();
     const parsed = parseYaml(host.files.get(file) ?? '');
     expect(parsed.content).toBe('规则内容');
+  });
+
+  it('未给 confidence → 走启发式自动打分（不再是硬编码 0.5），confidence_source:auto', async () => {
+    const host = createDirAwareHost();
+    const { learning, confidenceScore } = await createLearning(
+      { host, sotRoot: SOT },
+      { content: '规则内容' },
+    );
+
+    // 最小信息量条目：只有 scope=project 一个信号命中 → 0.2 + 0.1 x 0.7
+    expect(learning.confidence).toBe(0.27);
+    expect(learning.confidence_source).toBe('auto');
+    // breakdown 随结果带回命令层展示（"为什么是这个分"）
+    expect(confidenceScore?.value).toBe(0.27);
+    expect(confidenceScore?.signals).toHaveLength(6);
+    // 落盘的也是这个 base 值
+    expect(parseYaml(host.files.get(learningFilePath(SOT, learning.id)) ?? '').confidence).toBe(
+      0.27,
+    );
+  });
+
+  it('自动打分随内容质量变化（信息足的条目分更高，且与纯函数结果一致）', async () => {
+    const host = createDirAwareHost();
+    const content = [
+      '必须用 `pnpm install` 安装依赖，锁文件见 src/config/pnpm-lock.yaml：',
+      '```sh',
+      'pnpm install --frozen-lockfile',
+      '```',
+    ].join('\n');
+    const { learning } = await createLearning(
+      { host, sotRoot: SOT },
+      {
+        content,
+        id: 'rich',
+        trigger: 'when adding deps',
+        category: 'tooling',
+        promoteTarget: 'skill',
+      },
+    );
+    expect(learning.confidence).toBe(
+      scoreConfidence({
+        content,
+        trigger: 'when adding deps',
+        category: 'tooling',
+        scope: 'project',
+        promoteTarget: 'skill',
+      }).value,
+    );
+    expect(learning.confidence).toBeGreaterThan(0.27);
+  });
+
+  it('显式给 confidence → 原样落盘、不被自动打分覆盖，confidence_source:manual 且无 breakdown', async () => {
+    const host = createDirAwareHost();
+    const { learning, confidenceScore } = await createLearning(
+      { host, sotRoot: SOT },
+      { content: '规则内容', confidence: 0.42 },
+    );
+    expect(learning.confidence).toBe(0.42);
+    expect(learning.confidence_source).toBe('manual');
+    expect(confidenceScore).toBeUndefined();
+  });
+
+  it('显式 confidence 的边界 0 与 1 都不被"看起来像没给"误判', async () => {
+    const host = createDirAwareHost();
+    const zero = await createLearning(
+      { host, sotRoot: SOT },
+      { content: 'x', confidence: 0, id: 'zero' },
+    );
+    expect(zero.learning.confidence).toBe(0);
+    expect(zero.learning.confidence_source).toBe('manual');
+    const one = await createLearning(
+      { host, sotRoot: SOT },
+      { content: 'y', confidence: 1, id: 'one' },
+    );
+    expect(one.learning.confidence).toBe(1);
   });
 
   it('自定义字段全量生效（id/trigger/category/confidence/scope/source/promoteTarget）', async () => {
@@ -200,6 +278,52 @@ describe('createLearning', () => {
     expect(all.map((l) => l.id).sort()).toEqual(['first', 'second']);
   });
 
+  it('相似度判重：只差标点 / 大小写 → 仍判 duplicateOf（原先的 content 全等判据会漏）', async () => {
+    const host = createDirAwareHost();
+    await createLearning(
+      { host, sotRoot: SOT },
+      { content: '依赖安装统一走 pnpm，不要用 npm install。', id: 'orig' },
+    );
+    const again = await createLearning(
+      { host, sotRoot: SOT },
+      { content: '依赖安装统一走 pnpm；不要用 NPM install', id: 'variant' },
+    );
+    expect(again.duplicateOf).toBe('orig');
+    expect(again.similarTo).toBeUndefined();
+  });
+
+  it('相似度判重：中等相似 → similarTo（合并建议），不占用 duplicateOf、不阻断创建', async () => {
+    const host = createDirAwareHost();
+    await createLearning(
+      { host, sotRoot: SOT },
+      { content: '依赖安装统一走 pnpm，不要用 npm install 直接装。', id: 'base' },
+    );
+    const near = await createLearning(
+      { host, sotRoot: SOT },
+      {
+        content: '依赖安装统一走 pnpm，不要用 npm install 直接装，锁文件必须提交。',
+        id: 'near',
+      },
+    );
+    expect(near.duplicateOf).toBeUndefined();
+    expect(near.similarTo?.id).toBe('base');
+    expect(near.similarTo?.verdict).toBe('similar');
+    expect(near.similarTo?.score).toBeGreaterThan(0.65);
+    // 仍然落盘（不做自动合并，合并由人决定）
+    expect(host.files.has(learningFilePath(SOT, 'near'))).toBe(true);
+  });
+
+  it('无关内容 → duplicateOf / similarTo 都缺席', async () => {
+    const host = createDirAwareHost();
+    await createLearning({ host, sotRoot: SOT }, { content: '依赖安装统一走 pnpm。', id: 'deps' });
+    const other = await createLearning(
+      { host, sotRoot: SOT },
+      { content: '提交信息一律用中文，首行不超过 50 个字符。', id: 'commit' },
+    );
+    expect(other.duplicateOf).toBeUndefined();
+    expect(other.similarTo).toBeUndefined();
+  });
+
   it('重复检测只匹配未晋升条目：已 promoted 的同 content 不计 duplicateOf', async () => {
     const host = createDirAwareHost();
     await createLearning({ host, sotRoot: SOT }, { content: '规则', id: 'promoted-one' });
@@ -229,6 +353,56 @@ describe('createLearning', () => {
     // 落盘文本里 content 行保持单行（无折行续行）
     expect((host.files.get(learningFilePath(SOT, 'long')) ?? '').includes(long.slice(0, 20))).toBe(
       true,
+    );
+  });
+});
+
+describe('老 YAML 向后兼容（confidence_source 是可选新增字段）', () => {
+  /** 自动打分上线**前**写下的条目：没有 confidence_source 键。 */
+  const LEGACY_YAML = [
+    'id: legacy-entry',
+    'scope: project',
+    'confidence: 0.5',
+    'trigger: ""',
+    'content: 旧条目内容',
+    'category: other',
+    'source: manual',
+    'created_at: 2026-01-01T00:00:00.000Z',
+    'updated_at: 2026-01-01T00:00:00.000Z',
+    'promoted: false',
+    'promoted_at: null',
+    'promote_target: custom_rule',
+    '',
+  ].join('\n');
+
+  it('缺 confidence_source 仍能通过校验，字段为 undefined（不被当成校验失败）', () => {
+    const learning = parseLearningText('legacy.yaml', LEGACY_YAML);
+    expect(learning.id).toBe('legacy-entry');
+    expect(learning.confidence).toBe(0.5);
+    expect(learning.confidence_source).toBeUndefined();
+  });
+
+  it('showLearning 读老条目正常；后续 update 不凭空补出 auto', async () => {
+    const host = createDirAwareHost();
+    host.files.set(learningFilePath(SOT, 'legacy-entry'), LEGACY_YAML);
+
+    const read = await showLearning({ host, sotRoot: SOT }, 'legacy-entry');
+    expect(read.confidence_source).toBeUndefined();
+
+    const updated = await updateLearning({ host, sotRoot: SOT }, 'legacy-entry', {
+      trigger: 'when installing',
+    });
+    // 只改了 trigger：来源未知就保持未知，不假装是自动打分出来的
+    expect(updated.confidence_source).toBeUndefined();
+    expect(updated.confidence).toBe(0.5);
+  });
+
+  it('落盘文本不写 confidence_source: null（缺席就是缺席）', async () => {
+    const host = createDirAwareHost();
+    host.files.set(learningFilePath(SOT, 'legacy-entry'), LEGACY_YAML);
+    await updateLearning({ host, sotRoot: SOT }, 'legacy-entry', { category: 'tooling' });
+    expect(host.files.get(learningFilePath(SOT, 'legacy-entry'))).not.toContain(
+      'confidence_source',
     );
   });
 });
@@ -272,6 +446,23 @@ describe('CRUD（list/show/update/remove）', () => {
     // fake host 的 now() 恒为 epoch，无法区分新旧——改为断言写回了文件且可再读
     const reread = await showLearning({ host, sotRoot: SOT }, 'upd');
     expect(reread).toEqual(updated);
+  });
+
+  it('updateLearning 改 confidence → confidence_source 自动翻成 manual', async () => {
+    const host = createDirAwareHost();
+    const created = await createLearning({ host, sotRoot: SOT }, { content: '内容', id: 'src' });
+    expect(created.learning.confidence_source).toBe('auto');
+
+    const updated = await updateLearning({ host, sotRoot: SOT }, 'src', { confidence: 0.95 });
+    expect(updated.confidence).toBe(0.95);
+    expect(updated.confidence_source).toBe('manual');
+  });
+
+  it('updateLearning 不碰 confidence 时保留原来源', async () => {
+    const host = createDirAwareHost();
+    await createLearning({ host, sotRoot: SOT }, { content: '内容', id: 'keep' });
+    const updated = await updateLearning({ host, sotRoot: SOT }, 'keep', { category: 'process' });
+    expect(updated.confidence_source).toBe('auto');
   });
 
   it('updateLearning 不存在 → ConfigError(2)', async () => {

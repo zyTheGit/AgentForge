@@ -1,13 +1,15 @@
 /**
  * aforge learn 命令（Spec §6 命令表 / §7.4）。
  *
- * `aforge learn [--scope project|user] [--file <path>|-] [--id <id>]`：
+ * `aforge learn [--scope project|user] [--file <path>|-] [--id <id>] [--confidence <0-1>]`：
  * - 输入（§7.4-1）：--file <path> 读文件（相对 cwd）| --file - 读 stdin |
  *   无参数且 TTY → 交互粘贴；非 TTY 无输入 → ConfigError(2)；
  * - 落层：`--scope` > 生效 profile 的 `learning.default_scope`（§4.2）；
  * - 元数据：TTY 时交互询问 trigger / category / confidence（非交互用默认值）；
+ * - `--confidence` 显式给值 → 原样落盘并跳过自动打分；**省略 → 启发式打分**
+ *   （core/learning/scoring，不再硬编码 0.5），breakdown 随输出打印；
  * - 结构化写入目标层 learnings/（§7.4-2/3，**不**自动进入投影）；
- * - 内容重复 → warning（§7.5：仍创建）；
+ * - 内容与既有未晋升条目高度相似 → warning（§7.5：仍创建）；中等相似 → 合并建议；
  * - 完成后提示 `aforge promote <id>`（§7.4-4）。
  *
  * 核心逻辑在 core/learning/store.createLearning；本层只做输入采集与输出。
@@ -36,8 +38,9 @@ import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
 import { getUi, type Ui } from '../../infra/ui';
 import type { LearningCategory, Profile } from '../../schema';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
-import { parseScopeOption, resolveJsonFlag } from '../_shared/flags';
+import { parseConfidenceOption, parseScopeOption, resolveJsonFlag } from '../_shared/flags';
 import { isInteractiveStdin, readStdinText } from '../_shared/stdin';
+import { confidenceKvLine, learningQualityJson, similarityHintLine } from './confidence-view';
 
 /** 详情行的 label 宽度（`category` / `promoted` / `WARNING` 同档，冒号同列）。 */
 const LEARN_LABEL_WIDTH = 8;
@@ -57,6 +60,7 @@ export interface LearnOptions {
   readonly stdinContent?: string;
   readonly trigger?: string;
   readonly category?: LearningCategory;
+  /** 显式置信度；省略 → createLearning 走启发式自动打分。 */
   readonly confidence?: number;
   readonly id?: string;
   /** 内容来源标识（file:<path> / stdin / paste / cli）。 */
@@ -177,11 +181,17 @@ const CATEGORY_OPTIONS = [
   { value: 'other' as const, label: 'other' },
 ];
 
-/** 交互采集元数据（trigger / category / confidence；取消 → null 表示放弃）。 */
+/**
+ * 交互采集元数据（trigger / category / confidence；取消 → null 表示放弃）。
+ *
+ * confidence 留空 → `undefined`，交给启发式自动打分（初始值刻意为空而不是 0.5：
+ * 预填一个数会让人以为"这就是系统的判断"，然后直接回车把它固化下来）。填了但不是
+ * [0,1] 的数 → parseConfidenceOption 抛 ConfigError(2)，不静默兜底。
+ */
 async function promptMetadata(): Promise<{
   trigger: string;
   category: LearningCategory;
-  confidence: number;
+  confidence: number | undefined;
 } | null> {
   const trigger = await text({
     message: 'Trigger（何时应用此规则，可留空）',
@@ -199,18 +209,17 @@ async function promptMetadata(): Promise<{
     return null;
   }
   const confidenceRaw = await text({
-    message: 'Confidence (0-1)',
-    placeholder: '0.5',
-    initialValue: '0.5',
+    message: 'Confidence (0-1，留空 = 自动打分)',
+    placeholder: 'auto',
   });
   if (isCancel(confidenceRaw)) {
     return null;
   }
-  const confidence = Number.parseFloat(confidenceRaw);
+  const trimmed = confidenceRaw.trim();
   return {
     trigger: trigger.trim(),
     category,
-    confidence: Number.isFinite(confidence) ? confidence : 0.5,
+    confidence: trimmed === '' ? undefined : parseConfidenceOption(trimmed),
   };
 }
 
@@ -247,6 +256,10 @@ export function registerLearnCommand(program: Command): void {
     )
     .option('--file <path>', 'read content from a file, or "-" for stdin')
     .option('--id <id>', 'custom learning id (default: auto-generated)')
+    .option(
+      '--confidence <value>',
+      'explicit confidence 0-1 (default: scored by heuristics from the content)',
+    )
     .option('--no-auto-promote', 'do not promote right away even if learning.auto_promote is true')
     .action(
       async (
@@ -254,6 +267,7 @@ export function registerLearnCommand(program: Command): void {
           scope?: string;
           file?: string;
           id?: string;
+          confidence?: string;
           json?: boolean;
           autoPromote?: boolean;
         },
@@ -261,6 +275,7 @@ export function registerLearnCommand(program: Command): void {
       ) => {
         const json = resolveJsonFlag(command, options.json);
         const scope = parseScopeOption(options.scope);
+        const explicitConfidence = parseConfidenceOption(options.confidence);
         // commander 的 --no-x 无参时恒为 true，区分不出"未指定"；只把显式 false
         // 当覆盖，其余交回 profile.learning.auto_promote
         const autoPromote = options.autoPromote === false ? false : undefined;
@@ -289,7 +304,8 @@ export function registerLearnCommand(program: Command): void {
         // ---- 元数据（TTY 交互；非交互走默认值）----
         let trigger: string | undefined;
         let category: LearningCategory | undefined;
-        let confidence: number | undefined;
+        // `--confidence` 显式给了就不再被交互应答覆盖（标志比提问更明确）
+        let confidence: number | undefined = explicitConfidence;
         if (options.file === undefined && isInteractiveStdin()) {
           const meta = await promptMetadata();
           if (meta === null) {
@@ -298,10 +314,11 @@ export function registerLearnCommand(program: Command): void {
           }
           trigger = meta.trigger;
           category = meta.category;
-          confidence = meta.confidence;
+          confidence = explicitConfidence ?? meta.confidence;
         }
 
-        const result = await runLearn(defaultCommandContext(), {
+        const ctx = defaultCommandContext();
+        const result = await runLearn(ctx, {
           scope,
           file: options.file,
           stdinContent,
@@ -311,6 +328,7 @@ export function registerLearnCommand(program: Command): void {
           id: options.id,
           autoPromote,
         });
+        const now = ctx.host.now();
 
         if (json) {
           // §6.2 机器可读输出：与 doctor/status --json 同风格（绝对路径 + 结构化字段）
@@ -320,6 +338,8 @@ export function registerLearnCommand(program: Command): void {
             sotRoot: result.sotRoot,
             file: result.file,
             duplicateOf: result.duplicateOf ?? null,
+            similarTo: result.similarTo ?? null,
+            quality: learningQualityJson(result.learning, now),
             autoPromote: describeAutoPromoteJson(result.autoPromote),
           });
           throwAutoPromoteFailure(result.autoPromote);
@@ -335,6 +355,7 @@ export function registerLearnCommand(program: Command): void {
             LEARN_LABEL_WIDTH,
           ),
           ui.kv('category', result.learning.category, LEARN_LABEL_WIDTH),
+          confidenceKvLine(result.learning, now, LEARN_LABEL_WIDTH, ui),
           ui.kv('file', ui.path(result.file), LEARN_LABEL_WIDTH),
         ];
         if (result.duplicateOf !== undefined) {
@@ -347,6 +368,9 @@ export function registerLearnCommand(program: Command): void {
               LEARN_LABEL_WIDTH,
             ),
           );
+        }
+        if (result.similarTo !== undefined) {
+          lines.push(ui.kv('NOTE', similarityHintLine(result.similarTo, ui), LEARN_LABEL_WIDTH));
         }
         lines.push(...autoPromoteLines(result));
         console.log(lines.join('\n'));

@@ -15,6 +15,10 @@
       "minimum": 0,
       "maximum": 1
     },
+    "confidence_source": {
+      "type": "string",
+      "enum": ["auto", "manual"]
+    },
     "trigger": {
       "type": "string"
     },
