@@ -18,12 +18,45 @@
 | `aforge mcp add [--scope s] [--from-json] [--json]` / `remove <name> [--scope s] [--json]` | 登记 / 移除 MCP 服务器声明（`--from-json` 从 stdin 读 JSON 声明） |
 | `aforge status [--json]` | SoT 概览：scope、目标路径（含各 target 的技能调用前缀）、最近 sync、内容计数、`learning.auto_capture` 生效档位 |
 | `aforge doctor [--json]` | 体检：配置合法性、投影一致性、环境问题 |
-| `aforge import <path>` | 从既有 AGENTS.md / CLAUDE.md 导入工具链声明与素材 |
+| `aforge import <path>` | 从既有规则文件（AGENTS.md / CLAUDE.md / GEMINI.md / .cursorrules / .cursor/rules/*.mdc / .windsurfrules / .github/copilot-instructions.md / opencode.md）导入工具链声明与素材 |
 | `aforge bundle export --out <dir>` / `import --from <dir>` | 把一层 SoT 打包搬走 / 落回（见 [迁移 SoT](bundle.md)） |
 
 `--json` 同时是 program 级全局标志：任何子命令都可写成 `aforge --json <cmd>`，输出为机器可读 JSON（路径一律绝对路径）。注意 `mcp add` 的**输入**标志叫 `--from-json`，`--json` 只表示输出契约。
 
 `--no-color` / `--color` 是**位置无关**的呈现开关（写在命令前后都算），只影响人类可读输出；缺省按终端能力自动判定，也认 `NO_COLOR` / `FORCE_COLOR`。分档规则见 [平台注意事项](platform.md#windows)。
+
+## import 可识别的文件与关键词覆盖
+
+`aforge import <path>` 按**声明式规则表**识别文件类型（大小写不敏感）：
+
+| 文件 | 来源工具 | 判据 |
+|------|----------|------|
+| `AGENTS.md` | agents.md 约定（opencode / codex / pi 等） | 文件名 |
+| `CLAUDE.md` | Claude Code | 文件名 |
+| `GEMINI.md` | Gemini CLI | 文件名 |
+| `opencode.md` | opencode | 文件名 |
+| `.cursorrules` | Cursor（旧版单文件） | 文件名 |
+| `.cursor/rules/*.mdc` | Cursor（新版规则目录） | 扩展名 `.mdc` **且**位于 `.cursor/rules/` 下（允许再嵌子目录） |
+| `.windsurfrules` | Windsurf | 文件名 |
+| `.github/copilot-instructions.md` | GitHub Copilot | 文件名 **且**紧邻 `.github/` 之下 |
+
+不在表内的文件 → 退出码 2，报错 hint 会列出上面这份全集。带目录判据的两项必须真的放在对应目录下：`docs/style.mdc`、仓库根的 `copilot-instructions.md` 都不算。
+
+工具链关键词按类别写进 `habits.yaml` 的 `detected.import`（`source: import`，需人工确认后再提升为声明字段）：
+
+| 类别 | `detected.import` 键 | 关键词 |
+|------|----------------------|--------|
+| Node 版本管理器 | `node.manager`（取优先级序首个） | fnm / nvm / volta / mise / nodenv / asdf |
+| Python 工具链 | `python.manager`（取优先级序首个） | uv / poetry / pipenv / conda / pyenv / pdm / hatch / rye / mamba / virtualenv |
+| JS 包管理器 | `package_managers`（全部命中） | pnpm / bun / npm / yarn / deno |
+| Rust | `rust`（全部命中） | cargo / rustup / rustc / clippy / rustfmt |
+| Go | `go`（全部命中） | golang / go.mod / go.sum / gofmt / goimports / gopls |
+| Java | `java`（全部命中） | maven / gradle / mvnw / gradlew / sdkman / jdk / java |
+| .NET | `dotnet`（全部命中） | dotnet / nuget / msbuild / csproj / csharp |
+| Monorepo | `monorepo`（全部命中） | turborepo / turbo / nx / lerna / rush.json / rushstack / changesets / pnpm-workspace / workspaces |
+| CI / 提交钩子 | `ci`（全部命中） | github actions / gitlab ci / azure pipelines / jenkins / circleci / travis / dependabot / husky / lint-staged / pre-commit / commitlint |
+
+匹配大小写不敏感且**词边界安全**：`pnpm` 不会被算成 `npm`、`javascript` 不会被算成 `java`、`uvicorn` 不会被算成 `uv`；含空格的关键词（如 `github actions`）允许换行或多空格折断。裸 `go` 与单字符的 `n` 有意不收——在中英文散文里误报率过高，Go 项目靠 `golang` / `go.mod` 等无歧义写法识别。
 
 ## 环境变量
 

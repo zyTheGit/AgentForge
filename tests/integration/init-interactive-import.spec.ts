@@ -6,9 +6,10 @@
  * 真实临时目录 + realHost（env 经包装 host 覆盖指向临时 home）；mkdtemp
  * 前缀含中文与空格（沿用既有约定）。
  *
- * import 测试覆盖：§7.7-1 文件存在性 / §7.7-2 文件名识别 / §7.7-4 映射
- * （detected.import 建议 + custom 素材）/ §7.7-6 不自动 sync（提示手动执行）/
- * 既有声明与探测快照不被覆盖 / 子进程端到端退出码。
+ * import 测试覆盖：§7.7-1 文件存在性 / §7.7-2 文件类型识别（含 Phase 2 扩展的
+ * `.cursor/rules/*.mdc`、`.github/copilot-instructions.md` 等父目录判据）/
+ * §7.7-4 映射（detected.import 建议 + custom 素材）/ §7.7-6 不自动 sync
+ * （提示手动执行）/ 既有声明与探测快照不被覆盖 / 子进程端到端退出码与 hint。
  */
 import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -30,6 +31,7 @@ import {
   targetMainRulePaths,
 } from '../../src/commands/lifecycle';
 import { readEnv } from '../../src/core/env';
+import { supportedImportFileKinds } from '../../src/core/importer/file-kinds';
 import { currentOs } from '../../src/core/paths';
 import type { Host } from '../../src/infra/host';
 import { CancelledError } from '../../src/infra/prompt';
@@ -572,13 +574,127 @@ describe('import 命令（Spec §7.7）', () => {
     ).rejects.toMatchObject({ code: 2 });
   });
 
-  it('文件名不是 AGENTS.md / CLAUDE.md → ConfigError(2)', async () => {
+  it('文件名不在可识别表内 → ConfigError(2)，hint 列出支持的全集', async () => {
     await runInit({ host: ws.host, cwd: ws.root, os: OS }, { scope: 'project' });
     const other = path.join(ws.root, 'RULES.md');
     await writeFile(other, IMPORT_SAMPLE, 'utf8');
+
     await expect(runImport({ host: ws.host, cwd: ws.root, os: OS }, other)).rejects.toMatchObject({
       code: 2,
+      name: 'ConfigError',
+      hint: expect.stringContaining('AGENTS.md'),
     });
+
+    // hint 覆盖当前支持全集（新增一种文件类型后文案自动跟上）
+    const caught = await runImport({ host: ws.host, cwd: ws.root, os: OS }, other).catch(
+      (err: unknown) => err,
+    );
+    const hint = (caught as { hint?: string }).hint ?? '';
+    for (const kind of supportedImportFileKinds()) {
+      expect(hint).toContain(kind);
+    }
+  });
+
+  it('.cursor/rules/*.mdc 端到端：父目录判据生效 + 产物落点与 detected.import 内容', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS }, { scope: 'project' });
+
+    const rulesDir = path.join(ws.root, '.cursor', 'rules');
+    await mkdir(rulesDir, { recursive: true });
+    const mdc = path.join(rulesDir, 'toolchain.mdc');
+    await writeFile(
+      mdc,
+      [
+        '# Cursor 规则',
+        '',
+        '## 工具链',
+        '- Node 用 volta。',
+        '- Rust 用 cargo + rustup。',
+        '- CI 是 GitHub Actions。',
+        '',
+        '## 代码风格',
+        '短函数优先。',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const result = await runImport({ host: ws.host, cwd: ws.root, os: OS }, mdc);
+
+    expect(result.kind).toBe('.cursor/rules/*.mdc');
+    expect(result.suggestions.nodeManager).toBe('volta');
+    expect(result.suggestions.extraToolchains).toEqual({
+      rust: ['cargo', 'rustup'],
+      ci: ['github actions'],
+    });
+
+    // habits.detected.import：既有键结构不变 + 新类别落新键
+    const habits = parseYaml(await readFile(ws.habitsFile, 'utf8'));
+    expect(habits.detected.import).toMatchObject({
+      source: 'import',
+      imported_from: 'toolchain.mdc',
+      node: { manager: 'volta', source: 'import' },
+      rust: [
+        { name: 'cargo', source: 'import' },
+        { name: 'rustup', source: 'import' },
+      ],
+      ci: [{ name: 'github actions', source: 'import' }],
+    });
+    expect(habits.detected.import.python).toBeUndefined();
+    expect(habits.detected).toHaveProperty('shell'); // 探测快照未被覆盖
+
+    // custom 素材落点不变：<SoT>/custom/imported-<ts>.md
+    expect(result.customFile).not.toBeNull();
+    const customFile = result.customFile as string;
+    expect(path.dirname(customFile)).toBe(path.join(ws.sotRoot, 'custom'));
+    expect(path.basename(customFile)).toMatch(/^imported-\d{8}-\d{6}\.md$/);
+    const customContent = await readFile(customFile, 'utf8');
+    expect(customContent).toContain('# Cursor 规则');
+    expect(customContent).toContain('## 代码风格');
+    expect(customContent).not.toContain('cargo');
+  });
+
+  it('.mdc 不在 .cursor/rules 下 → 不识别（ConfigError(2)）', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS }, { scope: 'project' });
+    const stray = path.join(ws.root, 'docs');
+    await mkdir(stray, { recursive: true });
+    const mdc = path.join(stray, 'toolchain.mdc');
+    await writeFile(mdc, IMPORT_SAMPLE, 'utf8');
+
+    await expect(runImport({ host: ws.host, cwd: ws.root, os: OS }, mdc)).rejects.toMatchObject({
+      code: 2,
+    });
+  });
+
+  it('.github/copilot-instructions.md 端到端（父目录紧邻判据）', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS }, { scope: 'project' });
+    const githubDir = path.join(ws.root, '.github');
+    await mkdir(githubDir, { recursive: true });
+    const copilot = path.join(githubDir, 'copilot-instructions.md');
+    await writeFile(copilot, '## 工具链\n包管理器用 pnpm，monorepo 用 turborepo。\n', 'utf8');
+
+    const result = await runImport({ host: ws.host, cwd: ws.root, os: OS }, copilot);
+
+    expect(result.kind).toBe('.github/copilot-instructions.md');
+    expect(result.suggestions.packageManagers).toEqual(['pnpm']);
+    expect(result.suggestions.extraToolchains.monorepo).toEqual(['turborepo']);
+    expect(result.customFile).toBeNull();
+  });
+
+  it('GEMINI.md / .cursorrules / .windsurfrules / opencode.md 均可导入', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS }, { scope: 'project' });
+
+    for (const [fileName, kind] of [
+      ['GEMINI.md', 'GEMINI.md'],
+      ['.cursorrules', '.cursorrules'],
+      ['.windsurfrules', '.windsurfrules'],
+      ['opencode.md', 'opencode.md'],
+    ] as const) {
+      const file = path.join(ws.root, fileName);
+      await writeFile(file, '## 工具链\nNode 用 fnm。\n', 'utf8');
+      const result = await runImport({ host: ws.host, cwd: ws.root, os: OS }, file);
+      expect(result.kind).toBe(kind);
+      expect(result.suggestions.nodeManager).toBe('fnm');
+    }
   });
 
   it('映射：工具链声明 → habits.detected.import；风格块 → custom/imported-*.md（§7.7-4/13）', async () => {
@@ -718,6 +834,27 @@ describe('import 命令（Spec §7.7）', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('未初始化');
     expect(result.stderr).toContain('aforge init');
+  });
+
+  it('子进程端到端：不支持的文件名 → 退出码 2，stderr 列出支持的文件名全集', async () => {
+    await runInit({ host: ws.host, cwd: ws.root, os: OS }, { scope: 'project' });
+    await writeFile(path.join(ws.root, 'RULES.md'), IMPORT_SAMPLE, 'utf8');
+
+    const result = spawnSync(
+      process.execPath,
+      ['--import', tsxImport, mainTs, '--no-color', 'import', 'RULES.md'],
+      {
+        cwd: ws.root,
+        encoding: 'utf8',
+        env: { ...process.env, USERPROFILE: ws.home, HOME: ws.home, AGF_HOME: '', CI: '' },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('不支持的导入文件');
+    for (const kind of supportedImportFileKinds()) {
+      expect(result.stderr).toContain(kind);
+    }
   });
 });
 
