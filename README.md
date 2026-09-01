@@ -108,6 +108,7 @@ aforge mcp add             # 登记 MCP 服务器，sync 时翻译成各 Agent �
 - [learning](docs/learning.md)——`learn` / `promote` 闭环与 `auto_capture`
 - [迁移 SoT](docs/bundle.md)——`bundle export/import` 换机器、备份
 - [平台注意事项与已知限制](docs/platform.md)——Windows 路径 / 换行 / 编码，并发与 symlink 边界，尚未实现的字段
+- [在 CI 中使用 aforge](docs/ci.md)——CI 里能做什么、漂移门禁 workflow、退出码排障与串行约束
 - [路线图与实现状态](docs/roadmap.md)——各 Phase 的完成度、不予实现的决策与非目标
 - 规格与需求：[AgentForge-Spec.md](AgentForge-Spec.md)、[AgentForge-PRD.md](AgentForge-PRD.md)
 
