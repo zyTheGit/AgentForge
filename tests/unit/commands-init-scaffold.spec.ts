@@ -31,6 +31,10 @@ function detection(): DetectedSnapshot {
     existing_rules: ['AGENTS.md'],
     rust: { manager: 'none', source: 'none' },
     go: { manager: 'none', source: 'none' },
+    java: { manager: 'none', source: 'none' },
+    dotnet: { manager: 'none', source: 'none' },
+    monorepo: { manager: 'none', source: 'none' },
+    ci: { manager: 'none', source: 'none' },
   };
 }
 

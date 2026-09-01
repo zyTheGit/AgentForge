@@ -3,21 +3,26 @@
  *
  * 编排顺序：
  * 1. PATH 零进程扫描（path-scan）：node/python 版本管理器候选、包管理器、
- *    rust/go 工具链、node/python 本体（→ system 推断）；
- * 2. 版本文件交叉（probes）：.node-version / .python-version /
- *    package.json#packageManager / pyproject.toml（[tool.*] 段线索）；
- * 3. 现有规则文件：cwd 下 AGENTS.md / CLAUDE.md 存在性；
- * 4. Shell 启发式（probes.detectShell）。
+ *    rust/go 工具链、java 版本管理器、monorepo 工具、各语言本体（→ system 推断）；
+ * 2. 版本文件交叉（probes / probes-runtime）：.node-version / .python-version /
+ *    package.json#packageManager / pyproject.toml / .java-version / .sdkmanrc /
+ *    global.json；
+ * 3. 工作区配置文件（probes-workspace）：monorepo 配置与 CI 流水线定义；
+ * 4. 现有规则文件：cwd 下 AGENTS.md / CLAUDE.md 存在性；
+ * 5. Shell 启发式（probes.detectShell）。
  *
  * 产出 DetectedSnapshot——结构即 habits.detected 的内容（Spec §4.1 passthrough）。
  * 已有 habits.yaml 声明时不覆盖声明：声明优先在 generator/init 层处理，本引擎只产 detected。
+ *
+ * 模块边界：本文件只做编排与 node/python/包管理器/rust/go 的判定；java/dotnet 判定在
+ * probes-runtime，monorepo/ci 判定在 probes-workspace，快照类型在 types，容错 IO 在 io。
+ * 类型与 runDetection 仍从这里 re-export，`core/detector/engine` 的 import 路径不变。
  *
  * 探测候选枚举在此局部定义（不 import schema，避免 core 运行时依赖 zod），
  * 与 schema/habits.ts 枚举的一致性由单测校验。
  */
 import path from 'node:path';
-import type { Host } from '../../infra/host';
-import type { EnvSnapshot } from '../env';
+import { createDetectIo, readOptionalFile, safeExists } from './io';
 import { scanPath } from './path-scan';
 import {
   detectShell,
@@ -26,8 +31,27 @@ import {
   parsePackageJsonManager,
   parsePyproject,
   parsePythonVersionFile,
-  type ShellName,
 } from './probes';
+import { probeRuntimes, RUNTIME_SCAN_NAMES } from './probes-runtime';
+import { probeWorkspace, WORKSPACE_SCAN_NAMES } from './probes-workspace';
+import type {
+  DetectContext,
+  DetectedPackageManager,
+  DetectedRuntime,
+  DetectedSnapshot,
+  DetectedTool,
+} from './types';
+
+export { JAVA_MANAGER_PRIORITY } from './probes-runtime';
+export { CI_PROVIDER_PRIORITY, MONOREPO_TOOL_PRIORITY } from './probes-workspace';
+export type {
+  DetectContext,
+  DetectedPackageManager,
+  DetectedRuntime,
+  DetectedSnapshot,
+  DetectedTool,
+  DetectionSource,
+} from './types';
 
 /** Node 版本管理器 PATH 命中优先级（Spec §7.2）。 */
 export const NODE_MANAGER_PRIORITY = ['fnm', 'nvm', 'volta', 'mise', 'asdf', 'n'] as const;
@@ -45,52 +69,6 @@ export const PYTHON_MANAGER_PRIORITY = [
 /** 包管理器 PATH 命中优先级（Spec §4.1 runtime.package_managers 惯例顺序）。 */
 export const PACKAGE_MANAGER_PRIORITY = ['pnpm', 'bun', 'npm', 'yarn'] as const;
 
-/** 探测结论来源。 */
-export type DetectionSource = 'path' | 'version-file' | 'package.json' | 'pyproject' | 'none';
-
-export interface DetectContext {
-  readonly host: Host;
-  /** 宿主平台（process.platform：'win32' | 'darwin' | 'linux' | ...）。 */
-  readonly os: string;
-  /** 探测基准目录（版本文件 / 规则文件相对此解析）。 */
-  readonly cwd: string;
-  /** AgentForge 环境快照（预留：未来 doctor / offline 场景使用）。 */
-  readonly env: EnvSnapshot;
-}
-
-/** node / python 探测结论（manager + 版本文件交叉出的 version）。 */
-export interface DetectedRuntime {
-  readonly manager: string;
-  readonly source: DetectionSource;
-  readonly version?: string;
-  readonly path?: string;
-}
-
-/** rust / go 探测结论。 */
-export interface DetectedTool {
-  readonly manager: string;
-  readonly source: DetectionSource;
-  readonly path?: string;
-}
-
-/** 包管理器探测结论（数组按优先级排列，package.json 声明置首）。 */
-export interface DetectedPackageManager {
-  readonly name: string;
-  readonly source: 'path' | 'package.json';
-  readonly path?: string;
-}
-
-/** habits.detected 快照（Spec §4.1 passthrough 结构；JSON 序列化即落盘形态）。 */
-export interface DetectedSnapshot {
-  readonly node: DetectedRuntime;
-  readonly python: DetectedRuntime;
-  readonly package_managers: readonly DetectedPackageManager[];
-  readonly shell: ShellName;
-  readonly existing_rules: readonly string[];
-  readonly rust: DetectedTool;
-  readonly go: DetectedTool;
-}
-
 /** 一次 PATH 扫描覆盖的全部可执行名（去重；零进程派生，每目录只 listDir 一次）。 */
 const SCAN_NAMES: readonly string[] = [
   ...new Set<string>([
@@ -102,29 +80,10 @@ const SCAN_NAMES: readonly string[] = [
     'rustup',
     'cargo',
     'go',
+    ...RUNTIME_SCAN_NAMES,
+    ...WORKSPACE_SCAN_NAMES,
   ]),
 ];
-
-/** 读可选文件：不存在 / 读失败 → undefined（探测器对坏输入一律视为无线索）。 */
-async function readOptionalFile(host: Host, file: string): Promise<string | undefined> {
-  try {
-    if (!(await host.exists(file))) {
-      return undefined;
-    }
-    return await host.readFile(file);
-  } catch {
-    return undefined;
-  }
-}
-
-/** exists 容错版：抛错 → false。 */
-async function safeExists(host: Host, file: string): Promise<boolean> {
-  try {
-    return await host.exists(file);
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Node 探测：PATH manager 命中（优先级序）→ path；否则版本文件交叉
@@ -261,11 +220,12 @@ function detectGo(hits: ReadonlyMap<string, string>): DetectedTool {
 export async function runDetection(ctx: DetectContext): Promise<DetectedSnapshot> {
   const win32 = ctx.os === 'win32';
   const api = win32 ? path.win32 : path.posix;
+  const io = createDetectIo(ctx.host, api, ctx.cwd);
 
   // 1. PATH 零进程扫描（一次覆盖全部探测名）
   const hits = await scanPath(ctx.host, SCAN_NAMES, { platform: ctx.os, cwd: ctx.cwd });
 
-  // 2. 版本文件并行读取（IO 全部容错）
+  // 2. 版本文件与工作区判据并行读取（IO 全部容错）
   const [
     nodeVersionContent,
     pythonVersionContent,
@@ -273,6 +233,8 @@ export async function runDetection(ctx: DetectContext): Promise<DetectedSnapshot
     pyprojectContent,
     agentsMd,
     claudeMd,
+    runtimes,
+    workspace,
   ] = await Promise.all([
     readOptionalFile(ctx.host, api.join(ctx.cwd, '.node-version')),
     readOptionalFile(ctx.host, api.join(ctx.cwd, '.python-version')),
@@ -280,6 +242,8 @@ export async function runDetection(ctx: DetectContext): Promise<DetectedSnapshot
     readOptionalFile(ctx.host, api.join(ctx.cwd, 'pyproject.toml')),
     safeExists(ctx.host, api.join(ctx.cwd, 'AGENTS.md')),
     safeExists(ctx.host, api.join(ctx.cwd, 'CLAUDE.md')),
+    probeRuntimes(io, hits),
+    probeWorkspace(io, hits),
   ]);
 
   const nodeVersion =
@@ -304,5 +268,9 @@ export async function runDetection(ctx: DetectContext): Promise<DetectedSnapshot
     existing_rules: existingRules,
     rust: detectRust(hits),
     go: detectGo(hits),
+    java: runtimes.java,
+    dotnet: runtimes.dotnet,
+    monorepo: workspace.monorepo,
+    ci: workspace.ci,
   };
 }

@@ -26,4 +26,5 @@
 - **`learning.auto_capture: hook`**：MVP 未实现任何 target 侧会话钩子，行为等同 `off`，`doctor` 统一 warn。
 - **`skills.on_demand`**：MVP 只登记不物化——声明的 skill 名不会被 `sync` 物化或投影，仅由 `status` / `doctor` 列出（按需装载属 Phase 2）。
 - **`skills.expose_as_command`（§8.8 Commands 投影）**：已实现，含命名空间（条目写 `ns/name`）与 `$1..$9`（`SKILL.md` frontmatter 的 `command-body`）。限制在落点：pi / codex 的命令目录平铺，带命名空间的命令降级成 `ns-name.md`，`doctor` 报 `commands/namespace-flattened` warn；codex 的 **project scope 不产出**命令薄壳（其 `prompts/` 只读 user 级），`sync` 会打一条 `[codex] commands skipped: ...`，`doctor` 报 `commands/codex-project-unsupported` warn。详见 [技能](skills.md#额外投影成命令expose_as_command)。
+- **探测器边界（`aforge detect`）**：全程零子进程、零网络，只做 PATH 文件名匹配与配置文件存在性判断，因此拿不到任何**运行时**版本号——版本一律来自版本文件（`.node-version` / `.java-version` / `.sdkmanrc` / `global.json` 等），文件没写就没有 `version`。几处具体边界：sdkman 的 `sdk` 是 shell 函数、PATH 上没有本体，只能靠 `.sdkmanrc` 或 `SDKMAN_DIR` 判出；`dotnet` 没有第三方版本管理器生态，manager 只有 `system` / `none`；`monorepo` 多工具共存时只报优先级首位（`nx` > `turbo` > `lerna` > `rush` > `pnpm-workspace`）；`ci` 纯看文件/目录，`.github/workflows/` 需含至少一个 `.yml` / `.yaml` 才算命中。字段清单见 [habits.yaml 字段参考](habits.md#detected-快照结构)。
 - **技能附属文件**：会拷进 SoT，但只有 `SKILL.md` 正文参与投影。

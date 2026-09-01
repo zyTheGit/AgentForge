@@ -173,7 +173,7 @@ custom/*.md → ## Learning Protocol → ## Learnings → ## Notes → profile.t
 
 ## detected 快照结构
 
-探测器（`src/core/detector/engine.ts:84`）写下的键，供参考与 `doctor` 比对：
+探测器（`src/core/detector/types.ts:70`）写下的键，供参考与 `doctor` 比对：
 
 ```yaml
 detected:
@@ -185,9 +185,22 @@ detected:
   existing_rules: [AGENTS.md, CLAUDE.md]
   rust: { manager: rustup, source: path }
   go: { manager: none, source: none }
+  java: { manager: sdkman, source: version-file, version: 21.0.2-tem }
+  dotnet: { manager: system, source: version-file, version: 8.0.100 }
+  monorepo: { manager: turbo, source: config-file }
+  ci: { manager: github-actions, source: config-file }
 ```
 
-`source` 取 `path` / `version-file` / `package.json` / `pyproject` / `none`。`doctor` 只比对 `node` / `python` 的 `manager`，且 detected 为 `none` 或缺失时不算不一致。
+`source` 取 `path` / `version-file` / `package.json` / `pyproject` / `config-file` / `env` / `none`。`doctor` 只比对 `node` / `python` 的 `manager`，且 detected 为 `none` 或缺失时不算不一致。
+
+后四类的候选与判据：
+
+- `java`：manager 候选 `sdkman` > `jenv` > `jabba` > `mise` > `asdf`；版本取 `.java-version`，回落 `.sdkmanrc` 的 `java=`。sdkman 的 `sdk` 是 shell 函数、PATH 上没有本体，只能靠 `.sdkmanrc`（→ `version-file`）或 `SDKMAN_DIR`（→ `env`）判定。
+- `dotnet`：manager 只有 `system` / `none`（没有第三方版本管理器生态）；版本取 `global.json` 的 `sdk.version`。
+- `monorepo`：候选 `nx` > `turbo` > `lerna` > `rush` > `pnpm-workspace`，以配置文件（`nx.json` / `turbo.json` / `lerna.json` / `rush.json` / `pnpm-workspace.yaml`）为主判据、PATH 命中为辅；多工具共存时取优先级首位。
+- `ci`：候选 `github-actions` > `gitlab-ci` > `circleci` > `jenkins` > `azure-pipelines`，纯文件/目录判据（`.github/workflows/` 需含至少一个 `.yml` / `.yaml`；其余为 `.gitlab-ci.yml` / `.circleci/config.yml` / `Jenkinsfile` / `azure-pipelines.yml`），不看 PATH。
+
+这四类目前**只出现在 `detected` 里**，声明侧（`runtime.java` 等）尚未定义，故 `habits.schema.json` 不含对应枚举。
 
 ## 校验与编辑器提示
 

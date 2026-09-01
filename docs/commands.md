@@ -6,7 +6,7 @@
 |------|------|
 | `aforge init [-i]` | 初始化。**终端里默认走交互五步**（scope → 探测 → 确认 → 选 target → 写入）；`-i` 强制交互——压过 `--yes` / `--json`，且非 TTY 下报退出码 2 而非静默降级 |
 | `aforge init --yes` / `aforge init --json` | 静默初始化（探测快照 + 骨架落盘）：scope 默认 `project`、target 默认全部四个。非 TTY（CI / 管道）自动走这条；`--scope project\|user` 可单独指定层 |
-| `aforge detect [--json]` | 探测本机工具链（node/python/包管理器/shell/已有规则文件），无副作用 |
+| `aforge detect [--json]` | 探测本机工具链（node/python/java/dotnet/包管理器/rust/go/monorepo/CI/shell/已有规则文件），无副作用 |
 | `aforge sync [--targets a,b] [--dry-run] [--force] [--json]` | 渲染 SoT 并投影到目标 Agent（规则 marker 区间 + 技能 / MCP / [命令薄壳](skills.md#额外投影成命令expose_as_command)整文件产物） |
 | `aforge learn [--scope s] [--file f\|'-'] [--id id] [--no-auto-promote]` | 记录一条 learning（不投影；`learning.auto_promote: true` 时顺手 promote，`--no-auto-promote` 单次关掉） |
 | `aforge promote <id> [--to user] [--yes]` | 将 learning 升级为 custom 规则或 skill |

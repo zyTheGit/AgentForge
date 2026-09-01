@@ -1,11 +1,15 @@
 /**
  * engine 单测：mock host 注入 PATH 与版本文件，断言 DetectedSnapshot 各字段；
- * 含探测矩阵（node manager × python 工具链 × shell，32 组合）与 schema 枚举兼容校验。
+ * 含探测矩阵（node manager × python 工具链 × shell，32 组合）、java / dotnet /
+ * monorepo / CI 四类判定矩阵，以及候选枚举的防漂移校验。
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  CI_PROVIDER_PRIORITY,
   type DetectedSnapshot,
+  JAVA_MANAGER_PRIORITY,
+  MONOREPO_TOOL_PRIORITY,
   NODE_MANAGER_PRIORITY,
   PACKAGE_MANAGER_PRIORITY,
   PYTHON_MANAGER_PRIORITY,
@@ -367,6 +371,255 @@ describe('runDetection：rust / go / 规则文件', () => {
   });
 });
 
+describe('runDetection：Java 探测', () => {
+  it('PATH 命中 jenv（sdkman 无线索时）→ path + .java-version 交叉出 version', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/bin': ['jenv.exe', 'java.exe'] },
+      files: { [projFile('.java-version')]: 'v21.0.2\n' },
+      env: { PATH: 'C:/bin' },
+    });
+    expect(snapshot.java).toEqual({
+      manager: 'jenv',
+      source: 'path',
+      version: '21.0.2',
+      path: path.win32.resolve('C:/bin', 'jenv.exe'),
+    });
+  });
+
+  it('.sdkmanrc 存在 → sdkman + version-file（压过 PATH 上的 jenv）', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/bin': ['jenv.exe', 'java.exe'] },
+      files: { [projFile('.sdkmanrc')]: 'java=21.0.2-tem\nmaven=3.9.6\n' },
+      env: { PATH: 'C:/bin' },
+    });
+    expect(snapshot.java).toEqual({
+      manager: 'sdkman',
+      source: 'version-file',
+      version: '21.0.2-tem',
+      path: path.win32.resolve('C:/bin', 'java.exe'),
+    });
+  });
+
+  it('仅 SDKMAN_DIR 环境变量 → sdkman + env', async () => {
+    const snapshot = await detectWin32({
+      dirs: {},
+      files: {},
+      env: { SDKMAN_DIR: 'C:/Users/x/.sdkman' },
+    });
+    expect(snapshot.java).toEqual({ manager: 'sdkman', source: 'env' });
+  });
+
+  it('仅 .java-version（无 manager 无本体）→ none + version-file', async () => {
+    const snapshot = await detectWin32({
+      dirs: {},
+      files: { [projFile('.java-version')]: '17' },
+      env: {},
+    });
+    expect(snapshot.java).toEqual({ manager: 'none', source: 'version-file', version: '17' });
+  });
+
+  it('仅 java 本体在 PATH → system', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/bin': ['java.exe'] },
+      files: {},
+      env: { PATH: 'C:/bin' },
+    });
+    expect(snapshot.java).toEqual({
+      manager: 'system',
+      source: 'path',
+      path: path.win32.resolve('C:/bin', 'java.exe'),
+    });
+  });
+
+  it('都没有 → none', async () => {
+    const snapshot = await detectWin32({ dirs: {}, files: {}, env: {} });
+    expect(snapshot.java).toEqual({ manager: 'none', source: 'none' });
+  });
+});
+
+describe('runDetection：dotnet 探测', () => {
+  it('global.json + dotnet 本体 → system + sdk.version', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/bin': ['dotnet.exe'] },
+      files: { [projFile('global.json')]: '{"sdk":{"version":"8.0.100"}}' },
+      env: { PATH: 'C:/bin' },
+    });
+    expect(snapshot.dotnet).toEqual({
+      manager: 'system',
+      source: 'version-file',
+      version: '8.0.100',
+      path: path.win32.resolve('C:/bin', 'dotnet.exe'),
+    });
+  });
+
+  it('畸形 global.json 仍算线索，但无 version', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/bin': ['dotnet.exe'] },
+      files: { [projFile('global.json')]: '{"sdk":' },
+      env: { PATH: 'C:/bin' },
+    });
+    expect(snapshot.dotnet).toEqual({
+      manager: 'system',
+      source: 'version-file',
+      path: path.win32.resolve('C:/bin', 'dotnet.exe'),
+    });
+  });
+
+  it('仅 dotnet 本体 → system + path', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/bin': ['dotnet.exe'] },
+      files: {},
+      env: { PATH: 'C:/bin' },
+    });
+    expect(snapshot.dotnet).toEqual({
+      manager: 'system',
+      source: 'path',
+      path: path.win32.resolve('C:/bin', 'dotnet.exe'),
+    });
+  });
+
+  it('仅 global.json（无本体）→ none + version-file', async () => {
+    const snapshot = await detectWin32({
+      dirs: {},
+      files: { [projFile('global.json')]: '{"sdk":{"version":"9.0.101"}}' },
+      env: {},
+    });
+    expect(snapshot.dotnet).toEqual({
+      manager: 'none',
+      source: 'version-file',
+      version: '9.0.101',
+    });
+  });
+
+  it('都没有 → none', async () => {
+    const snapshot = await detectWin32({ dirs: {}, files: {}, env: {} });
+    expect(snapshot.dotnet).toEqual({ manager: 'none', source: 'none' });
+  });
+});
+
+describe('runDetection：monorepo 探测', () => {
+  it('配置文件命中优先级 nx > turbo > lerna > rush > pnpm-workspace', async () => {
+    const cases: Array<[string[], string]> = [
+      [['nx.json', 'turbo.json'], 'nx'],
+      [['turbo.json', 'lerna.json'], 'turbo'],
+      [['lerna.json', 'rush.json'], 'lerna'],
+      [['rush.json', 'pnpm-workspace.yaml'], 'rush'],
+      [['pnpm-workspace.yaml'], 'pnpm-workspace'],
+    ];
+    for (const [configs, expected] of cases) {
+      const files = Object.fromEntries(configs.map((name) => [projFile(name), '{}']));
+      const snapshot = await detectWin32({ dirs: {}, files, env: {} });
+      expect(snapshot.monorepo, configs.join(',')).toEqual({
+        manager: expected,
+        source: 'config-file',
+      });
+    }
+  });
+
+  it('配置文件 + 本体在 PATH → config-file 且带路径', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/bin': ['nx.cmd'] },
+      files: { [projFile('nx.json')]: '{}' },
+      env: { PATH: 'C:/bin' },
+    });
+    expect(snapshot.monorepo).toEqual({
+      manager: 'nx',
+      source: 'config-file',
+      path: path.win32.resolve('C:/bin', 'nx.cmd'),
+    });
+  });
+
+  it('仅 PATH 命中（无配置文件）→ path', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/bin': ['turbo.exe'] },
+      files: {},
+      env: { PATH: 'C:/bin' },
+    });
+    expect(snapshot.monorepo).toEqual({
+      manager: 'turbo',
+      source: 'path',
+      path: path.win32.resolve('C:/bin', 'turbo.exe'),
+    });
+  });
+
+  it('配置文件压过 PATH 上的另一个工具（判据以仓库为准）', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/bin': ['turbo.exe'] },
+      files: { [projFile('lerna.json')]: '{}' },
+      env: { PATH: 'C:/bin' },
+    });
+    expect(snapshot.monorepo).toEqual({ manager: 'lerna', source: 'config-file' });
+  });
+
+  it('都没有 → none', async () => {
+    const snapshot = await detectWin32({ dirs: {}, files: {}, env: {} });
+    expect(snapshot.monorepo).toEqual({ manager: 'none', source: 'none' });
+  });
+});
+
+describe('runDetection：CI 探测', () => {
+  it('.github/workflows 下有 yml → github-actions', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/proj/.github/workflows': ['ci.yml', 'README.md'] },
+      files: {},
+      env: {},
+    });
+    expect(snapshot.ci).toEqual({ manager: 'github-actions', source: 'config-file' });
+  });
+
+  it('.github/workflows 存在但没有 yml/yaml → 不算命中', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/proj/.github/workflows': ['.gitkeep'] },
+      files: {},
+      env: {},
+    });
+    expect(snapshot.ci).toEqual({ manager: 'none', source: 'none' });
+  });
+
+  it('github-actions 优先于其余提供方', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/proj/.github/workflows': ['release.yaml'] },
+      files: {
+        [projFile('.gitlab-ci.yml')]: 'stages: []',
+        [projFile('Jenkinsfile')]: 'pipeline{}',
+      },
+      env: {},
+    });
+    expect(snapshot.ci).toEqual({ manager: 'github-actions', source: 'config-file' });
+  });
+
+  it('单文件判据优先级 gitlab-ci > circleci > jenkins > azure-pipelines', async () => {
+    const cases: Array<[string[], string]> = [
+      [['.gitlab-ci.yml', '.circleci/config.yml'], 'gitlab-ci'],
+      [['.circleci/config.yml', 'Jenkinsfile'], 'circleci'],
+      [['Jenkinsfile', 'azure-pipelines.yml'], 'jenkins'],
+      [['azure-pipelines.yml'], 'azure-pipelines'],
+    ];
+    for (const [markers, expected] of cases) {
+      const files = Object.fromEntries(markers.map((name) => [projFile(name), 'x']));
+      const snapshot = await detectWin32({ dirs: {}, files, env: {} });
+      expect(snapshot.ci, markers.join(',')).toEqual({
+        manager: expected,
+        source: 'config-file',
+      });
+    }
+  });
+
+  it('CI 判据不看 PATH（本机装了 jenkins 命令也不算）', async () => {
+    const snapshot = await detectWin32({
+      dirs: { 'C:/bin': ['jenkins.exe'] },
+      files: {},
+      env: { PATH: 'C:/bin' },
+    });
+    expect(snapshot.ci).toEqual({ manager: 'none', source: 'none' });
+  });
+
+  it('都没有 → none', async () => {
+    const snapshot = await detectWin32({ dirs: {}, files: {}, env: {} });
+    expect(snapshot.ci).toEqual({ manager: 'none', source: 'none' });
+  });
+});
+
 describe('runDetection：posix 与坏环境', () => {
   it('posix：无扩展名命中 + SHELL=zsh + 版本文件', async () => {
     const host = makeDetectHost({
@@ -397,6 +650,10 @@ describe('runDetection：posix 与坏环境', () => {
     expect(snapshot.package_managers).toEqual([]);
     expect(snapshot.rust).toEqual({ manager: 'none', source: 'none' });
     expect(snapshot.go).toEqual({ manager: 'none', source: 'none' });
+    expect(snapshot.java).toEqual({ manager: 'none', source: 'none' });
+    expect(snapshot.dotnet).toEqual({ manager: 'none', source: 'none' });
+    expect(snapshot.monorepo).toEqual({ manager: 'none', source: 'none' });
+    expect(snapshot.ci).toEqual({ manager: 'none', source: 'none' });
     expect(snapshot.shell).toBe('other');
     expect(snapshot.existing_rules).toEqual([]);
   });
@@ -428,5 +685,23 @@ describe('探测枚举与 habits schema 对齐（防漂移）', () => {
     expect(PythonManager.options).toContain('system');
     expect(PythonManager.options).toContain('none');
     expect(PackageManager.options).toContain('yarn-berry');
+  });
+
+  /**
+   * java / monorepo / ci 候选**刻意没有** schema 声明侧枚举：`habits.detected` 是
+   * `z.looseObject({})`（Spec §4.1 passthrough），这三类目前只出现在 detected 快照里，
+   * 声明侧（`runtime.java` 等）尚未定义。故此处只钉候选清单本身，防止顺序被无意改动
+   * ——顺序即优先级，改了会静默改变探测结论。
+   */
+  it('java / monorepo / ci 候选清单与顺序钉死（顺序即优先级）', () => {
+    expect([...JAVA_MANAGER_PRIORITY]).toEqual(['sdkman', 'jenv', 'jabba', 'mise', 'asdf']);
+    expect([...MONOREPO_TOOL_PRIORITY]).toEqual(['nx', 'turbo', 'lerna', 'rush', 'pnpm-workspace']);
+    expect([...CI_PROVIDER_PRIORITY]).toEqual([
+      'github-actions',
+      'gitlab-ci',
+      'circleci',
+      'jenkins',
+      'azure-pipelines',
+    ]);
   });
 });
