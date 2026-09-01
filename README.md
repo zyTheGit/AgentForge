@@ -99,6 +99,7 @@ aforge mcp add             # 登记 MCP 服务器，sync 时翻译成各 Agent �
 ## 文档
 
 - [命令速查与约定](docs/commands.md)——14 个命令、`--json` 契约、环境变量、退出码
+- [profile.yaml 配置参考](docs/profile.md)——全字段类型/默认值、两层合并语义、投影开关
 - [安装与构建](docs/install.md)——三种装法、双轨构建、开发命令
 - [技能](docs/skills.md)——登记来源、安装、投影落点与调用前缀，以及 `expose_as_command` 命令薄壳（命名空间、`$1..$9`）
 - [MCP](docs/mcp.md)——一份声明翻译成四家的原生配置
