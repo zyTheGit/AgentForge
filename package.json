@@ -1,6 +1,6 @@
 {
   "name": "@zythegit/agentforge",
-  "version": "0.2.1",
+  "version": "0.2.2-rc.1",
   "description": "AgentForge — manage AI coding CLI rule projections (SoT → opencode/codex/claude/pi) from one source of truth",
   "type": "module",
   "bin": {
