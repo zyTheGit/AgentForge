@@ -29,6 +29,7 @@ import {
 } from '../../core/importer/importer';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
 import { atomicWrite } from '../../infra/fsutil';
+import { getUi, type Ui } from '../../infra/ui';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
 import { resolveJsonFlag } from '../_shared/flags';
 
@@ -128,13 +129,17 @@ export async function runImport(ctx: ImportCommandContext, pathArg: string): Pro
   };
 }
 
-/** 建议摘要行（ASCII，两列对齐；无命中时输出 '(none)'）。 */
-function suggestionSummary(s: ImportSuggestions): string[] {
+/** 建议摘要行的 label 宽度（`package managers` 最长，冒号同列）。 */
+const SUGGESTION_LABEL_WIDTH = 17;
+
+/** 建议摘要行（两列对齐；无命中时输出暗色 '(none)'）。 */
+function suggestionSummary(s: ImportSuggestions, ui: Ui): string[] {
   const pms = s.packageManagers.join(', ');
+  const none = ui.dim('(none)');
   return [
-    `  node manager     : ${s.nodeManager ?? '(none)'}`,
-    `  python manager   : ${s.pythonManager ?? '(none)'}`,
-    `  package managers : ${pms === '' ? '(none)' : pms}`,
+    ui.kv('node manager', s.nodeManager ?? none, SUGGESTION_LABEL_WIDTH),
+    ui.kv('python manager', s.pythonManager ?? none, SUGGESTION_LABEL_WIDTH),
+    ui.kv('package managers', pms === '' ? none : pms, SUGGESTION_LABEL_WIDTH),
   ];
 }
 
@@ -154,20 +159,23 @@ export function registerImportCommand(program: Command): void {
         return;
       }
 
+      const ui = getUi();
       const lines: string[] = [
-        `aforge import - ${path.basename(result.importFile)} (${result.kind})`,
-        `SoT root: ${result.sotRoot}`,
+        `${ui.bold('aforge import')} - ${path.basename(result.importFile)} (${result.kind})`,
+        `SoT root: ${ui.path(result.sotRoot)}`,
         '',
-        'toolchain declarations detected (suggestions saved to habits.yaml detected.import):',
-        ...suggestionSummary(result.suggestions),
+        ui.bold(
+          'toolchain declarations detected (suggestions saved to habits.yaml detected.import):',
+        ),
+        ...suggestionSummary(result.suggestions, ui),
         '',
         result.customFile === null
-          ? 'custom blocks: (none - all blocks were toolchain declarations)'
-          : `custom blocks written: ${result.customFile}`,
-        `habits.yaml updated: ${result.habitsFile}`,
+          ? ui.dim('custom blocks: (none - all blocks were toolchain declarations)')
+          : `custom blocks written: ${ui.path(result.customFile)}`,
+        `habits.yaml updated: ${ui.path(result.habitsFile)}`,
         '',
-        'next: review habits.yaml (move suggestions into declared fields if desired),',
-        'then run `aforge sync` to project the imported rules',
+        ui.next('review habits.yaml (move suggestions into declared fields if desired),'),
+        `      then run ${ui.code('aforge sync')} to project the imported rules`,
       ];
       console.log(lines.join('\n'));
     });

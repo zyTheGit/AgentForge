@@ -6,7 +6,11 @@
 - **换行**：投影文件默认 LF（可通过 `profile.yaml` 的 `projection.line_ending: crlf` 修改）；SoT 内部素材统一 LF，换行差异由投影层吸收，不会造成虚假 diff。
 - **离线**：无网络环境完全可用（init/sync/template/skill 等纯本地操作）。git 源的 `source update` 需要网络，离线时明确报错（退出码 5）。也可设 `AGF_OFFLINE=1` 显式声明离线意图，让需要网络的操作尽早失败。
 - **权限**：**无需 Administrator**。全部文件读写都在你的用户目录与项目目录内；写失败时给出可操作的修复提示（退出码 4）。
-- **控制台编码**：静默命令输出为纯 ASCII（GBK 代码页 `chcp 936` 下不乱码）；`init` 的交互 UI 需要真实终端（TTY），非 TTY 下自动退回静默默认值（等价 `init --yes`）。
+- **控制台编码与颜色**：人类可读输出按终端能力分档，**两个维度各自独立判定**：
+  - *符号*：确认为 UTF-8 宿主（Windows Terminal / VS Code 终端 / JetBrains / ConEmu-Cmder 等）时用 `✔ ✖ ─ ▸`；`cmd.exe`、PowerShell 5 的默认 GBK 代码页（`chcp 936`）以及**任何非 TTY（管道 / 重定向 / CI）**自动退回纯 ASCII（`[OK  ]` / `== 段落 ==`），因此重定向到文件的输出恒为 ASCII、不会乱码。
+  - *颜色*：默认只在 TTY 下开启；`NO_COLOR` 关闭（优先级最高）、`FORCE_COLOR` 强制开启（便于 `| less -R` 与 CI 日志）、`TERM=dumb` 关闭。此外所有命令都接受位置无关的 `--no-color` / `--color`。
+  - `--json` 输出不经过呈现层，恒为无色纯 ASCII，逐字节稳定。
+- **交互 UI**：`init` 的交互流程需要真实终端（TTY），非 TTY 下自动退回静默默认值（等价 `init --yes`）。
 - **OneDrive**：`AGF_HOME` 或项目目录落在 OneDrive 下时 `aforge doctor` 会 warn（文件锁 / 占位符状态可能导致投影写入失败）。
 
 ## macOS / Linux

@@ -1,7 +1,7 @@
 /**
  * aforge detect 命令（Spec §6 命令表 / §7.2 Detect 顺序）：运行探测引擎并输出结果。
  *
- * - 默认人类可读输出（纯 ASCII，避免 Windows GBK 控制台 chcp 936 乱码）；
+ * - 默认人类可读输出（上色 + 符号；Windows GBK 控制台与管道自动降级为纯 ASCII，见 infra/ui）；
  * - --json 输出机器可读 JSON（DetectedSnapshot 结构，路径为绝对路径）；
  * - 探测引擎零失败路径（坏环境一律降级为"未检出"），进程退出码恒 0。
  */
@@ -10,6 +10,7 @@ import type { DetectedRuntime, DetectedSnapshot, DetectedTool } from '../../core
 import { runDetection } from '../../core/detector/engine';
 import { readEnv } from '../../core/env';
 import { realHost } from '../../infra/real-host';
+import { getUi, type Ui } from '../../infra/ui';
 import { printJson } from '../_shared/context';
 import { resolveJsonFlag } from '../_shared/flags';
 
@@ -34,67 +35,70 @@ export function registerDetectCommand(program: Command): void {
     });
 }
 
-/** 两列对齐的字段行：`  manager   : fnm`。 */
-function fieldLine(label: string, value: string | undefined): string {
-  return `  ${label.padEnd(10)}: ${value ?? '(none)'}`;
+/** 字段行的 label 宽度（`manager` / `version` / `path` 共用一档，冒号同列）。 */
+const FIELD_WIDTH = 10;
+
+/** 两列对齐的字段行：`  manager   : fnm`（未检出 → 暗色 `(none)`）。 */
+function fieldLine(ui: Ui, label: string, value: string | undefined): string {
+  return ui.kv(label, value ?? ui.dim('(none)'), FIELD_WIDTH);
 }
 
-function printRuntime(lines: string[], runtime: DetectedRuntime): void {
-  lines.push(fieldLine('manager', runtime.manager));
-  lines.push(fieldLine('source', runtime.source));
+function printRuntime(lines: string[], runtime: DetectedRuntime, ui: Ui): void {
+  lines.push(fieldLine(ui, 'manager', runtime.manager));
+  lines.push(fieldLine(ui, 'source', runtime.source));
   if (runtime.version !== undefined) {
-    lines.push(fieldLine('version', runtime.version));
+    lines.push(fieldLine(ui, 'version', runtime.version));
   }
   if (runtime.path !== undefined) {
-    lines.push(fieldLine('path', runtime.path));
+    lines.push(fieldLine(ui, 'path', ui.path(runtime.path)));
   }
 }
 
-function printTool(lines: string[], tool: DetectedTool): void {
-  lines.push(fieldLine('manager', tool.manager));
-  lines.push(fieldLine('source', tool.source));
+function printTool(lines: string[], tool: DetectedTool, ui: Ui): void {
+  lines.push(fieldLine(ui, 'manager', tool.manager));
+  lines.push(fieldLine(ui, 'source', tool.source));
   if (tool.path !== undefined) {
-    lines.push(fieldLine('path', tool.path));
+    lines.push(fieldLine(ui, 'path', ui.path(tool.path)));
   }
 }
 
 /** 人类可读输出：分节列表（工具 / 命中 / 来源 / 路径）。 */
-function printHuman(snapshot: DetectedSnapshot): void {
-  const lines: string[] = ['aforge detect - toolchain probe', ''];
+function printHuman(snapshot: DetectedSnapshot, ui: Ui = getUi()): void {
+  const lines: string[] = [...ui.title('aforge detect', 'toolchain probe')];
 
-  lines.push('Node.js');
-  printRuntime(lines, snapshot.node);
+  lines.push(ui.bold('Node.js'));
+  printRuntime(lines, snapshot.node, ui);
 
-  lines.push('', 'Python');
-  printRuntime(lines, snapshot.python);
+  lines.push('', ui.bold('Python'));
+  printRuntime(lines, snapshot.python, ui);
 
-  lines.push('', 'Package managers (priority order)');
+  lines.push('', ui.bold('Package managers (priority order)'));
   if (snapshot.package_managers.length === 0) {
-    lines.push('  (none)');
+    lines.push(`  ${ui.dim('(none)')}`);
   }
   for (const [index, pm] of snapshot.package_managers.entries()) {
-    lines.push(`  ${index + 1}. ${pm.name.padEnd(12)} [${pm.source}]`);
+    lines.push(`  ${index + 1}. ${pm.name.padEnd(12)} ${ui.dim(`[${pm.source}]`)}`);
     // 缩进对齐编号前缀（"  1. " 占 5 列）
     if (pm.path !== undefined) {
-      lines.push(`     ${'path'.padEnd(12)}: ${pm.path}`);
+      lines.push(`     ${ui.dim('path'.padEnd(12))}: ${ui.path(pm.path)}`);
     }
   }
 
-  lines.push('', 'Shell');
-  lines.push(fieldLine('shell', snapshot.shell));
+  lines.push('', ui.bold('Shell'));
+  lines.push(fieldLine(ui, 'shell', snapshot.shell));
 
-  lines.push('', 'Rust');
-  printTool(lines, snapshot.rust);
+  lines.push('', ui.bold('Rust'));
+  printTool(lines, snapshot.rust, ui);
 
-  lines.push('', 'Go');
-  printTool(lines, snapshot.go);
+  lines.push('', ui.bold('Go'));
+  printTool(lines, snapshot.go, ui);
 
-  lines.push('', 'Existing rule files');
+  lines.push('', ui.bold('Existing rule files'));
   if (snapshot.existing_rules.length === 0) {
-    lines.push('  (none)');
+    lines.push(`  ${ui.dim('(none)')}`);
   }
   for (const rule of snapshot.existing_rules) {
-    lines.push(`  ${rule}`);
+    lines.push(`  ${ui.path(rule)}`);
   }
 
   console.log(lines.join('\n'));

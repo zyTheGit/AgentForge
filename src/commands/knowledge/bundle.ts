@@ -26,6 +26,7 @@ import {
   importBundle,
 } from '../../core/bundle/import';
 import { ConfigError } from '../../core/errors';
+import { getUi, type Ui } from '../../infra/ui';
 import { VERSION } from '../../version';
 import {
   type CommandContext,
@@ -117,31 +118,42 @@ function pushCapped(lines: string[], items: readonly string[], indent: string): 
   }
 }
 
+/** bundle 详情行的 label 宽度（`manifest` / `excluded` 等同档，冒号同列）。 */
+const BUNDLE_LABEL_WIDTH = 10;
+
 /** export 的人类可读输出。 */
-function renderExport(result: BundleExportResult): string {
+function renderExport(result: BundleExportResult, ui: Ui = getUi()): string {
   const m = result.manifest;
   const lines = [
-    `bundle exported: ${result.outDir}`,
-    `  scope     : ${result.scope} (${result.sotRoot})`,
-    `  manifest  : ${result.manifestFile}`,
-    `  content   : ${result.contentDir}`,
-    `  files     : ${m.files.length} file(s) carried`,
+    `${ui.green('bundle exported')}: ${ui.path(result.outDir)}`,
+    ui.kv('scope', `${result.scope} (${ui.path(result.sotRoot)})`, BUNDLE_LABEL_WIDTH),
+    ui.kv('manifest', ui.path(result.manifestFile), BUNDLE_LABEL_WIDTH),
+    ui.kv('content', ui.path(result.contentDir), BUNDLE_LABEL_WIDTH),
+    ui.kv('files', `${m.files.length} file(s) carried`, BUNDLE_LABEL_WIDTH),
   ];
   pushCapped(
     lines,
-    m.files.map((file) => `- ${file.path}${file.transformed ? '  [transformed]' : ''}`),
+    m.files.map((file) => ui.dim(`- ${file.path}${file.transformed ? '  [transformed]' : ''}`)),
     '    ',
   );
   if (m.excluded.length > 0) {
-    lines.push(`  excluded  : ${m.excluded.length} entry(ies) left behind`);
+    lines.push(
+      ui.kv('excluded', `${m.excluded.length} entry(ies) left behind`, BUNDLE_LABEL_WIDTH),
+    );
     pushCapped(
       lines,
-      m.excluded.map((entry) => `- ${entry.path} (${entry.reason})`),
+      m.excluded.map((entry) => ui.dim(`- ${entry.path} (${entry.reason})`)),
       '    ',
     );
   }
   if (m.redacted.length > 0) {
-    lines.push(`  redacted  : ${m.redacted.length} credential value(s) replaced by a placeholder`);
+    lines.push(
+      ui.kv(
+        'redacted',
+        ui.yellow(`${m.redacted.length} credential value(s) replaced by a placeholder`),
+        BUNDLE_LABEL_WIDTH,
+      ),
+    );
     pushCapped(
       lines,
       m.redacted.map((key) => `- ${key}`),
@@ -149,15 +161,15 @@ function renderExport(result: BundleExportResult): string {
     );
   }
   if (m.warnings.length > 0) {
-    lines.push('  warnings  :');
+    lines.push(`  ${ui.yellow('warnings  :')}`);
     for (const warning of m.warnings) {
-      lines.push(`    - ${warning}`);
+      lines.push(`    - ${ui.yellow(warning)}`);
     }
   }
   lines.push(
     '',
-    'next: move this directory to the target machine, then run',
-    `      aforge bundle import --from ${result.outDir}`,
+    ui.next('move this directory to the target machine, then run'),
+    `      ${ui.code(`aforge bundle import --from ${result.outDir}`)}`,
   );
   return lines.join('\n');
 }
@@ -175,47 +187,51 @@ const ALERT_RULE = '='.repeat(72);
  * 除了告警本身，还给出**改哪个文件**：用户拿到字段路径也得自己推 profile.yaml 在哪，
  * 少这一句就等于把最后一步留给用户猜。
  */
-function pushCredentialAlert(lines: string[], result: BundleImportResult): void {
+function pushCredentialAlert(lines: string[], result: BundleImportResult, ui: Ui): void {
   const keys = result.manifest.redacted;
   if (keys.length === 0) {
     return;
   }
-  lines.push('', ALERT_RULE, `[WARN] ${keys.length} credential value(s) are placeholders.`);
-  lines.push('       The MCP server(s) below will fail auth until you set them again:');
+  lines.push(
+    '',
+    ui.red(ALERT_RULE),
+    `${ui.badge('warn')} ${ui.yellow(`${keys.length} credential value(s) are placeholders.`)}`,
+  );
+  lines.push(ui.yellow('       The MCP server(s) below will fail auth until you set them again:'));
   for (const key of keys) {
-    lines.push(`         - ${key}`);
+    lines.push(`         - ${ui.bold(key)}`);
   }
   lines.push(
-    `       Edit ${path.join(result.sotRoot, 'profile.yaml')}, then run \`aforge sync\`.`,
-    ALERT_RULE,
+    `       Edit ${ui.path(path.join(result.sotRoot, 'profile.yaml'))}, then run ${ui.code('aforge sync')}.`,
+    ui.red(ALERT_RULE),
   );
 }
 
 /** import 的人类可读输出（导出供测试断言告警块位置，同 doctor.formatDoctorReport 的取舍）。 */
-export function renderImport(result: BundleImportResult): string {
+export function renderImport(result: BundleImportResult, ui: Ui = getUi()): string {
   const counts = {
     written: result.entries.filter((e) => e.action === 'written').length,
     skipped: result.entries.filter((e) => e.action === 'skipped').length,
     renamed: result.entries.filter((e) => e.action === 'renamed').length,
   };
   const lines = [
-    `bundle imported: ${result.bundleDir}`,
-    `  scope     : ${result.scope} (${result.sotRoot})`,
-    `  policy    : ${result.onConflict}`,
-    `  written   : ${counts.written}`,
-    `  skipped   : ${counts.skipped}`,
-    `  renamed   : ${counts.renamed}`,
+    `${ui.green('bundle imported')}: ${ui.path(result.bundleDir)}`,
+    ui.kv('scope', `${result.scope} (${ui.path(result.sotRoot)})`, BUNDLE_LABEL_WIDTH),
+    ui.kv('policy', result.onConflict, BUNDLE_LABEL_WIDTH),
+    ui.kv('written', String(counts.written), BUNDLE_LABEL_WIDTH),
+    ui.kv('skipped', String(counts.skipped), BUNDLE_LABEL_WIDTH),
+    ui.kv('renamed', String(counts.renamed), BUNDLE_LABEL_WIDTH),
   ];
   pushCapped(
     lines,
-    result.entries.map((entry) => `- ${entry.path} [${entry.action}] -> ${entry.target}`),
+    result.entries.map((entry) => ui.dim(`- ${entry.path} [${entry.action}] -> ${entry.target}`)),
     '    ',
   );
   if (counts.skipped > 0 && result.onConflict === 'skip') {
     lines.push(
       '',
-      'note: existing files were kept. rerun with --on-conflict overwrite (replace)',
-      '      or --on-conflict rename (park the incoming copy next to yours).',
+      ui.yellow('note: existing files were kept. rerun with --on-conflict overwrite (replace)'),
+      ui.yellow('      or --on-conflict rename (park the incoming copy next to yours).'),
     );
   }
   if (result.manifest.warnings.length > 0) {
@@ -223,25 +239,27 @@ export function renderImport(result: BundleImportResult): string {
     const noise = redactedCountWarning(result.manifest.redacted.length);
     const warnings = result.manifest.warnings.filter((w) => w !== noise);
     if (warnings.length > 0) {
-      lines.push('', 'export-time warnings:');
+      lines.push('', ui.yellow('export-time warnings:'));
       for (const warning of warnings) {
-        lines.push(`      - ${warning}`);
+        lines.push(`      - ${ui.yellow(warning)}`);
       }
     }
   }
   if (result.unlisted.length > 0) {
     lines.push(
       '',
-      `note: ${result.unlisted.length} file(s) in the bundle are not listed in manifest.json and were NOT imported:`,
+      ui.yellow(
+        `note: ${result.unlisted.length} file(s) in the bundle are not listed in manifest.json and were NOT imported:`,
+      ),
       `      ${renderList(result.unlisted)}`,
     );
   }
   lines.push(
     '',
-    'next: aforge detect   (refresh this machine toolchain snapshot)',
-    '      aforge sync     (project the imported SoT to your agents)',
+    ui.next(`${ui.code('aforge detect')}   (refresh this machine toolchain snapshot)`),
+    `      ${ui.code('aforge sync')}     (project the imported SoT to your agents)`,
   );
-  pushCredentialAlert(lines, result);
+  pushCredentialAlert(lines, result, ui);
   return lines.join('\n');
 }
 

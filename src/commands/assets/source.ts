@@ -26,6 +26,7 @@ import {
   type UpdateSourceResult,
   updateSource,
 } from '../../core/sources/manager';
+import { getUi, type Ui } from '../../infra/ui';
 import type { Source } from '../../schema';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
 import { resolveJsonFlag } from '../_shared/flags';
@@ -90,25 +91,19 @@ export async function runSourceUpdate(
 const LIST_HEADER = ['ID', 'TYPE', 'REF', 'COMMIT/PATH'] as const;
 
 /** 单行源摘要拆成列：git → ref + commit 前 12 位；local → path（无 ref）。 */
-function sourceCells(source: Source): string[] {
+function sourceCells(source: Source, ui: Ui): string[] {
   return source.type === 'git'
-    ? [source.id, source.type, source.ref ?? '-', (source.commit ?? '?').slice(0, 12)]
-    : [source.id, source.type, '-', source.path];
+    ? [
+        ui.bold(source.id),
+        source.type,
+        source.ref ?? '-',
+        ui.dim((source.commit ?? '?').slice(0, 12)),
+      ]
+    : [ui.bold(source.id), source.type, '-', ui.path(source.path)];
 }
 
-/** 渲染 ASCII 表格（列宽按内容自适应，两空格缩进 + 两空格列间距；末列不补空格）。 */
-function renderTable(rows: readonly string[][]): string[] {
-  const columns = rows[0]?.length ?? 0;
-  const widths = Array.from({ length: columns }, (_, col) =>
-    Math.max(...rows.map((row) => (row[col] ?? '').length)),
-  );
-  return rows.map((row) => {
-    const cells = row.map((cell, col) =>
-      col === columns - 1 ? cell : cell.padEnd(widths[col] ?? 0),
-    );
-    return `  ${cells.join('  ')}`;
-  });
-}
+/** 详情行的 label 宽度（`store cleaned` 最长，冒号同列）。 */
+const DETAIL_LABEL_WIDTH = 13;
 
 export function registerSourceCommand(program: Command): void {
   const cmd = program
@@ -137,18 +132,21 @@ export function registerSourceCommand(program: Command): void {
           return;
         }
         const s = result.source;
-        const lines: string[] = [`source added: ${s.id} (${s.type})`];
+        const ui = getUi();
+        const lines: string[] = [`${ui.green('source added')}: ${ui.bold(s.id)} (${s.type})`];
         if (s.type === 'git') {
           lines.push(
-            `  url    : ${s.url}`,
-            `  ref    : ${s.ref}`,
-            `  commit : ${s.commit}`,
-            `  store  : ${result.storeDir}`,
+            // url / ref / commit / store 在 git 源上必然已填（addGitSource 的后置条件），
+            // 但类型上是可选字段——退化成 '-' 而不是打出字面 "undefined"
+            ui.kv('url', s.url ?? '-', DETAIL_LABEL_WIDTH),
+            ui.kv('ref', s.ref ?? '-', DETAIL_LABEL_WIDTH),
+            ui.kv('commit', s.commit ?? '-', DETAIL_LABEL_WIDTH),
+            ui.kv('store', ui.path(result.storeDir ?? '-'), DETAIL_LABEL_WIDTH),
           );
         } else {
-          lines.push(`  path   : ${s.path}`);
+          lines.push(ui.kv('path', ui.path(s.path), DETAIL_LABEL_WIDTH));
         }
-        lines.push(`  file   : ${result.file}`);
+        lines.push(ui.kv('file', ui.path(result.file), DETAIL_LABEL_WIDTH));
         console.log(lines.join('\n'));
       },
     );
@@ -163,12 +161,15 @@ export function registerSourceCommand(program: Command): void {
         printJson(sources);
         return;
       }
+      const ui = getUi();
       if (sources.length === 0) {
-        console.log('no sources registered - run `aforge source add <path-or-url>` to add one');
+        console.log(
+          `no sources registered - run ${ui.code('aforge source add <path-or-url>')} to add one`,
+        );
         return;
       }
-      const lines = renderTable([[...LIST_HEADER], ...sources.map(sourceCells)]);
-      lines.push('', `${sources.length} source(s)`);
+      const lines = ui.table([[...LIST_HEADER], ...sources.map((s) => sourceCells(s, ui))]);
+      lines.push('', ui.dim(`${sources.length} source(s)`));
       console.log(lines.join('\n'));
     });
 
@@ -182,11 +183,14 @@ export function registerSourceCommand(program: Command): void {
         printJson(result);
         return;
       }
-      const lines = [`source removed: ${result.removed.id} (${result.removed.type})`];
+      const ui = getUi();
+      const lines = [
+        `${ui.green('source removed')}: ${ui.bold(result.removed.id)} (${result.removed.type})`,
+      ];
       if (result.storeDir !== undefined) {
-        lines.push(`  store cleaned: ${result.storeDir}`);
+        lines.push(ui.kv('store cleaned', ui.path(result.storeDir), DETAIL_LABEL_WIDTH));
       }
-      lines.push(`  file          : ${result.file}`);
+      lines.push(ui.kv('file', ui.path(result.file), DETAIL_LABEL_WIDTH));
       console.log(lines.join('\n'));
     });
 
@@ -201,13 +205,14 @@ export function registerSourceCommand(program: Command): void {
         return;
       }
       const s = result.source;
+      const ui = getUi();
       console.log(
         [
-          `source updated: ${s.id}`,
-          `  ref    : ${s.ref}`,
-          `  commit : ${s.commit}`,
-          `  store  : ${result.storeDir}`,
-          `  file   : ${result.file}`,
+          `${ui.green('source updated')}: ${ui.bold(s.id)}`,
+          ui.kv('ref', s.ref ?? '-', DETAIL_LABEL_WIDTH),
+          ui.kv('commit', s.commit ?? '-', DETAIL_LABEL_WIDTH),
+          ui.kv('store', ui.path(result.storeDir), DETAIL_LABEL_WIDTH),
+          ui.kv('file', ui.path(result.file), DETAIL_LABEL_WIDTH),
         ].join('\n'),
       );
     });

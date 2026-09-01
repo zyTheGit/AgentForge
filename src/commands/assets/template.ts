@@ -20,8 +20,12 @@ import {
   type TemplateContext,
   type TemplateListItem,
 } from '../../core/sources/template';
+import { getUi, type Ui } from '../../infra/ui';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
 import { resolveJsonFlag } from '../_shared/flags';
+
+/** 详情行的 label 宽度（`templates` 最长，冒号同列）。 */
+const TEMPLATE_LABEL_WIDTH = 9;
 
 /** 命令上下文。 */
 export type TemplateCommandContext = CommandContext;
@@ -63,11 +67,12 @@ export async function runSetTemplateEnabled(
   return setTemplateEnabled(ctx.host, targetLayer, id, enabled, ctx.os);
 }
 
-/** 单行模板摘要（ASCII；builtin 项加 always-rendered 注记）。 */
-function templateLine(item: TemplateListItem): string {
+/** 单行模板摘要（enabled/disabled 上色；builtin 项加 always-rendered 注记）。 */
+function templateLine(item: TemplateListItem, ui: Ui): string {
   const origin = item.origin === 'source' ? `source:${item.sourceId ?? '?'}` : item.origin;
-  const note = item.origin === 'builtin' ? '  (always rendered, Spec 5.2)' : '';
-  return `  ${item.id}  [${origin}]  ${item.enabled ? 'enabled' : 'disabled'}${note}`;
+  const note = item.origin === 'builtin' ? ui.dim('  (always rendered, Spec 5.2)') : '';
+  const state = item.enabled ? ui.green('enabled') : ui.dim('disabled');
+  return `  ${ui.bold(item.id)}  [${origin}]  ${state}${note}`;
 }
 
 export function registerTemplateCommand(program: Command): void {
@@ -83,8 +88,9 @@ export function registerTemplateCommand(program: Command): void {
         printJson(items);
         return;
       }
-      const lines = items.map(templateLine);
-      lines.push('', `${items.length} template(s)`);
+      const ui = getUi();
+      const lines = items.map((item) => templateLine(item, ui));
+      lines.push('', ui.dim(`${items.length} template(s)`));
       console.log(lines.join('\n'));
     });
 
@@ -98,13 +104,14 @@ export function registerTemplateCommand(program: Command): void {
         printJson(result);
         return;
       }
+      const ui = getUi();
       console.log(
         [
           result.changed
-            ? `template enabled: ${result.id}`
-            : `template ${result.id} was already enabled (no change)`,
-          `  profile   : ${result.profileFile}`,
-          `  templates : [${result.templates.join(', ')}]`,
+            ? `${ui.green('template enabled')}: ${ui.bold(result.id)}`
+            : ui.dim(`template ${result.id} was already enabled (no change)`),
+          ui.kv('profile', ui.path(result.profileFile), TEMPLATE_LABEL_WIDTH),
+          ui.kv('templates', `[${result.templates.join(', ')}]`, TEMPLATE_LABEL_WIDTH),
         ].join('\n'),
       );
     });
@@ -119,13 +126,14 @@ export function registerTemplateCommand(program: Command): void {
         printJson(result);
         return;
       }
+      const ui = getUi();
       console.log(
         [
           result.changed
-            ? `template disabled: ${result.id}`
-            : `template ${result.id} was not enabled (no change)`,
-          `  profile   : ${result.profileFile}`,
-          `  templates : [${result.templates.join(', ')}]`,
+            ? `${ui.green('template disabled')}: ${ui.bold(result.id)}`
+            : ui.dim(`template ${result.id} was not enabled (no change)`),
+          ui.kv('profile', ui.path(result.profileFile), TEMPLATE_LABEL_WIDTH),
+          ui.kv('templates', `[${result.templates.join(', ')}]`, TEMPLATE_LABEL_WIDTH),
         ].join('\n'),
       );
     });

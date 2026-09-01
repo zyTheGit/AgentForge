@@ -16,9 +16,13 @@ import { ConfigError } from '../../core/errors';
 import { type PromoteResult, promoteLearning } from '../../core/learning/promote';
 import { currentOs, resolveUserSoT } from '../../core/paths';
 import { realHost } from '../../infra/real-host';
+import { getUi } from '../../infra/ui';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
 import { resolveJsonFlag } from '../_shared/flags';
 import { isInteractiveStdin } from '../_shared/stdin';
+
+/** 详情行的 label 宽度（`artifact` 最长，冒号同列）。 */
+const PROMOTE_LABEL_WIDTH = 8;
 
 /** 命令上下文。 */
 export type PromoteCommandContext = CommandContext;
@@ -92,14 +96,23 @@ export function registerPromoteCommand(program: Command): void {
           return;
         }
 
+        const ui = getUi();
         const lines: string[] = [
-          `learning promoted: ${result.learning.id}`,
-          `  from      : ${result.fromScope} layer`,
-          `  target    : ${result.targetScope} layer (${result.targetSoTRoot})`,
-          `  artifact  : ${result.targetFile}`,
-          `  entry     : kept (promoted: true, promoted_at: ${result.learning.promoted_at})`,
+          `${ui.green('learning promoted')}: ${ui.bold(result.learning.id)}`,
+          ui.kv('from', `${result.fromScope} layer`, PROMOTE_LABEL_WIDTH),
+          ui.kv(
+            'target',
+            `${result.targetScope} layer (${ui.path(result.targetSoTRoot)})`,
+            PROMOTE_LABEL_WIDTH,
+          ),
+          ui.kv('artifact', ui.path(result.targetFile), PROMOTE_LABEL_WIDTH),
+          ui.kv(
+            'entry',
+            ui.dim(`kept (promoted: true, promoted_at: ${result.learning.promoted_at})`),
+            PROMOTE_LABEL_WIDTH,
+          ),
           '',
-          'next: run `aforge sync` to project the promoted rule into agent targets',
+          ui.next(`run ${ui.code('aforge sync')} to project the promoted rule into agent targets`),
         ];
         console.log(lines.join('\n'));
       },
