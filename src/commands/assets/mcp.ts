@@ -26,30 +26,30 @@
  *
  * 拆分后的模块清单（对外导出面不变，采集侧的符号在文件末尾原样 re-export）：
  * - 本文件：add / remove 的核心逻辑 + 两个子命令的注册与输出渲染；
- * - commands/mcp-prompt.ts：交互问答与 --from-json 的 stdin 解析（输入采集）。
+ * - commands/assets/mcp-prompt.ts：交互问答与 --from-json 的 stdin 解析（输入采集）。
  */
 
 import { cancel, intro, outro } from '@clack/prompts';
 import type { Command } from 'commander';
-import { loadProfile } from '../core/config/load';
-import { resolveWriteTargetLayer } from '../core/config/target-layer';
-import { type EnvSnapshot, readEnv, type Scope } from '../core/env';
-import { ConfigError } from '../core/errors';
-import { pathApiFor } from '../core/paths';
-import { CLAUDE_MCP_FILENAME } from '../core/project/projectors/claude';
+import { loadProfile } from '../../core/config/load';
+import { resolveWriteTargetLayer } from '../../core/config/target-layer';
+import { type EnvSnapshot, readEnv, type Scope } from '../../core/env';
+import { ConfigError } from '../../core/errors';
+import { pathApiFor } from '../../core/paths';
+import { CLAUDE_MCP_FILENAME } from '../../core/project/projectors/claude';
 import {
   OPENCODE_MCP_FILENAME,
   OPENCODE_USER_DIR_SEGMENTS,
-} from '../core/project/projectors/opencode';
-import { PI_DIRNAME, PI_MCP_FILENAME, piUserAgentDir } from '../core/project/projectors/pi';
-import { withSotLock } from '../core/project/sync-lock';
+} from '../../core/project/projectors/opencode';
+import { PI_DIRNAME, PI_MCP_FILENAME, piUserAgentDir } from '../../core/project/projectors/pi';
+import { withSotLock } from '../../core/project/sync-lock';
 import {
   type AddMcpServerResult,
   addMcpServer,
   type RemoveMcpServerResult,
   removeMcpServerLocked,
-} from '../core/sources/mcp';
-import type { McpServerInput } from '../schema';
+} from '../../core/sources/mcp';
+import type { McpServerInput } from '../../schema';
 import {
   type CommandContext,
   defaultCommandContext,
@@ -58,10 +58,10 @@ import {
   projectionRootFor,
   renderList,
   sotRootFor,
-} from './context';
-import { parseScopeOption, resolveJsonFlag } from './flags';
+} from '../_shared/context';
+import { parseScopeOption, resolveJsonFlag } from '../_shared/flags';
+import { isInteractiveStdin, readStdinText } from '../_shared/stdin';
 import { parseMcpServerJson, promptServer } from './mcp-prompt';
-import { isInteractiveStdin, readStdinText } from './stdin';
 
 /** 命令上下文。 */
 export type McpCommandContext = CommandContext;
@@ -185,7 +185,7 @@ function mcpProjectionFiles(ctx: McpCommandContext, env: EnvSnapshot, scope: Sco
 
 /**
  * 输入采集侧的导出面 re-export：`parseMcpServerJson` 实现已搬到
- * commands/mcp-prompt.ts，这里保证调用方与测试仍能从 `commands/mcp` 原路径拿到。
+ * commands/assets/mcp-prompt.ts，这里保证调用方与测试仍能从 `commands/assets/mcp` 原路径拿到。
  */
 export { parseMcpServerJson } from './mcp-prompt';
 

@@ -15,23 +15,23 @@
  * 如此，此处原样保留，不在本次结构重构中调整。
  */
 import path from 'node:path';
-import { defaultHabits, windowsDefaultProfile } from '../core/config/defaults';
-import { HABITS_FILE, loadHabits, PROFILE_FILE } from '../core/config/load';
-import { serializeYamlDoc } from '../core/config/serialize';
-import type { DetectedSnapshot } from '../core/detector/engine';
-import { runDetection } from '../core/detector/engine';
-import type { EnvSnapshot, Scope } from '../core/env';
-import { readEnv } from '../core/env';
-import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
-import { ALL_TARGET_IDS, syncOnce } from '../core/project/engine';
-import { claudeMainRulePath } from '../core/project/projectors/claude';
-import { codexMainRulePath } from '../core/project/projectors/codex';
-import { opencodeMainRulePath } from '../core/project/projectors/opencode';
-import { piMainRulePath } from '../core/project/projectors/pi';
-import type { ProjectContext } from '../core/project/types';
-import { isCancelledError, type PromptApi, type PromptOption } from '../infra/prompt';
-import type { HabitsInput, ProfileInput } from '../schema';
-import { HabitsSchema, ProfileSchema } from '../schema';
+import { defaultHabits, windowsDefaultProfile } from '../../core/config/defaults';
+import { HABITS_FILE, loadHabits, PROFILE_FILE } from '../../core/config/load';
+import { serializeYamlDoc } from '../../core/config/serialize';
+import type { DetectedSnapshot } from '../../core/detector/engine';
+import { runDetection } from '../../core/detector/engine';
+import type { EnvSnapshot, Scope } from '../../core/env';
+import { readEnv } from '../../core/env';
+import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
+import { ALL_TARGET_IDS, syncOnce } from '../../core/project/engine';
+import { claudeMainRulePath } from '../../core/project/projectors/claude';
+import { codexMainRulePath } from '../../core/project/projectors/codex';
+import { opencodeMainRulePath } from '../../core/project/projectors/opencode';
+import { piMainRulePath } from '../../core/project/projectors/pi';
+import type { ProjectContext } from '../../core/project/types';
+import { isCancelledError, type PromptApi, type PromptOption } from '../../infra/prompt';
+import type { HabitsInput, ProfileInput } from '../../schema';
+import { HabitsSchema, ProfileSchema } from '../../schema';
 import {
   attachInitArtifacts,
   type CancelledInitArtifacts,

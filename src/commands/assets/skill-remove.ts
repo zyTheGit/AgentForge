@@ -1,26 +1,26 @@
 /**
  * `aforge skill remove <name>` 的核心逻辑（Spec §7.6 profile-only 摘除）。
  *
- * 从 commands/skill.ts 抽出成独立模块：add / list 是「装东西 + 列东西」，remove 是
+ * 从 commands/assets/skill.ts 抽出成独立模块：add / list 是「装东西 + 列东西」，remove 是
  * 「摘登记 + 在摘不到时把用户引导回正确的层」，后者的分量几乎全在错误分支上——
  * 一个三选一的 hint 决策 + 两次只读探测（本层 skill 目录是否还在、另一层是否登记了
  * 同名）。这些细节与 add/list 没有任何共享状态，留在同一文件只会让 skill.ts 持续
  * 逼近 500 行卡口（AGENTS.md / Spec §11.3）。
  *
- * 本模块只做「算结果 / 抛错」，不打印：命令注册与输出渲染仍在 commands/skill.ts，
+ * 本模块只做「算结果 / 抛错」，不打印：命令注册与输出渲染仍在 commands/assets/skill.ts，
  * 且原路径的导出面通过 re-export 保持不变。
  */
 import path from 'node:path';
-import { loadProfile } from '../core/config/load';
-import { resolveWriteTargetLayer, type TargetLayer } from '../core/config/target-layer';
-import { readEnv, type Scope } from '../core/env';
-import { ConfigError } from '../core/errors';
-import { SKILLS_DIRNAME } from '../core/paths';
-import { withSotLock } from '../core/project/sync-lock';
-import { setSkillAlwaysLocked, validateSkillName } from '../core/sources/skill';
-import type { Host } from '../infra/host';
-import { otherScope, sotRootFor } from './context';
-// 仅类型导入：编译后被擦除，因此与 commands/skill.ts 的 re-export 不构成运行时环依赖
+import { loadProfile } from '../../core/config/load';
+import { resolveWriteTargetLayer, type TargetLayer } from '../../core/config/target-layer';
+import { readEnv, type Scope } from '../../core/env';
+import { ConfigError } from '../../core/errors';
+import { SKILLS_DIRNAME } from '../../core/paths';
+import { withSotLock } from '../../core/project/sync-lock';
+import { setSkillAlwaysLocked, validateSkillName } from '../../core/sources/skill';
+import type { Host } from '../../infra/host';
+import { otherScope, sotRootFor } from '../_shared/context';
+// 仅类型导入：编译后被擦除，因此与 commands/assets/skill.ts 的 re-export 不构成运行时环依赖
 import type { SkillCommandContext } from './skill';
 
 /** skill remove 结果（profile-only：磁盘目录不动）。 */

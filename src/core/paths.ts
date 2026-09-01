@@ -49,7 +49,7 @@ export function pathApiFor(os: OsContext): PathApi {
  *
  * 放在本模块（最底层的纯路径模块）而非 projectors/shared：SoT 侧的消费者
  * （core/sources/skill、core/learning/promote、core/doctor/check-environment、
- * commands/init-scaffold）
+ * commands/lifecycle/init-scaffold）
  * 与投影侧的消费者（四个 projector）互不依赖，共享物必须落在两者共同的下游。
  * projectors/shared 仍原样导出这两个名字（见该文件），投影侧调用点无需改动。
  */

@@ -9,19 +9,19 @@
  *   （AGF_SCOPE > project 在用 > user 在用）自己的 profile.yaml。
  */
 import type { Command } from 'commander';
-import { resolveEffectiveConfig } from '../core/config/defaults';
-import { resolveWriteTargetLayer } from '../core/config/target-layer';
-import { readEnv } from '../core/env';
-import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
+import { resolveEffectiveConfig } from '../../core/config/defaults';
+import { resolveWriteTargetLayer } from '../../core/config/target-layer';
+import { readEnv } from '../../core/env';
+import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
 import {
   listTemplates,
   type SetTemplateResult,
   setTemplateEnabled,
   type TemplateContext,
   type TemplateListItem,
-} from '../core/sources/template';
-import { type CommandContext, defaultCommandContext, printJson } from './context';
-import { resolveJsonFlag } from './flags';
+} from '../../core/sources/template';
+import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
+import { resolveJsonFlag } from '../_shared/flags';
 
 /** 命令上下文。 */
 export type TemplateCommandContext = CommandContext;

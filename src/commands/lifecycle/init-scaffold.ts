@@ -12,19 +12,19 @@
  * re-export，对外导出面与拆分前一致。
  */
 import path from 'node:path';
-import { defaultHabits, windowsDefaultProfile } from '../core/config/defaults';
-import { HABITS_FILE, PROFILE_FILE } from '../core/config/load';
-import { serializeYamlDoc } from '../core/config/serialize';
-import type { DetectedSnapshot } from '../core/detector/engine';
-import { runDetection } from '../core/detector/engine';
-import type { EnvSnapshot, Scope } from '../core/env';
-import { readEnv } from '../core/env';
-import { ConfigError } from '../core/errors';
-import { resolveProjectSoT, resolveUserSoT, SKILLS_DIRNAME } from '../core/paths';
-import { SYNC_LOCK_DIRNAME, withSotLock } from '../core/project/sync-lock';
-import { atomicWrite, listDirSafe, mkdirp } from '../infra/fsutil';
-import type { HabitsInput } from '../schema';
-import type { CommandContext } from './context';
+import { defaultHabits, windowsDefaultProfile } from '../../core/config/defaults';
+import { HABITS_FILE, PROFILE_FILE } from '../../core/config/load';
+import { serializeYamlDoc } from '../../core/config/serialize';
+import type { DetectedSnapshot } from '../../core/detector/engine';
+import { runDetection } from '../../core/detector/engine';
+import type { EnvSnapshot, Scope } from '../../core/env';
+import { readEnv } from '../../core/env';
+import { ConfigError } from '../../core/errors';
+import { resolveProjectSoT, resolveUserSoT, SKILLS_DIRNAME } from '../../core/paths';
+import { SYNC_LOCK_DIRNAME, withSotLock } from '../../core/project/sync-lock';
+import { atomicWrite, listDirSafe, mkdirp } from '../../infra/fsutil';
+import type { HabitsInput } from '../../schema';
+import type { CommandContext } from '../_shared/context';
 
 /** Spec §3.1 / §3.2：init 创建的 SoT 子目录（store/cache 由 source 管理按需创建）。 */
 export const SOT_SUBDIRS = ['custom', 'learnings', 'templates', SKILLS_DIRNAME, 'mcp'] as const;

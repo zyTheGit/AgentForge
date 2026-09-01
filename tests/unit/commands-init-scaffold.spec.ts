@@ -1,5 +1,5 @@
 /**
- * commands/init-scaffold 的两个共享构造器单测。
+ * commands/lifecycle/init-scaffold 的两个共享构造器单测。
  *
  * 二者的存在理由都是"同一份事实只算一次"：
  * - sotSubdirPaths：物化落盘、交互第⑤步 note 文案、取消清单三处共用同一份子目录
@@ -9,7 +9,11 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { habitsSkeleton, SOT_SUBDIRS, sotSubdirPaths } from '../../src/commands/init-scaffold';
+import {
+  habitsSkeleton,
+  SOT_SUBDIRS,
+  sotSubdirPaths,
+} from '../../src/commands/lifecycle/init-scaffold';
 import { defaultHabits } from '../../src/core/config/defaults';
 import type { DetectedSnapshot } from '../../src/core/detector/engine';
 import { HabitsSchema } from '../../src/schema';

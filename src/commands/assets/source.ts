@@ -14,8 +14,8 @@
  * core/sources/manager，本层只做目标识别与输出。
  */
 import type { Command } from 'commander';
-import { readEnv } from '../core/env';
-import { resolveUserSoT } from '../core/paths';
+import { readEnv } from '../../core/env';
+import { resolveUserSoT } from '../../core/paths';
 import {
   type AddSourceResult,
   addGitSource,
@@ -25,10 +25,10 @@ import {
   type SourceManagerContext,
   type UpdateSourceResult,
   updateSource,
-} from '../core/sources/manager';
-import type { Source } from '../schema';
-import { type CommandContext, defaultCommandContext, printJson } from './context';
-import { resolveJsonFlag } from './flags';
+} from '../../core/sources/manager';
+import type { Source } from '../../schema';
+import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
+import { resolveJsonFlag } from '../_shared/flags';
 
 /** 命令上下文。 */
 export type SourceCommandContext = CommandContext;

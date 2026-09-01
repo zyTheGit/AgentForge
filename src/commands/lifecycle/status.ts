@@ -22,25 +22,30 @@
  */
 import path from 'node:path';
 import type { Command } from 'commander';
-import { resolveEffectiveConfig } from '../core/config/defaults';
-import { HABITS_FILE, PROFILE_FILE } from '../core/config/load';
-import { readEnv, type Scope } from '../core/env';
-import { ConfigError } from '../core/errors';
+import { resolveEffectiveConfig } from '../../core/config/defaults';
+import { HABITS_FILE, PROFILE_FILE } from '../../core/config/load';
+import { readEnv, type Scope } from '../../core/env';
+import { ConfigError } from '../../core/errors';
 import {
   type AutoCaptureState,
   LEARNING_PROTOCOL_HEADING,
   rendersLearningProtocol,
   resolveAutoCapture,
-} from '../core/learning/auto-capture';
-import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
-import { projectorRegistry } from '../core/project/projectors/registry';
-import { readSyncMeta } from '../core/project/sync-meta';
-import type { ProjectContext, SkillInvokePrefix } from '../core/project/types';
-import { listDirSafe } from '../infra/fsutil';
-import type { FileStat, Host } from '../infra/host';
-import type { AutoCapture } from '../schema';
-import { type CommandContext, defaultCommandContext, printJson, renderList } from './context';
-import { resolveJsonFlag } from './flags';
+} from '../../core/learning/auto-capture';
+import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
+import { projectorRegistry } from '../../core/project/projectors/registry';
+import { readSyncMeta } from '../../core/project/sync-meta';
+import type { ProjectContext, SkillInvokePrefix } from '../../core/project/types';
+import { listDirSafe } from '../../infra/fsutil';
+import type { FileStat, Host } from '../../infra/host';
+import type { AutoCapture } from '../../schema';
+import {
+  type CommandContext,
+  defaultCommandContext,
+  printJson,
+  renderList,
+} from '../_shared/context';
+import { resolveJsonFlag } from '../_shared/flags';
 
 /** 命令上下文（host/os/cwd 注入；测试可换 fake host 与任意平台）。 */
 export type StatusCommandContext = CommandContext;

@@ -9,7 +9,7 @@
  * 任一处漏抄都不会被 tsc 或测试抓到（YAML 仍然合法，只是内容被折过）。
  *
  * 为什么放在 core/config 而不是 infra/fsutil 旁：受这条约束的全是 SoT 配置文档，
- * 调用方（commands/init-*、commands/import、core/learning、core/config 自身）都已
+ * 调用方（commands/init-*、commands/knowledge/import、core/learning、core/config 自身）都已
  * 依赖或可无环依赖 core/config；而 infra/fsutil 被 markers / writer / sync-* 等
  * 纯文本与投影路径大量 import，把 yaml 解析器塞进去会让这些从不写 YAML 的模块
  * 白拖一份依赖。本模块只 import `yaml` 与 infra/fsutil，是所有调用方的公共下游。

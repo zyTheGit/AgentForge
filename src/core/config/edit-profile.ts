@@ -87,7 +87,7 @@ export async function editProfile(
  * editProfile 的**内层**实现：同一段读-改-写，但**自己不取锁**。
  *
  * 给"已经持有同一个 `<sotRoot>/.sync.lock` 的调用方"用（`skill add` 把 copy +
- * 登记 + 回滚整段包进一次 withSotLock，见 commands/skill.runSkillAdd）。锁是
+ * 登记 + 回滚整段包进一次 withSotLock，见 commands/assets/skill.runSkillAdd）。锁是
  * 非递归的目录锁：同一进程在锁内再调 editProfile 会撞自己刚建的锁目录，
  * 因 acquiredAt 恒新鲜而直接抛 ConflictError(3)——不是死等，但同样走不通。
  *

@@ -1,25 +1,32 @@
 /**
  * aforge CLI 装配：commander 程序构建与命令注册（main.ts 保持为薄入口）。
  *
- * - 命令实现分散在 src/commands/*，此模块只做注册与 parse；
+ * - 命令实现按 SoT 生命周期分域放在 src/commands/{lifecycle,assets,knowledge}/，
+ *   共用件在 src/commands/_shared/；此模块只 import 到域文件夹级并做注册与 parse；
  * - --version 行为与 M0 保持一致（输出与 package.json 同步的 VERSION，退出码 0）；
  * - 纯 ASCII 描述：避免 Windows GBK 控制台（chcp 936）下非 ASCII 字符乱码。
  */
 import { Command } from 'commander';
-import { registerBundleCommand } from './commands/bundle';
-import { registerDetectCommand } from './commands/detect';
-import { registerDoctorCommand } from './commands/doctor';
-import { registerImportCommand } from './commands/import';
-import { registerInitCommand } from './commands/init';
-import { registerLearnCommand } from './commands/learn';
-import { registerLearningsCommand } from './commands/learnings';
-import { registerMcpCommand } from './commands/mcp';
-import { registerPromoteCommand } from './commands/promote';
-import { registerSkillCommand } from './commands/skill';
-import { registerSourceCommand } from './commands/source';
-import { registerStatusCommand } from './commands/status';
-import { registerSyncCommand } from './commands/sync';
-import { registerTemplateCommand } from './commands/template';
+import {
+  registerMcpCommand,
+  registerSkillCommand,
+  registerSourceCommand,
+  registerTemplateCommand,
+} from './commands/assets';
+import {
+  registerBundleCommand,
+  registerImportCommand,
+  registerLearnCommand,
+  registerLearningsCommand,
+  registerPromoteCommand,
+} from './commands/knowledge';
+import {
+  registerDetectCommand,
+  registerDoctorCommand,
+  registerInitCommand,
+  registerStatusCommand,
+  registerSyncCommand,
+} from './commands/lifecycle';
 import { VERSION } from './version';
 
 export { VERSION };
@@ -34,7 +41,7 @@ export function buildProgram(): Command {
     )
     .version(VERSION, '-V, --version', 'print version and exit')
     // Spec §6.2 全局标志：`aforge --json <cmd>` 与 `aforge <cmd> --json` 等价
-    // （子命令保留自身 --json 以兼容既有用法；统一经 commands/flags.resolveJsonFlag 判定）
+    // （子命令保留自身 --json 以兼容既有用法；统一经 commands/_shared/flags.resolveJsonFlag 判定）
     .option('--json', 'machine-readable output (absolute paths) - global flag (Spec 6.2)');
 
   registerDetectCommand(program);
@@ -55,7 +62,7 @@ export function buildProgram(): Command {
   // ---- M9 区块：import（Spec §7.7 MVP 基础版）----
   registerImportCommand(program);
 
-  // ---- bundle 区块：SoT 导出 / 导入（迁移；与上面的 import 语义不同，见 commands/bundle）----
+  // ---- bundle 区块：SoT 导出 / 导入（迁移；与上面的 import 语义不同，见 commands/knowledge/bundle）----
   registerBundleCommand(program);
 
   // 无子命令 → 输出简短帮助，退出码 0（Spec §6.1）

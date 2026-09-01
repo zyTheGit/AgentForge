@@ -29,7 +29,7 @@
  * - projection.path_style → core/generate/composer.applyPathStyle（投影正文里的
  *   路径 token 分隔符与家目录变量）；
  * - projection.gitignore_generated → core/project/engine 的 .gitignore 标记段写入；
- * - learning.default_scope → commands/learn 的默认落层；
+ * - learning.default_scope → commands/knowledge/learn 的默认落层；
  * - learning.auto_capture → core/learning/auto-capture（effectiveAutoCapture 供渲染，
  *   resolveAutoCapture 供 status / doctor 展示）
  *   → `prompt` 档由 core/generate/composer 插入 `## Learning Protocol` 段

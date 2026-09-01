@@ -20,11 +20,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-
-import { runInit } from '../../src/commands/init';
-import { runLearn } from '../../src/commands/learn';
-import { runPromote } from '../../src/commands/promote';
-import { runSync } from '../../src/commands/sync';
+import { runLearn, runPromote } from '../../src/commands/knowledge';
+import { runInit, runSync } from '../../src/commands/lifecycle';
 import {
   LEARNING_PROTOCOL_HEADING,
   LEARNING_PROTOCOL_SECTION,

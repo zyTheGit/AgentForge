@@ -25,18 +25,18 @@
 import path from 'node:path';
 import { cancel, intro, isCancel, multiline, outro, select, text } from '@clack/prompts';
 import type { Command } from 'commander';
-import { resolveEffectiveConfig } from '../core/config/defaults';
-import { resolveWriteTargetLayer } from '../core/config/target-layer';
-import type { EnvSnapshot, Scope } from '../core/env';
-import { readEnv } from '../core/env';
-import { ConfigError } from '../core/errors';
-import { type PromoteResult, promoteLearning } from '../core/learning/promote';
-import { type CreateLearningResult, createLearning } from '../core/learning/store';
-import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
-import type { LearningCategory, Profile } from '../schema';
-import { type CommandContext, defaultCommandContext, printJson } from './context';
-import { parseScopeOption, resolveJsonFlag } from './flags';
-import { isInteractiveStdin, readStdinText } from './stdin';
+import { resolveEffectiveConfig } from '../../core/config/defaults';
+import { resolveWriteTargetLayer } from '../../core/config/target-layer';
+import type { EnvSnapshot, Scope } from '../../core/env';
+import { readEnv } from '../../core/env';
+import { ConfigError } from '../../core/errors';
+import { type PromoteResult, promoteLearning } from '../../core/learning/promote';
+import { type CreateLearningResult, createLearning } from '../../core/learning/store';
+import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
+import type { LearningCategory, Profile } from '../../schema';
+import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
+import { parseScopeOption, resolveJsonFlag } from '../_shared/flags';
+import { isInteractiveStdin, readStdinText } from '../_shared/stdin';
 
 /** 命令上下文（host/os/cwd 注入；测试用真实临时目录 + env 覆盖 host）。 */
 export type LearnCommandContext = CommandContext;

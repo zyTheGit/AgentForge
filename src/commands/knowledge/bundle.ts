@@ -14,17 +14,26 @@
  */
 import path from 'node:path';
 import type { Command } from 'commander';
-import { type BundleExportResult, exportBundle, redactedCountWarning } from '../core/bundle/export';
+import {
+  type BundleExportResult,
+  exportBundle,
+  redactedCountWarning,
+} from '../../core/bundle/export';
 import {
   BUNDLE_CONFLICT_POLICIES,
   type BundleConflictPolicy,
   type BundleImportResult,
   importBundle,
-} from '../core/bundle/import';
-import { ConfigError } from '../core/errors';
-import { VERSION } from '../version';
-import { type CommandContext, defaultCommandContext, printJson, renderList } from './context';
-import { parseScopeOption, resolveJsonFlag } from './flags';
+} from '../../core/bundle/import';
+import { ConfigError } from '../../core/errors';
+import { VERSION } from '../../version';
+import {
+  type CommandContext,
+  defaultCommandContext,
+  printJson,
+  renderList,
+} from '../_shared/context';
+import { parseScopeOption, resolveJsonFlag } from '../_shared/flags';
 
 /** 命令上下文（host/os/cwd 注入；export 另需 CLI 版本写进 manifest）。 */
 export type BundleCommandContext = CommandContext;

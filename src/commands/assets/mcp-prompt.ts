@@ -1,7 +1,7 @@
 /**
  * `aforge mcp add` 的输入采集：交互问答（TTY）与 stdin JSON 解析。
  *
- * 从 commands/mcp.ts 抽出成独立模块：这里全是「怎么把用户/管道里的东西变成一个
+ * 从 commands/assets/mcp.ts 抽出成独立模块：这里全是「怎么把用户/管道里的东西变成一个
  * McpServerInput」的知识——@clack 问答流程、取消语义、`KEY=VAL` 列表的土办法解析、
  * zod 校验失败时逐条 issue 的错误文案；它与 add/remove 的写入逻辑（目标层解析、
  * SoT 锁、profile 编辑）没有任何耦合，是原文件里最自然的一道缝。分开后 mcp.ts 只剩
@@ -11,8 +11,8 @@
  */
 
 import { isCancel, select, text } from '@clack/prompts';
-import { ConfigError } from '../core/errors';
-import { type McpServerInput, McpServerSchema } from '../schema';
+import { ConfigError } from '../../core/errors';
+import { type McpServerInput, McpServerSchema } from '../../schema';
 
 /** "K=V,K=V" → record（空段忽略；M8 简单实现：不支持值内逗号/引号转义）。 */
 function parseKvList(raw: string): Record<string, string> | undefined {

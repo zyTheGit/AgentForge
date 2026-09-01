@@ -1,12 +1,12 @@
 /**
- * commands/context 单测（Spec §6.2）：命令层共享上下文装配与 --json 输出格式。
+ * commands/_shared/context 单测（Spec §6.2）：命令层共享上下文装配与 --json 输出格式。
  *
  * defaultCommandContext 是 13 个命令文件里那句 `{ host: realHost, cwd:
  * process.cwd(), os: currentOs() }` 的单一来源；printJson 是各命令 --json
  * 分支的统一输出（判定仍归 flags.resolveJsonFlag）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { defaultCommandContext, printJson } from '../../src/commands/context';
+import { defaultCommandContext, printJson } from '../../src/commands/_shared';
 import { currentOs } from '../../src/core/paths';
 import { realHost } from '../../src/infra/real-host';
 

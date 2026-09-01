@@ -15,18 +15,18 @@
  */
 import path from 'node:path';
 import type { Command } from 'commander';
-import { readEnv } from '../core/env';
+import { readEnv } from '../../core/env';
 import {
   learningFilePath,
   listLearnings,
   readLearningFile,
   removeLearning,
-} from '../core/learning/store';
-import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
-import { realHost } from '../infra/real-host';
-import type { Learning } from '../schema';
-import { type CommandContext, defaultCommandContext, printJson } from './context';
-import { resolveJsonFlag } from './flags';
+} from '../../core/learning/store';
+import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
+import { realHost } from '../../infra/real-host';
+import type { Learning } from '../../schema';
+import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
+import { resolveJsonFlag } from '../_shared/flags';
 
 /** 命令上下文。 */
 export type LearningsCommandContext = CommandContext;
@@ -85,7 +85,7 @@ async function findOne(ctx: LearningsCommandContext, id: string): Promise<Learni
 async function requireOne(ctx: LearningsCommandContext, id: string): Promise<LearningListItem> {
   const found = await findOne(ctx, id);
   if (found === null) {
-    const { ConfigError } = await import('../core/errors');
+    const { ConfigError } = await import('../../core/errors');
     throw new ConfigError(`learning 不存在: ${id}`, {
       hint: '运行 aforge learnings list 查看全部条目',
       details: { id },

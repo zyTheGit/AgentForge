@@ -11,14 +11,14 @@
 
 import { cancel, confirm, isCancel } from '@clack/prompts';
 import type { Command } from 'commander';
-import { readEnv } from '../core/env';
-import { ConfigError } from '../core/errors';
-import { type PromoteResult, promoteLearning } from '../core/learning/promote';
-import { currentOs, resolveUserSoT } from '../core/paths';
-import { realHost } from '../infra/real-host';
-import { type CommandContext, defaultCommandContext, printJson } from './context';
-import { resolveJsonFlag } from './flags';
-import { isInteractiveStdin } from './stdin';
+import { readEnv } from '../../core/env';
+import { ConfigError } from '../../core/errors';
+import { type PromoteResult, promoteLearning } from '../../core/learning/promote';
+import { currentOs, resolveUserSoT } from '../../core/paths';
+import { realHost } from '../../infra/real-host';
+import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
+import { resolveJsonFlag } from '../_shared/flags';
+import { isInteractiveStdin } from '../_shared/stdin';
 
 /** 命令上下文。 */
 export type PromoteCommandContext = CommandContext;

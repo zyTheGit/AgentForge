@@ -8,17 +8,19 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { formatDoctorReport, runDoctor } from '../../src/commands/doctor';
-import { runInit } from '../../src/commands/init';
-import { runLearn } from '../../src/commands/learn';
-import { formatStatus, runStatus } from '../../src/commands/status';
+import { runLearn } from '../../src/commands/knowledge';
 import {
   attachExitCodeOverride,
   EXIT_CODE_ROLLBACK_INCOMPLETE,
+  formatDoctorReport,
   formatFailureReport,
+  formatStatus,
   getExitCodeOverride,
+  runDoctor,
+  runInit,
+  runStatus,
   runSync,
-} from '../../src/commands/sync';
+} from '../../src/commands/lifecycle';
 import type { DoctorReport } from '../../src/core/doctor/checks';
 import { readEnv } from '../../src/core/env';
 import { ConfigError } from '../../src/core/errors';

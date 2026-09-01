@@ -39,11 +39,16 @@
  * 单点 import，拆分不改变对外导出面。
  */
 import type { Command } from 'commander';
-import type { DetectedSnapshot } from '../core/detector/engine';
-import { assertTty, createClackPrompt, defaultTtyProbe, isCancelledError } from '../infra/prompt';
-import { VERSION } from '../version';
-import { defaultCommandContext, printJson } from './context';
-import { parseScopeOption, resolveInitMode, resolveJsonFlag } from './flags';
+import type { DetectedSnapshot } from '../../core/detector/engine';
+import {
+  assertTty,
+  createClackPrompt,
+  defaultTtyProbe,
+  isCancelledError,
+} from '../../infra/prompt';
+import { VERSION } from '../../version';
+import { defaultCommandContext, printJson } from '../_shared/context';
+import { parseScopeOption, resolveInitMode, resolveJsonFlag } from '../_shared/flags';
 import { extractInitArtifacts, formatCancelledInitArtifacts } from './init-artifacts';
 import { type InitInteractiveResult, runInitInteractive } from './init-interactive';
 import { runInit } from './init-scaffold';

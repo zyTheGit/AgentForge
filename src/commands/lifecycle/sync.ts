@@ -19,18 +19,18 @@
  */
 import path from 'node:path';
 import type { Command } from 'commander';
-import { readEnv } from '../core/env';
+import { readEnv } from '../../core/env';
 import {
   getSyncFailureReport,
   type SyncResult,
   type SyncTargetResult,
   syncOnce,
-} from '../core/project/engine';
-import { SYNC_META_FILE } from '../core/project/sync-meta';
-import { dryRunItem } from '../core/project/writer';
-import { VERSION } from '../version';
-import { type CommandContext, defaultCommandContext, printJson } from './context';
-import { resolveJsonFlag } from './flags';
+} from '../../core/project/engine';
+import { SYNC_META_FILE } from '../../core/project/sync-meta';
+import { dryRunItem } from '../../core/project/writer';
+import { VERSION } from '../../version';
+import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
+import { resolveJsonFlag } from '../_shared/flags';
 
 /** 命令上下文（host/os/cwd/版本注入；测试用真实临时目录 + realHost）。 */
 export interface SyncCommandContext extends CommandContext {

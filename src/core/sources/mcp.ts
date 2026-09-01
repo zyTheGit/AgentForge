@@ -163,7 +163,7 @@ function parseRemovedServer(entry: McpServerInput, profileFile: string): McpServ
  * 从目标层 profile.yaml 的 mcp.servers 摘掉一条声明（**调用方须已持 SoT 事务锁**）。
  *
  * 走 editProfileLocked 而非 editProfile：`.sync.lock` 是非递归目录锁，命令层已把
- * 「解析目标层 → 摘除」整段包进一次 withSotLock（见 commands/mcp.runMcpRemove），
+ * 「解析目标层 → 摘除」整段包进一次 withSotLock（见 commands/assets/mcp.runMcpRemove），
  * 内层再自取锁会撞自己刚建的锁目录而抛 ConflictError(3)。
  *
  * 存在性判据落在 mutate 内部：命中即必然改动（无幂等分支），未命中则在写盘前抛

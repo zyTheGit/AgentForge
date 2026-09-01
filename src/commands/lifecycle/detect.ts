@@ -6,12 +6,12 @@
  * - 探测引擎零失败路径（坏环境一律降级为"未检出"），进程退出码恒 0。
  */
 import type { Command } from 'commander';
-import type { DetectedRuntime, DetectedSnapshot, DetectedTool } from '../core/detector/engine';
-import { runDetection } from '../core/detector/engine';
-import { readEnv } from '../core/env';
-import { realHost } from '../infra/real-host';
-import { printJson } from './context';
-import { resolveJsonFlag } from './flags';
+import type { DetectedRuntime, DetectedSnapshot, DetectedTool } from '../../core/detector/engine';
+import { runDetection } from '../../core/detector/engine';
+import { readEnv } from '../../core/env';
+import { realHost } from '../../infra/real-host';
+import { printJson } from '../_shared/context';
+import { resolveJsonFlag } from '../_shared/flags';
 
 /** 注册 detect 命令（由 cli.ts 装配调用）。 */
 export function registerDetectCommand(program: Command): void {

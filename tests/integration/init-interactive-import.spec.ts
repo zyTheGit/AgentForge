@@ -19,16 +19,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 
-import { runImport } from '../../src/commands/import';
+import { runImport } from '../../src/commands/knowledge';
 import {
   extractInitArtifacts,
   formatCancelledInitArtifacts,
   runInit,
   runInitInteractive,
+  runSync,
   SOT_SUBDIRS,
   targetMainRulePaths,
-} from '../../src/commands/init';
-import { runSync } from '../../src/commands/sync';
+} from '../../src/commands/lifecycle';
 import { readEnv } from '../../src/core/env';
 import { currentOs } from '../../src/core/paths';
 import type { Host } from '../../src/infra/host';

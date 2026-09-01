@@ -10,9 +10,9 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runInit } from '../../src/commands/init';
-import { materializeSoT, SOT_SUBDIRS } from '../../src/commands/init-scaffold';
-import { runSkillAdd } from '../../src/commands/skill';
+import { runSkillAdd } from '../../src/commands/assets';
+import { runInit } from '../../src/commands/lifecycle';
+import { materializeSoT, SOT_SUBDIRS } from '../../src/commands/lifecycle/init-scaffold';
 import { loadProfile } from '../../src/core/config/load';
 import { currentOs } from '../../src/core/paths';
 import { SYNC_LOCK_DIRNAME, SYNC_LOCK_META_FILE } from '../../src/core/project/sync-lock';

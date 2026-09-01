@@ -8,7 +8,7 @@
 
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseMcpServerJson } from '../../../src/commands/mcp';
+import { parseMcpServerJson } from '../../../src/commands/assets';
 import { loadProfile } from '../../../src/core/config/load';
 import type { TargetLayer } from '../../../src/core/config/target-layer';
 import {
