@@ -23,6 +23,8 @@
 
 `--json` 同时是 program 级全局标志：任何子命令都可写成 `aforge --json <cmd>`，输出为机器可读 JSON（路径一律绝对路径）。注意 `mcp add` 的**输入**标志叫 `--from-json`，`--json` 只表示输出契约。
 
+`--no-color` / `--color` 是**位置无关**的呈现开关（写在命令前后都算），只影响人类可读输出；缺省按终端能力自动判定，也认 `NO_COLOR` / `FORCE_COLOR`。分档规则见 [平台注意事项](platform.md#windows)。
+
 ## 环境变量
 
 | 变量 | 作用 |
@@ -33,6 +35,7 @@
 | `AGF_OFFLINE` | 设为 `1` 声明离线模式，需要网络的操作尽早失败（退出码 5） |
 | `CI` | 为真时 `aforge learn` 被拒（退出码 2），learnings 恒不落盘；不影响投影正文 |
 | `PI_CODING_AGENT_DIR` | 覆盖 pi 的 agent 目录：user scope 的 `AGENTS.md` / `skills/` / `mcp.json` 整体跟随；`aforge doctor` 打出生效目录 |
+| `NO_COLOR` / `FORCE_COLOR` | 关闭 / 强制开启人类可读输出的颜色（`NO_COLOR` 优先）；`--no-color` / `--color` 压过两者 |
 
 有效 scope 的解析顺序：显式 `--scope` > `AGF_SCOPE` > project 层在用 > user 层在用 > `project`。
 

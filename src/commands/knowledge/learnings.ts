@@ -24,6 +24,7 @@ import {
 } from '../../core/learning/store';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
 import { realHost } from '../../infra/real-host';
+import { getUi, type Ui } from '../../infra/ui';
 import type { Learning } from '../../schema';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
 import { resolveJsonFlag } from '../_shared/flags';
@@ -115,10 +116,11 @@ export async function runLearningsRemove(
   return { id, file: found.file, scope: found.scope };
 }
 
-/** 单行列摘要（ASCII，两列对齐）。 */
-function listLine(item: LearningListItem): string {
+/** 单行列摘要（两列对齐；promoted 绿 / draft 暗）。 */
+function listLine(item: LearningListItem, ui: Ui): string {
   const l = item.learning;
-  return `  ${l.id}  [${item.scope}]  ${l.promoted ? 'promoted' : 'draft   '}  ${l.category.padEnd(12)}${l.trigger === '' ? '' : `  ${l.trigger}`}`;
+  const state = l.promoted ? ui.green('promoted') : ui.dim('draft   ');
+  return `  ${ui.bold(l.id)}  [${item.scope}]  ${state}  ${ui.dim(l.category.padEnd(12))}${l.trigger === '' ? '' : `  ${l.trigger}`}`;
 }
 
 export function registerLearningsCommand(program: Command): void {
@@ -136,12 +138,13 @@ export function registerLearningsCommand(program: Command): void {
         printJson(items.map((i) => ({ ...i.learning, scope: i.scope, file: i.file })));
         return;
       }
+      const ui = getUi();
       if (items.length === 0) {
-        console.log('no learnings yet - run `aforge learn` to create one');
+        console.log(`no learnings yet - run ${ui.code('aforge learn')} to create one`);
         return;
       }
-      const lines = items.map(listLine);
-      lines.push('', `${items.length} learning(s)`);
+      const lines = items.map((item) => listLine(item, ui));
+      lines.push('', ui.dim(`${items.length} learning(s)`));
       console.log(lines.join('\n'));
     });
 
@@ -183,14 +186,15 @@ export function registerLearningsCommand(program: Command): void {
         });
         return;
       }
+      const ui = getUi();
       console.log(
         [
-          `learning file: ${found.file}`,
-          `open it with your editor (e.g. \`${editor} "${found.file}"\`) and save;`,
-          'current content:',
-          '---',
+          `${ui.dim('learning file')}: ${ui.path(found.file)}`,
+          ui.dim(`open it with your editor (e.g. \`${editor} "${found.file}"\`) and save;`),
+          ui.dim('current content:'),
+          ui.dim('---'),
           content,
-          '---',
+          ui.dim('---'),
         ].join('\n'),
       );
     });
@@ -205,6 +209,9 @@ export function registerLearningsCommand(program: Command): void {
         printJson(result);
         return;
       }
-      console.log(`learning removed: ${result.id} (${result.scope} layer)\n  ${result.file}`);
+      const ui = getUi();
+      console.log(
+        `${ui.green('learning removed')}: ${ui.bold(result.id)} (${result.scope} layer)\n  ${ui.path(result.file)}`,
+      );
     });
 }

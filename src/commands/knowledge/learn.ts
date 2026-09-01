@@ -33,10 +33,14 @@ import { ConfigError } from '../../core/errors';
 import { type PromoteResult, promoteLearning } from '../../core/learning/promote';
 import { type CreateLearningResult, createLearning } from '../../core/learning/store';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
+import { getUi, type Ui } from '../../infra/ui';
 import type { LearningCategory, Profile } from '../../schema';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
 import { parseScopeOption, resolveJsonFlag } from '../_shared/flags';
 import { isInteractiveStdin, readStdinText } from '../_shared/stdin';
+
+/** 详情行的 label 宽度（`category` / `promoted` / `WARNING` 同档，冒号同列）。 */
+const LEARN_LABEL_WIDTH = 8;
 
 /** 命令上下文（host/os/cwd 注入；测试用真实临时目录 + env 覆盖 host）。 */
 export type LearnCommandContext = CommandContext;
@@ -322,15 +326,26 @@ export function registerLearnCommand(program: Command): void {
           return;
         }
 
+        const ui = getUi();
         const lines: string[] = [
-          `learning created: ${result.learning.id}`,
-          `  scope     : ${result.learning.scope} (${result.sotRoot})`,
-          `  category  : ${result.learning.category}`,
-          `  file      : ${result.file}`,
+          `${ui.green('learning created')}: ${ui.bold(result.learning.id)}`,
+          ui.kv(
+            'scope',
+            `${result.learning.scope} (${ui.path(result.sotRoot)})`,
+            LEARN_LABEL_WIDTH,
+          ),
+          ui.kv('category', result.learning.category, LEARN_LABEL_WIDTH),
+          ui.kv('file', ui.path(result.file), LEARN_LABEL_WIDTH),
         ];
         if (result.duplicateOf !== undefined) {
           lines.push(
-            `  WARNING   : content duplicates unpromoted entry ${result.duplicateOf} (still created, Spec 7.5)`,
+            ui.kv(
+              'WARNING',
+              ui.yellow(
+                `content duplicates unpromoted entry ${result.duplicateOf} (still created, Spec 7.5)`,
+              ),
+              LEARN_LABEL_WIDTH,
+            ),
           );
         }
         lines.push(...autoPromoteLines(result));
@@ -364,25 +379,35 @@ function describeAutoPromoteError(error: unknown): string {
 }
 
 /** 人类可读输出的尾段：auto_promote 结果 + 下一步提示。 */
-function autoPromoteLines(result: LearnResult): string[] {
+function autoPromoteLines(result: LearnResult, ui: Ui = getUi()): string[] {
   const outcome = result.autoPromote;
   if (outcome === undefined) {
     return [
       '',
-      `next: review then run \`aforge promote ${result.learning.id}\` to inject into projections`,
+      ui.next(
+        `review then run ${ui.code(`aforge promote ${result.learning.id}`)} to inject into projections`,
+      ),
     ];
   }
   if (!outcome.ok) {
     return [
       '',
-      `auto-promote FAILED (learning.auto_promote=true): ${describeAutoPromoteError(outcome.error)}`,
-      `  entry kept as promoted:false — fix the cause then run \`aforge promote ${result.learning.id}\``,
+      ui.red(
+        `auto-promote FAILED (learning.auto_promote=true): ${describeAutoPromoteError(outcome.error)}`,
+      ),
+      ui.yellow(
+        `  entry kept as promoted:false - fix the cause then run \`aforge promote ${result.learning.id}\``,
+      ),
     ];
   }
   return [
-    `  promoted  : ${outcome.result.targetFile} (learning.auto_promote=true)`,
+    ui.kv(
+      'promoted',
+      `${ui.path(outcome.result.targetFile)} ${ui.dim('(learning.auto_promote=true)')}`,
+      LEARN_LABEL_WIDTH,
+    ),
     '',
-    'next: run `aforge sync` to project the promoted rule into agent targets',
+    ui.next(`run ${ui.code('aforge sync')} to project the promoted rule into agent targets`),
   ];
 }
 

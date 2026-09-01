@@ -3,9 +3,10 @@
  *
  * 为什么单独成模块：这组函数的唯一职责是在 CancelledError 上搬运一份「磁盘上还
  * 留下了什么」的清单——生产方是交互流程（init-interactive），消费方是命令层的打印
- * 分支（init.ts）。两侧都要用它，它自己零 import；放在中间层让交互层与命令层保持
- * 单向依赖不成环，也让「清单挂载属性名」这个跨模块契约只有一个定义点。
+ * 分支（init.ts）。两侧都要用它，它只依赖 infra/ui 做上色；放在中间层让交互层与命令层
+ * 保持单向依赖不成环，也让「清单挂载属性名」这个跨模块契约只有一个定义点。
  */
+import { getUi, type Ui } from '../../infra/ui';
 
 /**
  * 交互 init 被取消时的磁盘产物清单。
@@ -97,28 +98,29 @@ export function extractInitArtifacts(err: unknown): CancelledInitArtifacts | und
  */
 export function formatCancelledInitArtifacts(
   artifacts: CancelledInitArtifacts | undefined,
+  ui: Ui = getUi(),
 ): string[] {
   const files = artifacts?.createdFiles ?? [];
   const dirs = artifacts?.createdDirs ?? [];
   if (artifacts?.committed === true) {
     return [
-      'aforge init - cancelled at the sync prompt; the SoT is already written:',
-      ...files.map((file) => `created file: ${file}`),
-      ...dirs.map((dir) => `created dir: ${dir}`),
+      ui.yellow('aforge init - cancelled at the sync prompt; the SoT is already written:'),
+      ...files.map((file) => `created file: ${ui.path(file)}`),
+      ...dirs.map((dir) => `created dir: ${ui.path(dir)}`),
       '',
-      'next: run `aforge sync` to project rules to agent targets',
+      ui.next(`run ${ui.code('aforge sync')} to project rules to agent targets`),
     ];
   }
   if (files.length === 0 && dirs.length === 0) {
-    return ['aforge init - cancelled: rolled back, nothing was written'];
+    return [ui.yellow('aforge init - cancelled: rolled back, nothing was written')];
   }
   return [
-    'aforge init - cancelled; rollback left the following on disk:',
-    ...files.map((file) => `leftover file: ${file}`),
-    ...dirs.map((dir) => `leftover dir: ${dir}`),
+    ui.red('aforge init - cancelled; rollback left the following on disk:'),
+    ...files.map((file) => `leftover file: ${ui.path(file)}`),
+    ...dirs.map((dir) => `leftover dir: ${ui.path(dir)}`),
     '',
     // 不写"或重新运行 init 继续"：残留使 SoT 根非空，重跑 init 会在
     // resolveFreshSoTRoot 直接抛 ConfigError(2)。
-    '必须先删除以上残留，才能重新运行 aforge init',
+    ui.red('必须先删除以上残留，才能重新运行 aforge init'),
   ];
 }

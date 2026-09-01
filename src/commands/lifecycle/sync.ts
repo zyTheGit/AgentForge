@@ -15,7 +15,8 @@
  * - 事务设施级警告（崩溃恢复能力降级等）以 `crash recovery disabled` 前缀输出；
  * - 同一 SoT 已有 sync 在写入（`.sync.lock/` 被占用）→ ConflictError(3)。
  *
- * 核心逻辑在 core/project/engine.syncOnce；本层只做参数解析与输出（纯 ASCII）。
+ * 核心逻辑在 core/project/engine.syncOnce；本层只做参数解析与输出（上色 + 符号，
+ * GBK 控制台与管道自动降级为纯 ASCII，见 infra/ui）。
  */
 import path from 'node:path';
 import type { Command } from 'commander';
@@ -28,6 +29,7 @@ import {
 } from '../../core/project/engine';
 import { SYNC_META_FILE } from '../../core/project/sync-meta';
 import { dryRunItem } from '../../core/project/writer';
+import { getUi, type Ui } from '../../infra/ui';
 import { VERSION } from '../../version';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
 import { resolveJsonFlag } from '../_shared/flags';
@@ -75,22 +77,23 @@ export async function runSync(
 }
 
 /** 单个 target 的明细行（`[claude] merge (marker): <path>`，附状态标注）。 */
-function targetItemLines(target: SyncTargetResult, dryRun: boolean): string[] {
+function targetItemLines(target: SyncTargetResult, dryRun: boolean, ui: Ui): string[] {
   return target.items.map((item, index) => {
     const base = `${dryRun ? 'would ' : ''}${dryRunItem(item)}`;
+    const prefix = `[${ui.cyan(target.targetId)}]`;
     const status = target.statuses[index];
     if (status === 'unchanged') {
-      return `[${target.targetId}] ${base} (unchanged, skipped)`;
+      return `${prefix} ${ui.dim(`${base} (unchanged, skipped)`)}`;
     }
     if (status === 'warning') {
-      return `[${target.targetId}] ${base} (soft, failed - see warnings)`;
+      return `${prefix} ${base} ${ui.yellow('(soft, failed - see warnings)')}`;
     }
-    return `[${target.targetId}] ${base}`;
+    return `${prefix} ${base}`;
   });
 }
 
 /** 单个 target 的汇总行（成功 / 带 warning）。 */
-function targetSummaryLine(target: SyncTargetResult): string {
+function targetSummaryLine(target: SyncTargetResult, ui: Ui): string {
   const written = target.statuses.filter((s) => s === 'written').length;
   const unchanged = target.statuses.filter((s) => s === 'unchanged').length;
   const warned = target.statuses.filter((s) => s === 'warning').length;
@@ -104,79 +107,88 @@ function targetSummaryLine(target: SyncTargetResult): string {
   if (warned > 0) {
     parts.push(`${warned} soft warning(s)`);
   }
-  return `  ${target.targetId}: ${warned > 0 ? 'ok (warnings)' : 'ok'} (${parts.join(', ')})`;
+  const verdict = warned > 0 ? ui.yellow('ok (warnings)') : ui.green('ok');
+  return `  ${target.targetId}: ${verdict} ${ui.dim(`(${parts.join(', ')})`)}`;
 }
 
-/** 结果摘要输出（逐项明细 + 每 target 汇总表 + 计数；dry-run 显式标注）。M9 起导出供 init -i 交互末尾的「立即 sync」复用。 */
-export function printSyncResult(result: SyncResult): void {
+/**
+ * 结果摘要输出（逐项明细 + 每 target 汇总表 + 计数；dry-run 显式标注）。
+ *
+ * M9 起导出供 init -i 交互末尾的「立即 sync」复用。
+ */
+export function printSyncResult(result: SyncResult, ui: Ui = getUi()): void {
   const banner = result.dryRun
-    ? `aforge sync (DRY RUN - no files will be written) - scope: ${result.scope}`
-    : `aforge sync - scope: ${result.scope}`;
+    ? `${ui.bold('aforge sync')} ${ui.yellow('(DRY RUN - no files will be written)')} - scope: ${ui.cyan(result.scope)}`
+    : `${ui.bold('aforge sync')} - scope: ${ui.cyan(result.scope)}`;
   const lines: string[] = [banner, ''];
 
   if (result.recovered.length > 0) {
     // 上次 sync 被强杀（SIGKILL / 断电）遗留的落盘备份已在本次取锁后恢复
-    lines.push('recovered from an interrupted previous sync:');
+    lines.push(ui.bold('recovered from an interrupted previous sync:'));
     for (const entry of result.recovered) {
       lines.push(
         entry.restored
-          ? `  restored: ${entry.path}`
-          : `  NOT restored: ${entry.path}: ${entry.error ?? 'unknown error'}`,
+          ? `  restored: ${ui.path(entry.path)}`
+          : ui.red(`  NOT restored: ${entry.path}: ${entry.error ?? 'unknown error'}`),
       );
     }
     lines.push('');
   }
 
   for (const target of result.targets) {
-    lines.push(...targetItemLines(target, result.dryRun));
+    lines.push(...targetItemLines(target, result.dryRun, ui));
   }
   if (result.gitignore !== null) {
     // §4.2 projection.gitignore_generated：项目 .gitignore 的标记段（非 agent target）
-    lines.push(...targetItemLines(result.gitignore, result.dryRun));
+    lines.push(...targetItemLines(result.gitignore, result.dryRun, ui));
   }
   for (const skipped of result.skippedTargets) {
-    lines.push(`[${skipped}] skipped: projector not available in this version`);
+    lines.push(ui.dim(`[${skipped}] skipped: projector not available in this version`));
   }
   for (const skip of result.commandSkips) {
     // §8.8.4：命令薄壳整项跳过（该 target 的其余产物照常投影）
-    lines.push(`[${skip.targetId}] commands skipped: ${skip.reason}`);
+    lines.push(ui.yellow(`[${skip.targetId}] commands skipped: ${skip.reason}`));
   }
 
   if (result.targets.length > 0) {
-    lines.push('', 'target summary:', ...result.targets.map(targetSummaryLine));
+    lines.push(
+      '',
+      ui.bold('target summary:'),
+      ...result.targets.map((t) => targetSummaryLine(t, ui)),
+    );
     if (result.gitignore !== null) {
-      lines.push(targetSummaryLine(result.gitignore));
+      lines.push(targetSummaryLine(result.gitignore, ui));
     }
   }
   if (result.warnings.length > 0) {
-    lines.push('', 'warnings:');
+    lines.push('', ui.yellow(ui.bold('warnings:')));
     for (const warning of result.warnings) {
-      lines.push(`  [${warning.targetId}] ${warning.path}: ${warning.message}`);
+      lines.push(`  [${warning.targetId}] ${warning.path}: ${ui.yellow(warning.message)}`);
     }
   }
   if (result.transactionWarnings.length > 0) {
     // 事务设施级问题：崩溃恢复能力已失效 / 有备份被保留下来待人工核对
-    lines.push('', 'transaction warnings:');
+    lines.push('', ui.yellow(ui.bold('transaction warnings:')));
     for (const warning of result.transactionWarnings) {
-      lines.push(`  ${warning.message} (${warning.path})`);
+      lines.push(`  ${ui.yellow(warning.message)} (${ui.path(warning.path)})`);
     }
   }
   if (result.pruned.length > 0) {
     // §7.6 差集清理：上一轮投影过、本轮不该再存在的产物 / MCP server 键
-    lines.push('', 'pruned (no longer projected):');
+    lines.push('', ui.bold('pruned (no longer projected):'));
     for (const entry of result.pruned) {
       lines.push(
         entry.kind === 'mcp-server'
-          ? `  mcp server "${entry.name}" removed from ${entry.path}`
-          : `  deleted: ${entry.path}`,
+          ? `  mcp server "${entry.name}" removed from ${ui.path(entry.path)}`
+          : `  deleted: ${ui.path(entry.path)}`,
       );
     }
   }
   if (result.pruneSkipped.length > 0) {
     // 跳过不影响退出码：残留无害，静默吞掉用户手工改过的内容才有害
-    lines.push('', 'prune skipped (needs manual review):');
+    lines.push('', ui.yellow(ui.bold('prune skipped (needs manual review):')));
     for (const entry of result.pruneSkipped) {
-      lines.push(`  ${entry.path}: ${entry.reason}`);
+      lines.push(`  ${ui.path(entry.path)}: ${entry.reason}`);
     }
   }
 
@@ -184,12 +196,16 @@ export function printSyncResult(result: SyncResult): void {
   lines.push('');
   if (result.dryRun) {
     lines.push(
-      `dry-run complete: ${result.targets.length} target(s), ${fileCount} file(s) would be written (nothing touched)`,
+      ui.yellow(
+        `dry-run complete: ${result.targets.length} target(s), ${fileCount} file(s) would be written (nothing touched)`,
+      ),
     );
   } else {
-    lines.push(`sync complete: ${result.targets.length} target(s), ${fileCount} file(s) projected`);
-    lines.push(`content hash: ${result.contentHash}`);
-    lines.push(`sync-meta: ${path.join(result.sotRoot, SYNC_META_FILE)}`);
+    lines.push(
+      ui.green(`sync complete: ${result.targets.length} target(s), ${fileCount} file(s) projected`),
+    );
+    lines.push(`${ui.dim('content hash')}: ${result.contentHash}`);
+    lines.push(`${ui.dim('sync-meta')}: ${ui.path(path.join(result.sotRoot, SYNC_META_FILE))}`);
   }
 
   console.log(lines.join('\n'));
@@ -246,53 +262,61 @@ export function getExitCodeOverride(err: unknown): number | undefined {
  * 清单**前置**（用户最需要先看到哪些文件还处于被改动状态），随后给出保留下来的
  * 备份目录——「手工处理」的提示只有配上 sync 前的原文才有意义。
  */
-export function formatFailureReport(report: {
-  readonly targetStatuses: readonly { readonly targetId: string; readonly status: string }[];
-  readonly rolledBack: readonly {
-    readonly path: string;
-    readonly restored: boolean;
-    readonly error?: string;
-  }[];
-  readonly preservedBackupDir?: string;
-}): string {
+export function formatFailureReport(
+  report: {
+    readonly targetStatuses: readonly { readonly targetId: string; readonly status: string }[];
+    readonly rolledBack: readonly {
+      readonly path: string;
+      readonly restored: boolean;
+      readonly error?: string;
+    }[];
+    readonly preservedBackupDir?: string;
+  },
+  ui: Ui = getUi(),
+): string {
   const restored = report.rolledBack.filter((r) => r.restored).length;
   const failed = report.rolledBack.filter((r) => !r.restored);
 
   const lines: string[] = [];
   if (failed.length === 0) {
-    lines.push('aforge sync failed - all written files have been rolled back', '');
+    lines.push(ui.yellow('aforge sync failed - all written files have been rolled back'), '');
   } else {
     lines.push(
-      `aforge sync failed - rollback incomplete - ${failed.length} file(s) could not be restored`,
+      ui.red(
+        `aforge sync failed - rollback incomplete - ${failed.length} file(s) could not be restored`,
+      ),
       '',
-      'files left in a modified state (restore them manually before the next sync):',
+      ui.bold('files left in a modified state (restore them manually before the next sync):'),
     );
     for (const entry of failed) {
-      lines.push(`  ${entry.path}: ${entry.error ?? 'unknown error'}`);
+      lines.push(`  ${ui.path(entry.path)}: ${ui.red(entry.error ?? 'unknown error')}`);
     }
     lines.push('');
     if (report.preservedBackupDir !== undefined) {
-      lines.push(`pre-sync backups kept for manual recovery: ${report.preservedBackupDir}`, '');
+      lines.push(
+        `pre-sync backups kept for manual recovery: ${ui.path(report.preservedBackupDir)}`,
+        '',
+      );
     }
   }
 
-  lines.push('target summary:');
+  lines.push(ui.bold('target summary:'));
   for (const entry of report.targetStatuses) {
     if (entry.status === 'failed') {
-      lines.push(`  ${entry.targetId}: failed (see error below)`);
+      lines.push(`  ${entry.targetId}: ${ui.red('failed (see error below)')}`);
     } else if (entry.status === 'ok-rolled-back') {
-      lines.push(`  ${entry.targetId}: ok (rolled back to pre-sync state)`);
+      lines.push(`  ${entry.targetId}: ${ui.yellow('ok (rolled back to pre-sync state)')}`);
     } else {
-      lines.push(`  ${entry.targetId}: not started`);
+      lines.push(`  ${entry.targetId}: ${ui.dim('not started')}`);
     }
   }
 
   lines.push('');
   lines.push(
-    `rollback: ${restored} file(s) restored${failed.length > 0 ? `, ${failed.length} restore error(s)` : ''}`,
+    `rollback: ${restored} file(s) restored${failed.length > 0 ? `, ${ui.red(`${failed.length} restore error(s)`)}` : ''}`,
   );
   if (failed.length > 0) {
-    lines.push(`exit code: ${EXIT_CODE_ROLLBACK_INCOMPLETE} (rollback incomplete)`);
+    lines.push(ui.red(`exit code: ${EXIT_CODE_ROLLBACK_INCOMPLETE} (rollback incomplete)`));
   }
   return lines.join('\n');
 }

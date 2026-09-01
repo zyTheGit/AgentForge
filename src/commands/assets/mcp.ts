@@ -49,6 +49,7 @@ import {
   type RemoveMcpServerResult,
   removeMcpServerLocked,
 } from '../../core/sources/mcp';
+import { getUi } from '../../infra/ui';
 import type { McpServerInput } from '../../schema';
 import {
   type CommandContext,
@@ -62,6 +63,9 @@ import {
 import { parseScopeOption, resolveJsonFlag } from '../_shared/flags';
 import { isInteractiveStdin, readStdinText } from '../_shared/stdin';
 import { parseMcpServerJson, promptServer } from './mcp-prompt';
+
+/** 详情行的 label 宽度（`transport` 最长，冒号同列）。 */
+const MCP_LABEL_WIDTH = 9;
 
 /** 命令上下文。 */
 export type McpCommandContext = CommandContext;
@@ -229,12 +233,13 @@ export function registerMcpCommand(program: Command): void {
         return;
       }
 
+      const ui = getUi();
       console.log(
         [
-          `mcp server ${result.replaced ? 'updated' : 'added'}: ${result.server.name}`,
-          `  transport : ${result.server.transport}`,
-          `  profile   : ${result.profileFile}`,
-          `  servers   : ${renderList(result.servers.map((s) => s.name))}`,
+          `${ui.green(`mcp server ${result.replaced ? 'updated' : 'added'}`)}: ${ui.bold(result.server.name)}`,
+          ui.kv('transport', result.server.transport, MCP_LABEL_WIDTH),
+          ui.kv('profile', ui.path(result.profileFile), MCP_LABEL_WIDTH),
+          ui.kv('servers', renderList(result.servers.map((s) => s.name)), MCP_LABEL_WIDTH),
         ].join('\n'),
       );
     });
@@ -256,19 +261,22 @@ export function registerMcpCommand(program: Command): void {
         printJson(result);
         return;
       }
+      const ui = getUi();
       console.log(
         [
-          `mcp server removed: ${result.removed.name}`,
-          `  transport : ${result.removed.transport}`,
-          `  scope     : ${result.scope}`,
-          `  profile   : ${result.profileFile}`,
-          `  servers   : ${renderList(result.servers.map((s) => s.name))}`,
+          `${ui.green('mcp server removed')}: ${ui.bold(result.removed.name)}`,
+          ui.kv('transport', result.removed.transport, MCP_LABEL_WIDTH),
+          ui.kv('scope', ui.cyan(result.scope), MCP_LABEL_WIDTH),
+          ui.kv('profile', ui.path(result.profileFile), MCP_LABEL_WIDTH),
+          ui.kv('servers', renderList(result.servers.map((s) => s.name)), MCP_LABEL_WIDTH),
           '',
           // prune 已落地（Spec §7.6）：下次 sync 按 sync-meta 上一轮记账摘掉该 server
           // 键。文件清单按本次写入的层解析（project / user 落点不同，见 mcpProjectionFiles）
-          'note: removed from profile.mcp.servers only. run `aforge sync` to drop the',
-          `      "${result.removed.name}" entry from these ${result.scope}-level files:`,
-          ...mcpProjectionFiles(ctx, readEnv(ctx.host), result.scope).map((f) => `        ${f}`),
+          ui.yellow('note: removed from profile.mcp.servers only. run `aforge sync` to drop the'),
+          ui.yellow(`      "${result.removed.name}" entry from these ${result.scope}-level files:`),
+          ...mcpProjectionFiles(ctx, readEnv(ctx.host), result.scope).map(
+            (f) => `        ${ui.path(f)}`,
+          ),
         ].join('\n'),
       );
     });

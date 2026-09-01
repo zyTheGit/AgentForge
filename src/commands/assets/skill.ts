@@ -41,6 +41,7 @@ import {
   type SkillListItem,
   setSkillAlwaysLocked,
 } from '../../core/sources/skill';
+import { getUi, type Ui } from '../../infra/ui';
 import { HabitsSchema, ProfileSchema } from '../../schema';
 import {
   type CommandContext,
@@ -51,6 +52,9 @@ import {
 } from '../_shared/context';
 import { parseScopeOption, resolveJsonFlag } from '../_shared/flags';
 import { runSkillRemove } from './skill-remove';
+
+/** 详情行的 label 宽度（`skill dir` 最长，冒号同列）。 */
+const SKILL_LABEL_WIDTH = 9;
 
 /** 命令上下文。 */
 export type SkillCommandContext = CommandContext;
@@ -149,9 +153,9 @@ export async function runSkillList(ctx: SkillCommandContext): Promise<SkillListI
  */
 export { runSkillRemove, type SkillRemoveResult } from './skill-remove';
 
-/** 单行 skill 摘要（ASCII）。 */
-function skillLine(item: SkillListItem): string {
-  return `  ${item.name}  [${item.status}]  ${item.origin}`;
+/** 单行 skill 摘要（状态上色，来源暗色）。 */
+function skillLine(item: SkillListItem, ui: Ui): string {
+  return `  ${ui.bold(item.name)}  [${item.status}]  ${ui.dim(item.origin)}`;
 }
 
 /**
@@ -254,38 +258,55 @@ export function registerSkillCommand(program: Command): void {
           printJson(result);
           return;
         }
+        const ui = getUi();
         const lines: string[] = [
-          `skill installed: ${result.name}`,
-          `  from     : ${result.fromSourceId ?? result.fromRoot}`,
-          `  target   : ${result.targetDir}`,
-          `  files    : ${result.files.length} file(s) copied (real copy, not symlink)`,
+          `${ui.green('skill installed')}: ${ui.bold(result.name)}`,
+          ui.kv('from', result.fromSourceId ?? ui.path(result.fromRoot), SKILL_LABEL_WIDTH),
+          ui.kv('target', ui.path(result.targetDir), SKILL_LABEL_WIDTH),
+          ui.kv(
+            'files',
+            `${result.files.length} file(s) copied ${ui.dim('(real copy, not symlink)')}`,
+            SKILL_LABEL_WIDTH,
+          ),
         ];
         for (const file of result.files) {
-          lines.push(`    - ${file}`);
+          lines.push(`    ${ui.dim(`- ${file}`)}`);
         }
         if (result.skipped.length > 0) {
           // 不静默丢弃：symlink 不跟随（防私钥等越界读取）、环路项跳过（§10）
-          lines.push(`  skipped  : ${result.skipped.length} entry(ies) not copied`);
+          lines.push(
+            ui.kv(
+              'skipped',
+              ui.yellow(`${result.skipped.length} entry(ies) not copied`),
+              SKILL_LABEL_WIDTH,
+            ),
+          );
           for (const entry of result.skipped) {
             const reason =
               entry.reason === 'symlink' ? 'symlink - not followed' : 'cycle - already visited';
-            lines.push(`    - ${entry.path} (${reason})`);
+            lines.push(`    ${ui.dim(`- ${entry.path} (${reason})`)}`);
           }
         }
         if (result.registered === undefined) {
           lines.push(
             '',
-            '--no-register: add the skill name to profile.yaml skills.always to project it',
+            ui.yellow(
+              '--no-register: add the skill name to profile.yaml skills.always to project it',
+            ),
           );
         } else {
           lines.push(
-            `  profile  : ${result.registered.profileFile}`,
-            `  always   : ${result.registered.always.join(', ')}${
-              result.registered.changed ? '' : ' (already registered)'
-            }`,
+            ui.kv('profile', ui.path(result.registered.profileFile), SKILL_LABEL_WIDTH),
+            ui.kv(
+              'always',
+              `${result.registered.always.join(', ')}${
+                result.registered.changed ? '' : ui.dim(' (already registered)')
+              }`,
+              SKILL_LABEL_WIDTH,
+            ),
             '',
-            'next: run `aforge sync` to project it to your agents',
-            `      ${describeInvokeHint(result.name)}`,
+            ui.next(`run ${ui.code('aforge sync')} to project it to your agents`),
+            `      ${ui.dim(describeInvokeHint(result.name))}`,
           );
         }
         console.log(lines.join('\n'));
@@ -302,12 +323,13 @@ export function registerSkillCommand(program: Command): void {
         printJson(items);
         return;
       }
+      const ui = getUi();
       if (items.length === 0) {
-        console.log('no skills found - run `aforge skill add <name>` to install one');
+        console.log(`no skills found - run ${ui.code('aforge skill add <name>')} to install one`);
         return;
       }
-      const lines = items.map(skillLine);
-      lines.push('', `${items.length} skill(s)`);
+      const lines = items.map((item) => skillLine(item, ui));
+      lines.push('', ui.dim(`${items.length} skill(s)`));
       console.log(lines.join('\n'));
     });
 
@@ -325,22 +347,27 @@ export function registerSkillCommand(program: Command): void {
         printJson(result);
         return;
       }
+      const ui = getUi();
       console.log(
         [
-          `skill removed: ${result.name} (profile only)`,
-          `  scope     : ${result.scope}`,
-          `  profile   : ${result.profileFile}`,
-          `  always    : ${renderList(result.always)}`,
-          `  skill dir : ${result.skillDir} (kept on disk)`,
+          `${ui.green('skill removed')}: ${ui.bold(result.name)} ${ui.dim('(profile only)')}`,
+          ui.kv('scope', ui.cyan(result.scope), SKILL_LABEL_WIDTH),
+          ui.kv('profile', ui.path(result.profileFile), SKILL_LABEL_WIDTH),
+          ui.kv('always', renderList(result.always), SKILL_LABEL_WIDTH),
+          ui.kv(
+            'skill dir',
+            `${ui.path(result.skillDir)} ${ui.dim('(kept on disk)')}`,
+            SKILL_LABEL_WIDTH,
+          ),
           '',
           // prune 已落地（Spec §7.6）：下次 sync 按 sync-meta 上一轮记账删这些产物。
           // 路径按本次写入的层从 projector 现算，不写死 project 级目录名
-          'note: removed from profile.yaml only. run `aforge sync` to drop the',
-          `      projected copies (${result.scope} level):`,
+          ui.yellow('note: removed from profile.yaml only. run `aforge sync` to drop the'),
+          ui.yellow(`      projected copies (${result.scope} level):`),
           ...projectedSkillDocPaths(ctx, readEnv(ctx.host), result.scope, result.name).map(
-            (file) => `        ${file}`,
+            (file) => `        ${ui.path(file)}`,
           ),
-          '      manually edited copies are kept and listed under `prune skipped`.',
+          ui.dim('      manually edited copies are kept and listed under `prune skipped`.'),
         ].join('\n'),
       );
     });

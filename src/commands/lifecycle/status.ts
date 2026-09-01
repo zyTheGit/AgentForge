@@ -1,7 +1,7 @@
 /**
  * aforge status 命令（Spec §6 / §2.2，M7）：SoT 状态与路径一览。
  *
- * 输出（纯 ASCII）：
+ * 输出（UTF-8 终端上色 + 符号，GBK 控制台与管道自动降级为纯 ASCII，见 infra/ui）：
  * - 两层 scope 与 SoT 根绝对路径 + 初始化状态；
  * - effective scope 与启用 targets 及各自将写入的绝对路径（§2.2：status
  *   必须打印实际将写入的绝对路径——取 projector.plan 的全部 items 路径，
@@ -38,6 +38,7 @@ import { readSyncMeta } from '../../core/project/sync-meta';
 import type { ProjectContext, SkillInvokePrefix } from '../../core/project/types';
 import { listDirSafe } from '../../infra/fsutil';
 import type { FileStat, Host } from '../../infra/host';
+import { getUi, type Ui } from '../../infra/ui';
 import type { AutoCapture } from '../../schema';
 import {
   type CommandContext,
@@ -313,70 +314,99 @@ function describeAutoCaptureCiNote(state: AutoCaptureState): string | null {
 }
 
 /** SoT 根描述行：`<绝对路径> (initialized|not initialized)`。 */
-function describeSoTRoot(root: string | null, initialized: boolean): string {
+function describeSoTRoot(root: string | null, initialized: boolean, ui: Ui): string {
   if (root === null) {
-    return '(unresolvable - see aforge doctor)';
+    return ui.yellow('(unresolvable - see aforge doctor)');
   }
-  return `${root} (${initialized ? 'initialized' : 'not initialized'})`;
+  const state = initialized ? ui.green('initialized') : ui.yellow('not initialized');
+  return `${ui.path(root)} (${state})`;
 }
 
-/** 人类可读输出（纯 ASCII；调用方 console.log）。 */
-export function formatStatus(result: StatusResult): string {
-  const lines: string[] = ['aforge status - source of truth overview', ''];
+/** kv 行的 label 宽度（scope / counts / skills 三组共用，保证冒号同列）。 */
+const LABEL_WIDTH = 9;
 
-  lines.push('scope:');
-  lines.push(`  user     : ${describeSoTRoot(result.userSoTRoot, result.initialized.user)}`);
-  lines.push(`  project  : ${describeSoTRoot(result.projectSoTRoot, result.initialized.project)}`);
-  lines.push(`  effective: ${result.effectiveScope}`);
+/** counts / skills 组的 label 宽度（`auto_capture` 最长，故单独一档）。 */
+const WIDE_LABEL_WIDTH = 10;
+
+/**
+ * 人类可读输出（调用方 console.log）。
+ *
+ * @param ui 呈现能力（默认取进程级单例；ASCII 档与改造前逐字节一致，见 infra/ui）。
+ */
+export function formatStatus(result: StatusResult, ui: Ui = getUi()): string {
+  const lines: string[] = [...ui.title('aforge status', 'source of truth overview')];
+
+  lines.push(ui.bold('scope:'));
+  lines.push(
+    ui.kv('user', describeSoTRoot(result.userSoTRoot, result.initialized.user, ui), LABEL_WIDTH),
+  );
+  lines.push(
+    ui.kv(
+      'project',
+      describeSoTRoot(result.projectSoTRoot, result.initialized.project, ui),
+      LABEL_WIDTH,
+    ),
+  );
+  lines.push(ui.kv('effective', ui.cyan(result.effectiveScope), LABEL_WIDTH));
   lines.push('');
 
-  lines.push(`targets (${result.enabledTargets.length} enabled):`);
+  lines.push(ui.bold(`targets (${result.enabledTargets.length} enabled):`));
   for (const target of result.targets) {
     // 前缀取自 projector.skillInvokePrefix（映射表的单一事实源在各 projector 里，
     // 见 core/project/types.ts 的 Projector 契约）。不打这一行，用户在 codex 里敲
     // `/name` 不展开，会以为投影没生效。
-    lines.push(`  ${target.targetId} (invoke skills as ${target.skillInvokePrefix}<name>):`);
+    lines.push(
+      `  ${ui.bold(target.targetId)} (invoke skills as ${ui.cyan(`${target.skillInvokePrefix}<name>`)}):`,
+    );
     for (const file of target.paths) {
-      lines.push(`    ${file}`);
+      lines.push(`    ${ui.path(file)}`);
     }
   }
   for (const id of result.skippedTargets) {
-    lines.push(`  ${id}: (no projector in this version)`);
+    lines.push(`  ${id}: ${ui.dim('(no projector in this version)')}`);
   }
   lines.push('');
 
-  lines.push(`last sync: ${result.lastSyncAt ?? '(never - run aforge sync)'}`);
+  lines.push(`last sync: ${result.lastSyncAt ?? ui.yellow('(never - run aforge sync)')}`);
   lines.push('');
 
-  lines.push('counts (two layers merged, project overrides user on collision):');
-  lines.push(`  custom    : ${result.counts.custom} file(s)`);
-  lines.push(`  learnings : ${result.counts.learnings} entry(ies)`);
-  lines.push(`  templates : ${result.counts.templates} template(s)`);
+  lines.push(ui.bold('counts (two layers merged, project overrides user on collision):'));
+  lines.push(ui.kv('custom', `${result.counts.custom} file(s)`, WIDE_LABEL_WIDTH));
+  lines.push(ui.kv('learnings', `${result.counts.learnings} entry(ies)`, WIDE_LABEL_WIDTH));
+  lines.push(ui.kv('templates', `${result.counts.templates} template(s)`, WIDE_LABEL_WIDTH));
 
   lines.push('');
-  lines.push('skills (profile.skills):');
+  lines.push(ui.bold('skills (profile.skills):'));
   const always = renderList(result.alwaysSkills);
   const onDemand = renderList(result.onDemandSkills);
-  lines.push(`  always    : ${always} (materialized by sync)`);
+  lines.push(ui.kv('always', `${always} ${ui.dim('(materialized by sync)')}`, WIDE_LABEL_WIDTH));
   // MVP 决定：on_demand 只登记不物化（Spec §4.2 注记）——如实说明，避免用户
   // 以为声明后就会被投影
-  lines.push(`  on_demand : ${onDemand} (declared only - not projected in MVP)`);
+  lines.push(
+    ui.kv(
+      'on_demand',
+      `${onDemand} ${ui.dim('(declared only - not projected in MVP)')}`,
+      WIDE_LABEL_WIDTH,
+    ),
+  );
 
   lines.push('');
-  lines.push('learning (profile.learning):');
+  lines.push(ui.bold('learning (profile.learning):'));
   // 声明值与生效值分开打：hook 未实现时二者不同，只打一个会骗人
   const capture = result.autoCapture;
   lines.push(
-    `  auto_capture: ${capture.declared}${capture.declared === capture.effective ? '' : ` -> ${capture.effective}`}`,
+    `  ${ui.dim('auto_capture')}: ${capture.declared}${capture.declared === capture.effective ? '' : ` -> ${ui.yellow(capture.effective)}`}`,
   );
   if (capture.reason !== null) {
-    lines.push(`                ${capture.reason}`);
+    lines.push(`                ${ui.dim(capture.reason)}`);
   }
   if (rendersLearningProtocol(capture.effective)) {
-    lines.push(`                projected rules include a ${LEARNING_PROTOCOL_HEADING} section`);
+    lines.push(
+      `                ${ui.dim(`projected rules include a ${LEARNING_PROTOCOL_HEADING} section`)}`,
+    );
   }
   if (capture.ciNote !== null) {
-    lines.push(`                ${capture.ciNote}`);
+    lines.push(`                ${ui.dim(capture.ciNote)}`);
   }
 
   return lines.join('\n');

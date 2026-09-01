@@ -12,6 +12,7 @@ import { EXIT_CODE_ROLLBACK_INCOMPLETE, getExitCodeOverride } from './commands/l
 import { AgentForgeError, describeFatal, toExitCode } from './core/errors';
 import { getActiveSyncTransaction, rollbackActiveSyncTransactionSync } from './core/project/engine';
 import { isCancelledError } from './infra/prompt';
+import { getUi } from './infra/ui';
 
 /** 中断退出码（POSIX 惯例 128 + SIGINT(2)；Spec §6.1 的 0-5 之外，不与失败码冲突）。 */
 const EXIT_CODE_INTERRUPTED = 130;
@@ -33,31 +34,34 @@ const EXIT_CODE_INTERRUPTED = 130;
  * finally 里结束，此处为空操作。
  */
 function reportFatal(kind: string, error: unknown): never {
+  const ui = getUi();
   if (isCancelledError(error)) {
-    console.error('aforge: cancelled');
+    console.error(ui.yellow('aforge: cancelled'));
     console.error(error.message);
     process.exit(error.exitCode);
   }
 
   const override = getExitCodeOverride(error);
   const finalCode = override ?? toExitCode(error);
-  console.error(`aforge: ${describeFatal(error, kind, finalCode)}`);
+  console.error(ui.red(`aforge: ${describeFatal(error, kind, finalCode)}`));
   if (error instanceof AgentForgeError) {
     console.error(error.message);
     if (error.hint !== undefined) {
-      console.error(`hint: ${error.hint}`);
+      console.error(ui.hint(error.hint));
     }
   } else if (error instanceof Error) {
-    console.error(error.stack ?? `${error.name}: ${error.message}`);
+    console.error(ui.dim(error.stack ?? `${error.name}: ${error.message}`));
   } else {
     console.error(error);
   }
   rollbackInFlightSyncTransaction();
   if (override !== undefined) {
     console.error(
-      override === EXIT_CODE_ROLLBACK_INCOMPLETE
-        ? `exit code ${override}: rollback incomplete - see the file list above`
-        : `exit code ${override}`,
+      ui.red(
+        override === EXIT_CODE_ROLLBACK_INCOMPLETE
+          ? `exit code ${override}: rollback incomplete - see the file list above`
+          : `exit code ${override}`,
+      ),
     );
   }
   process.exit(finalCode);
@@ -75,19 +79,24 @@ function rollbackInFlightSyncTransaction(): void {
   if (active === null) {
     return;
   }
+  const ui = getUi();
   console.error(
-    `rolling back the in-flight sync transaction (${active.writtenFiles.length} written file(s))...`,
+    ui.yellow(
+      `rolling back the in-flight sync transaction (${active.writtenFiles.length} written file(s))...`,
+    ),
   );
   const rolledBack = rollbackActiveSyncTransactionSync();
   const failed = rolledBack.filter((entry) => !entry.restored);
   for (const entry of failed) {
-    console.error(`  NOT restored: ${entry.path}: ${entry.error ?? 'unknown error'}`);
+    console.error(ui.red(`  NOT restored: ${entry.path}: ${entry.error ?? 'unknown error'}`));
   }
   console.error(
     failed.length === 0
-      ? `rollback complete: ${rolledBack.length} file(s) restored to the pre-sync state`
-      : `rollback incomplete - ${failed.length} file(s) could not be restored (see above); ` +
-          `the pre-sync backups are kept next to the SoT root (.agf-backup-failed-*)`,
+      ? ui.green(`rollback complete: ${rolledBack.length} file(s) restored to the pre-sync state`)
+      : ui.red(
+          `rollback incomplete - ${failed.length} file(s) could not be restored (see above); ` +
+            `the pre-sync backups are kept next to the SoT root (.agf-backup-failed-*)`,
+        ),
   );
 }
 
@@ -98,7 +107,7 @@ function rollbackInFlightSyncTransaction(): void {
  * 用户毫不知情——故在此把已写文件恢复到 sync 前状态。
  */
 function handleInterrupt(signal: 'SIGINT' | 'SIGTERM'): never {
-  console.error(`\naforge: interrupted (${signal})`);
+  console.error(getUi().yellow(`\naforge: interrupted (${signal})`));
   rollbackInFlightSyncTransaction();
   process.exit(EXIT_CODE_INTERRUPTED);
 }

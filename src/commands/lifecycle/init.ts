@@ -46,6 +46,7 @@ import {
   defaultTtyProbe,
   isCancelledError,
 } from '../../infra/prompt';
+import { getUi, type Ui } from '../../infra/ui';
 import { VERSION } from '../../version';
 import { defaultCommandContext, printJson } from '../_shared/context';
 import { parseScopeOption, resolveInitMode, resolveJsonFlag } from '../_shared/flags';
@@ -77,16 +78,56 @@ export {
 // CLI 装配（打印逻辑只在 action 层）
 // ---------------------------------------------------------------------------
 
-/** 探测摘要行（ASCII，两列对齐）。 */
-function detectionSummary(d: DetectedSnapshot): string[] {
+/** 探测摘要行的 label 宽度（`package managers` 最长，冒号同列）。 */
+const DETECTION_LABEL_WIDTH = 17;
+
+/** 探测摘要行（两列对齐；未检出项暗色）。 */
+function detectionSummary(d: DetectedSnapshot, ui: Ui): string[] {
   const pms = d.package_managers.map((p) => p.name).join(', ');
-  const rules = d.existing_rules.length === 0 ? '(none)' : d.existing_rules.join(', ');
+  const rules = d.existing_rules.length === 0 ? ui.dim('(none)') : d.existing_rules.join(', ');
+  const row = (label: string, value: string): string => ui.kv(label, value, DETECTION_LABEL_WIDTH);
   return [
-    `  node manager     : ${d.node.manager}`,
-    `  python manager   : ${d.python.manager}`,
-    `  package managers : ${pms === '' ? '(none)' : pms}`,
-    `  shell            : ${d.shell}`,
-    `  existing rules   : ${rules}`,
+    row('node manager', d.node.manager),
+    row('python manager', d.python.manager),
+    row('package managers', pms === '' ? ui.dim('(none)') : pms),
+    row('shell', d.shell),
+    row('existing rules', rules),
+  ];
+}
+
+/**
+ * init 成功输出的公共骨架（scope / SoT 根 / targets / 产物清单 / 探测摘要）。
+ *
+ * 交互与静默两条路径的这一段完全一致，只有末尾的下一步提示不同（交互可能已顺带
+ * sync 过，静默要提醒 targets 取了默认值），故差异由 tail 传入。
+ */
+function initSummaryLines(
+  result: {
+    readonly scope: string;
+    readonly sotRoot: string;
+    readonly targets: readonly string[];
+    readonly createdFiles: readonly string[];
+    readonly createdDirs: readonly string[];
+    readonly detection: DetectedSnapshot;
+  },
+  tail: readonly string[],
+  ui: Ui,
+): string[] {
+  return [
+    `${ui.bold('aforge init')} - scope: ${ui.cyan(result.scope)}`,
+    `SoT root: ${ui.path(result.sotRoot)}`,
+    `targets: ${ui.cyan(result.targets.join(', '))}`,
+    '',
+    ui.bold('created files:'),
+    ...result.createdFiles.map((f) => `  ${ui.path(f)}`),
+    '',
+    ui.bold('created dirs:'),
+    ...result.createdDirs.map((d) => `  ${ui.path(d)}`),
+    '',
+    ui.bold('detected (snapshot saved to habits.yaml):'),
+    ...detectionSummary(result.detection, ui),
+    '',
+    ...tail,
   ];
 }
 
@@ -175,24 +216,16 @@ export function registerInitCommand(program: Command): void {
             return;
           }
 
-          const lines: string[] = [
-            `aforge init - scope: ${result.scope}`,
-            `SoT root: ${result.sotRoot}`,
-            `targets: ${result.targets.join(', ')}`,
-            '',
-            'created files:',
-            ...result.createdFiles.map((f) => `  ${f}`),
-            '',
-            'created dirs:',
-            ...result.createdDirs.map((d) => `  ${d}`),
-            '',
-            'detected (snapshot saved to habits.yaml):',
-            ...detectionSummary(result.detection),
-            '',
-            result.synced
-              ? 'init complete (sync already executed above)'
-              : 'next: run `aforge sync` to project rules to agent targets',
-          ];
+          const ui = getUi();
+          const lines = initSummaryLines(
+            result,
+            [
+              result.synced
+                ? ui.green('init complete (sync already executed above)')
+                : ui.next(`run ${ui.code('aforge sync')} to project rules to agent targets`),
+            ],
+            ui,
+          );
           console.log(lines.join('\n'));
           return;
         }
@@ -211,34 +244,28 @@ export function registerInitCommand(program: Command): void {
           return;
         }
 
-        const lines: string[] = [
-          `aforge init - scope: ${result.scope}`,
-          `SoT root: ${result.sotRoot}`,
-          `targets: ${result.targets.join(', ')}`,
-          '',
-          'created files:',
-          ...result.createdFiles.map((f) => `  ${f}`),
-          '',
-          'created dirs:',
-          ...result.createdDirs.map((d) => `  ${d}`),
-          '',
-          'detected (snapshot saved to habits.yaml):',
-          ...detectionSummary(result.detection),
-          '',
-          // 静默路径未经询问就把 targets 定成全部四个并写进 profile.yaml，而 init
-          // 拒绝在非空 SoT 上重跑——必须告诉用户改法。只说 targets 不说 scope：
-          // scope 可能来自 --scope 或 AGF_SCOPE，声称它「取了默认」会是假话；
-          // targets 在静默路径恒为默认（windowsDefaultProfile），说它永远成立。
-          // 指引给「删目录后重跑」而非直接 `init -i`：SoT 已非空，直接重跑必被
-          // resolveFreshSoTRoot 抛 ConfigError(2)（与 init-artifacts 同一口径）。
-          // `-y` 是用户自己点名要默认值，不再复述。
-          ...(options.yes === true
-            ? []
-            : [
-                `note: targets took the default (all four) - to choose, delete ${result.sotRoot} and rerun \`aforge init\` on a TTY`,
-              ]),
-          'next: run `aforge sync` to project rules to agent targets',
-        ];
+        const ui = getUi();
+        const lines = initSummaryLines(
+          result,
+          [
+            // 静默路径未经询问就把 targets 定成全部四个并写进 profile.yaml，而 init
+            // 拒绝在非空 SoT 上重跑——必须告诉用户改法。只说 targets 不说 scope：
+            // scope 可能来自 --scope 或 AGF_SCOPE，声称它「取了默认」会是假话；
+            // targets 在静默路径恒为默认（windowsDefaultProfile），说它永远成立。
+            // 指引给「删目录后重跑」而非直接 `init -i`：SoT 已非空，直接重跑必被
+            // resolveFreshSoTRoot 抛 ConfigError(2)（与 init-artifacts 同一口径）。
+            // `-y` 是用户自己点名要默认值，不再复述。
+            ...(options.yes === true
+              ? []
+              : [
+                  ui.yellow(
+                    `note: targets took the default (all four) - to choose, delete ${result.sotRoot} and rerun \`aforge init\` on a TTY`,
+                  ),
+                ]),
+            ui.next(`run ${ui.code('aforge sync')} to project rules to agent targets`),
+          ],
+          ui,
+        );
         console.log(lines.join('\n'));
       },
     );
