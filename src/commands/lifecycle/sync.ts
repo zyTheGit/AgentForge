@@ -166,6 +166,15 @@ export function printSyncResult(result: SyncResult, ui: Ui = getUi()): void {
       lines.push(`  [${warning.targetId}] ${warning.path}: ${ui.yellow(warning.message)}`);
     }
   }
+  if (result.mcpTransportNotices.length > 0) {
+    // Phase 2 MCP 对齐：上游表达不了某种 transport 时的降级 / 跳过（不影响退出码）
+    lines.push('', ui.yellow(ui.bold('mcp transport notices:')));
+    for (const notice of result.mcpTransportNotices) {
+      const label = notice.support === 'unsupported' ? 'skipped' : 'degraded';
+      lines.push(`  [${notice.targetId}] ${label}: ${ui.yellow(notice.detail)}`);
+      lines.push(`    ${ui.dim(notice.hint)}`);
+    }
+  }
   if (result.transactionWarnings.length > 0) {
     // 事务设施级问题：崩溃恢复能力已失效 / 有备份被保留下来待人工核对
     lines.push('', ui.yellow(ui.bold('transaction warnings:')));

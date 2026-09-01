@@ -82,6 +82,18 @@ const PROFILE_WITH_MCP = [
   '',
 ].join('\n');
 
+/** sse server：四个 target 上分别是无损 / 降级 / 跳过，用来钉住能力落差口径。 */
+const PROFILE_WITH_SSE = [
+  'version: 1',
+  'targets: [opencode, codex, claude, pi]',
+  'mcp:',
+  '  servers:',
+  '    - name: stream',
+  '      transport: sse',
+  '      url: https://example.com/sse',
+  '',
+].join('\n');
+
 /** 目录感知 listDir（engine 的 readCustomLayer 经宿主 path.join 拼路径）。 */
 function createSyncHost(): FakeHost {
   const base = createFakeHost({ USERPROFILE: HOME });
@@ -218,25 +230,66 @@ describe('syncOnce — 四 target 全量投影（§8.7 投影矩阵）', () => {
       },
     });
 
-    const mcpServers = {
-      fs: { command: 'npx', args: ['-y', 'server-fs'], env: { KEY: 'v' } },
-      docs: {
-        type: 'http',
-        url: 'https://example.com/mcp',
-        headers: { Authorization: 'Bearer x' },
+    // claude：每条都显式带 type（stdio / http / sse），与 `claude mcp add` 实写形态一致
+    expect(JSON.parse(host.files.get(MCP_JSON) as string)).toEqual({
+      mcpServers: {
+        fs: { type: 'stdio', command: 'npx', args: ['-y', 'server-fs'], env: { KEY: 'v' } },
+        docs: {
+          type: 'http',
+          url: 'https://example.com/mcp',
+          headers: { Authorization: 'Bearer x' },
+        },
       },
-    };
-    expect(JSON.parse(host.files.get(MCP_JSON) as string)).toEqual({ mcpServers });
-    expect(JSON.parse(host.files.get(PI_MCP) as string)).toEqual({ mcpServers });
+    });
+
+    // pi：顶层键同名但条目不同构——无 type，transport 由 command / url 互斥判定
+    expect(JSON.parse(host.files.get(PI_MCP) as string)).toEqual({
+      mcpServers: {
+        fs: { command: 'npx', args: ['-y', 'server-fs'], env: { KEY: 'v' } },
+        docs: { url: 'https://example.com/mcp', headers: { Authorization: 'Bearer x' } },
+      },
+    });
 
     const toml = host.files.get(CODEX_TOML) as string;
-    expect(toml).toContain('[[mcp_servers.fs]]');
+    expect(toml).toContain('[mcp_servers.fs]');
     expect(toml).toContain('command = "npx"');
     expect(toml).toContain('args = ["-y", "server-fs"]');
     expect(toml).toContain('env = { KEY = "v" }');
-    expect(toml).toContain('[[mcp_servers.docs]]');
+    expect(toml).toContain('[mcp_servers.docs]');
     expect(toml).toContain('url = "https://example.com/mcp"');
-    expect(toml).toContain('headers = { Authorization = "Bearer x" }');
+    expect(toml).toContain('http_headers = { Authorization = "Bearer x" }');
+  });
+
+  it('sse server → codex 整条跳过、opencode 降级、claude/pi 无损；落差进 mcpTransportNotices 而非 warnings', async () => {
+    const host = createSyncHost();
+    await seed(host, PROFILE_WITH_SSE);
+
+    const result = await syncOnce(syncOptions(host));
+
+    // codex：标记段里没有这条（写进去 codex 也认不了 sse）
+    expect(host.files.get(CODEX_TOML) as string).not.toContain('mcp_servers.stream');
+    // opencode：仍落 remote（上游没有字段能声明 SSE）
+    expect(JSON.parse(host.files.get(OPENCODE_JSON) as string).mcp.stream).toEqual({
+      type: 'remote',
+      url: 'https://example.com/sse',
+      enabled: true,
+    });
+    // claude：type: 'sse' 原样表达；pi：httpTransport 锁定 SSE（都无损）
+    expect(JSON.parse(host.files.get(MCP_JSON) as string).mcpServers.stream).toEqual({
+      type: 'sse',
+      url: 'https://example.com/sse',
+    });
+    expect(JSON.parse(host.files.get(PI_MCP) as string).mcpServers.stream).toEqual({
+      url: 'https://example.com/sse',
+      httpTransport: 'sse',
+    });
+
+    // 落差只出现在 mcpTransportNotices：进 warnings 会让 writeSyncMetaOnSuccess 判定
+    // 「该 target 投影不完整」而不记账，进而破坏 §7.6 prune
+    expect(result.warnings).toEqual([]);
+    expect(
+      result.mcpTransportNotices.map((n) => `${n.targetId}:${n.serverName}:${n.support}`),
+    ).toEqual(['opencode:stream:degraded', 'codex:stream:unsupported']);
   });
 
   it('幂等：二次 sync 全部 unchanged，contentHash 不变', async () => {

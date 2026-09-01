@@ -33,6 +33,8 @@ aforge sync
 
 必填字段：`name` + `transport`；`stdio` 必须给 `command`，`http` / `sse` 必须给 `url`，否则退出码 2。声明里带 `"enabled": false` 的 server 不投影，但保留在 `profile.yaml` 里。
 
+`transport` 的三个取值（`stdio` / `http` / `sse`）是 AgentForge 侧的语义，**不随客户端能力变化**；哪个 target 能无损表达、哪个只能降级或跳过，见下面的[支持矩阵](#transport--target-支持矩阵)。`http` 指 streamable HTTP，`sse` 指旧的 HTTP+SSE——大多数远端端点两种都开，优先选 `http`。
+
 ## 移除
 
 不想再用某个 server 时用 `mcp remove` 把声明从该层 `mcp.servers` 里摘掉：
@@ -69,12 +71,39 @@ pi 本体不内建 MCP，先装适配扩展才生效：`pi install npm:pi-mcp-ad
 
 > 升级提示：早期版本把 pi 的 MCP 写在 `.pi\settings.json`（user 级 `~\.pi\agent\settings.json`）。现在落点是同目录的 `mcp.json`，旧文件**不会被自动迁移或删除**——确认新 `mcp.json` 生效后请手工删掉旧文件里的 `mcpServers` 键（整份文件没有你自己的 pi 设置时可直接删除）。`aforge doctor` 会把它报为 `residual/pi-legacy-mcp` warning。
 
-以上面的 jenkins-config 为例，`sync` 后 `.mcp.json` 里会多出：
+## transport × target 支持矩阵
+
+你只写一份声明，四个客户端的 MCP schema 各不相同，翻译由投影层的归一化表（`src\core\project\projectors\mcp-transport.ts`）统一负责。**上游能力不同，同一个 `transport` 在不同 target 上的结局也不同：**
+
+| transport | claude | opencode | codex | pi |
+| --- | --- | --- | --- | --- |
+| `stdio` | 无损 | 无损 | 无损 | 无损 |
+| `http`（streamable HTTP） | 无损 | 无损 | 无损 | 无损 |
+| `sse` | 无损 | **降级**：按 streamable HTTP 连接 | **跳过**：整条不写入 | 无损 |
+
+各家的能力边界与实际字段：
+
+- **claude**（`.mcp.json` 的 `mcpServers`）：三种 transport 全都原生支持，条目一律显式带 `type`（`"stdio"` / `"http"` / `"sse"`）。stdio 用 `command` / `args` / `env`，远端用 `url` / `headers`。形状与 `claude mcp add` 自己写出来的一致。
+- **opencode**（`opencode.json` 的 `mcp`）：`type` 只有 `local` / `remote` 两种，remote 侧的字段只有 `url` / `headers` / `oauth` / `timeout` / `enabled`——**上游没有任何字段能声明 SSE**。所以 `transport: sse` 会和 `http` 一样落成 `type: "remote"`，opencode 按 streamable HTTP 连接。这不是 AgentForge 偷懒，是上游确实不区分；AgentForge 的做法是照实投影 + 显式告警，不发明上游不认的字段。
+- **codex**（`.codex\config.toml` 的标记段）：只支持 STDIO 与 Streamable HTTP，**没有 SSE**。`transport: sse` 的 server **整条不写进标记段**——写进去 codex 也认不了，反而让用户以为生效了。远端条目的鉴权头键名是 `http_headers`（不是 `headers`，写错 codex 会静默忽略）。另外每个 server 是**单表** `[mcp_servers.<name>]`，不是数组表 `[[mcp_servers.<name>]]`：写成数组表会让 codex 整份 `config.toml` 解析失败（`invalid type: map, expected a string`），不只是这一段失效。
+- **pi**（`.pi\mcp.json` 的 `mcpServers`，需 `pi-mcp-adapter`）：条目**没有 `type` 字段**，适配器按 `command` / `url` / `socket` 互斥来判定 transport。只给 `url` 时默认 streamable HTTP 并允许回落 SSE；`transport: sse` 会额外写 `httpTransport: "sse"` 锁定 SSE 并关掉回落，所以 SSE 在 pi 上是无损的。顶层键名与 Claude Code 同名，但条目形状**不同构**，别照抄。
+
+**表达不了的时候不会静默。** 降级（opencode × sse）与跳过（codex × sse）都会出现在两个地方：
+
+- `aforge sync` 输出的 `mcp transport notices:` 段，逐条给出 `[target] degraded/skipped` 与改法建议；
+- `aforge doctor` 的 `mcp-transport/<target>/<server>` warn 项。
+
+这些都是 **warn 级、不影响退出码**：投影结果已经是该 target 能达到的最佳形态，落差来自上游能力边界，不是 AgentForge 的失败。想消除告警：端点同时支持 streamable HTTP 就把声明改成 `transport: http`（语义一致）；只支持 SSE 的端点就把该 target 从 `profile.targets` 里去掉，或只在 claude / pi 侧使用。
+
+`enabled: false` 的 server 一律不投影、也不报落差。
+
+以上面的 jenkins-config（stdio）为例，`sync` 后 `.mcp.json` 里会多出：
 
 ```json
 {
   "mcpServers": {
     "jenkins-config": {
+      "type": "stdio",
       "command": "npx",
       "args": ["-y", "@zythegit/jenkins-config-mcp"]
     }
@@ -82,7 +111,12 @@ pi 本体不内建 MCP，先装适配扩展才生效：`pi install npm:pi-mcp-ad
 }
 ```
 
-opencode 侧同一条声明会被译成 `{ "type": "local", "command": ["npx", "-y", "@zythegit/jenkins-config-mcp"], "enabled": true }`——各 target 的键名与形状不同，AgentForge 负责翻译，你只写一份声明。
+同一条声明在其他三家的形状：
+
+- opencode：`{ "type": "local", "command": ["npx", "-y", "@zythegit/jenkins-config-mcp"], "enabled": true }`
+- codex：`[mcp_servers.jenkins-config]` + `command = "npx"` + `args = ["-y", "@zythegit/jenkins-config-mcp"]`
+- pi：`{ "command": "npx", "args": ["-y", "@zythegit/jenkins-config-mcp"] }`（无 `type`）
+
 
 ## 两个坑
 
