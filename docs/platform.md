@@ -6,7 +6,7 @@
 - **换行**：投影文件默认 LF（可通过 `profile.yaml` 的 `projection.line_ending: crlf` 修改）；SoT 内部素材统一 LF，换行差异由投影层吸收，不会造成虚假 diff。
 - **离线**：无网络环境完全可用（init/sync/template/skill 等纯本地操作）。git 源的 `source update` 需要网络，离线时明确报错（退出码 5）。也可设 `AGF_OFFLINE=1` 显式声明离线意图，让需要网络的操作尽早失败。
 - **权限**：**无需 Administrator**。全部文件读写都在你的用户目录与项目目录内；写失败时给出可操作的修复提示（退出码 4）。
-- **控制台编码**：非交互命令输出为纯 ASCII（GBK 代码页 `chcp 936` 下不乱码）；`init -i` 的交互 UI 需要真实终端（TTY）。
+- **控制台编码**：静默命令输出为纯 ASCII（GBK 代码页 `chcp 936` 下不乱码）；`init` 的交互 UI 需要真实终端（TTY），非 TTY 下自动退回静默默认值（等价 `init --yes`）。
 - **OneDrive**：`AGF_HOME` 或项目目录落在 OneDrive 下时 `aforge doctor` 会 warn（文件锁 / 占位符状态可能导致投影写入失败）。
 
 ## macOS / Linux

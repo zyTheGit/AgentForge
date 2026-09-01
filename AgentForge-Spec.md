@@ -459,7 +459,7 @@ mcp: []
 
 | 命令 | 说明 |
 |------|------|
-| `aforge init [--scope user\|project] [-i]` | 初始化 |
+| `aforge init [--scope user\|project] [-i] [-y\|--yes]` | 初始化（TTY 默认交互，见 §7.1） |
 | `aforge detect` | 仅探测 |
 | `aforge sync [--targets ...] [--dry-run]` | 渲染并投影 |
 | `aforge learn [--scope project\|user]` | 学习提取 |
@@ -502,13 +502,17 @@ mcp: []
 
 ### 7.1 Init
 
-1. 确定 scope 与根目录。
-2. Detector 运行 → 候选 habits（写入 `detected`，交互可确认到声明字段）。
-3. 写入默认 `habits.yaml`、`profile.yaml`（Windows：`copy_mode=copy`，`line_ending=lf`）。
-4. 可选执行一次 sync。
-5. 打印各 target 绝对路径。
+**运行模式**：`aforge init` 在 TTY 下**默认走 §7.1.1 交互五步**；非 TTY（CI / 管道）、`--yes`、`--json` 走下面的静默路径。`-i` 强制交互（非 TTY 下报退出码 2，不静默降级）。翻转默认值的理由：静默路径会替用户定下 scope 与全部四个 target 并写进 `profile.yaml`，而 init 拒绝在非空 SoT 上重跑——默认值不可撤回，就该在有人能应答时先问。
 
-### 7.1.1 Init 交互流程（-i 模式）
+静默路径：
+
+1. 确定 scope 与根目录（`--scope` > `AGF_SCOPE` > `project`）。
+2. Detector 运行 → 候选 habits（写入 `detected`，交互可确认到声明字段）。
+3. 写入默认 `habits.yaml`、`profile.yaml`（Windows：`copy_mode=copy`，`line_ending=lf`；`targets` 为全部四个）。
+4. 可选执行一次 sync。
+5. 打印各 target 绝对路径，并回报生效的 scope 与 targets；未带 `--yes` 时额外提示这两项取了默认值。
+
+### 7.1.1 Init 交互流程（TTY 默认；`-i` 强制）
 
 1. **Scope 选择**：默认 project，可选 user。
 2. **Detector 运行**：打印探测结果（Node manager、Python manager、包管理器、Shell、已有规则文件）。

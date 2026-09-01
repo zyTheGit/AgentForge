@@ -68,6 +68,14 @@ export interface InitOptions {
 export interface InitResult {
   readonly scope: Scope;
   readonly sotRoot: string;
+  /**
+   * 落盘到 profile.yaml 的 target 列表（静默路径恒为默认全选四个）。
+   *
+   * 回报而非让调用方复算 windowsDefaultProfile().targets：静默 init 会把规则投影
+   * 到这四个 Agent，用户没被问过也就得在输出里看见，否则「装到哪了」只能去翻
+   * profile.yaml。
+   */
+  readonly targets: readonly string[];
   readonly createdFiles: readonly string[];
   readonly createdDirs: readonly string[];
   readonly detection: DetectedSnapshot;
@@ -130,8 +138,14 @@ export async function materializeSoT(
   return { createdFiles, createdDirs };
 }
 
-/** 逆序清理本次落盘的文件与新建目录（best-effort：失败不掩盖原错误）。 */
-async function rollbackMaterialized(
+/**
+ * 逆序清理落盘的文件与新建目录（best-effort：失败不掩盖原错误）。
+ *
+ * 两个调用点：materializeSoT 自身的失败回滚，以及交互 init 的取消回滚（见
+ * init-interactive 的 rollbackOnCancel）——后者要的正是同一套「逆序删、失败忽略」
+ * 语义，故此处 export 而非各写一遍。
+ */
+export async function rollbackMaterialized(
   ctx: InitContext,
   createdFiles: readonly string[],
   newDirs: readonly string[],
@@ -239,6 +253,7 @@ export async function runInit(ctx: InitContext, options: InitOptions = {}): Prom
 
     // habits.yaml：声明字段空骨架 + detected 快照（Spec §7.1-2）
     // profile.yaml：Windows 安装默认值，scope 按本次 init 调整（Spec §4.2 / §7.1-3）
+    const profileInput = { ...windowsDefaultProfile(), scope };
     const { createdFiles, createdDirs } = await materializeSoT(ctx, sotRoot, [
       {
         path: path.join(sotRoot, HABITS_FILE),
@@ -246,13 +261,14 @@ export async function runInit(ctx: InitContext, options: InitOptions = {}): Prom
       },
       {
         path: path.join(sotRoot, PROFILE_FILE),
-        content: serializeYamlDoc({ ...windowsDefaultProfile(), scope }),
+        content: serializeYamlDoc(profileInput),
       },
     ]);
 
     return {
       scope,
       sotRoot,
+      targets: profileInput.targets,
       createdFiles,
       createdDirs,
       detection,

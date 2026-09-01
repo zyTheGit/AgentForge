@@ -29,17 +29,17 @@ npm i -g @zythegit/agentforge                  # 常用则全局装，命令名�
 ```powershell
 cd C:\path\to\your-project
 
-# ① 交互式初始化：选 scope → 自动探测工具链 → 确认 → 选目标 Agent → 写入（可选立即 sync）
-aforge init -i
+# ① 初始化：终端里默认走交互五步——选 scope → 自动探测工具链 → 确认 → 选目标 Agent → 写入（可选立即 sync）
+aforge init
 
 # ② 之后每次修改 .agentforge 内的任意内容，同步到四个目标
 aforge sync
 ```
 
-不想交互？全部可用参数表达（CI / 脚本友好）：
+不想交互？`--yes` 走全默认（scope=project、四个 target 全装），CI / 管道里自动就是这条路：
 
 ```powershell
-aforge init --scope project
+aforge init --yes            # 或 aforge init --yes --scope user 单独指定层
 aforge sync
 ```
 

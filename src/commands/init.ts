@@ -1,12 +1,17 @@
 /**
- * aforge init 命令（Spec §7.1 非交互路径；§7.1.1 -i 交互五步，M9）。
+ * aforge init 命令（Spec §7.1 静默路径；§7.1.1 交互五步，M9）。
  *
- * 非交互：确定 scope 与 SoT 根 → 探测（快照进 habits.detected）→ 创建目录结构
+ * **模式默认值：TTY 下走交互，非 TTY / `--yes` / `--json` 走静默**（判定见
+ * flags.resolveInitMode）。裸 `aforge init` 原先静默选定 scope=project 且把规则投影
+ * 给全部四个 target，两者都写进 profile.yaml，而 init 拒绝在非空 SoT 上重跑——默认值
+ * 不可撤回，所以有人能应答时先问。
+ *
+ * 静默：确定 scope 与 SoT 根 → 探测（快照进 habits.detected）→ 创建目录结构
  * （custom/learnings/templates/skills/mcp）→ 原子写 habits.yaml（声明字段空骨架 +
  * detected 快照）与 profile.yaml（windowsDefaultProfile 按 scope 调整）→
- * 打印创建的绝对路径列表。
+ * 打印创建的绝对路径列表、生效的 scope 与 targets（均标注 default 来源）。
  *
- * 交互（-i，Spec §7.1.1 五步 ≤5 次确认）：
+ * 交互（Spec §7.1.1 五步 ≤5 次确认）：
  * ① Scope 选择（select，默认 project；--scope / AGF_SCOPE 已给则跳过询问）
  * ② Detector 运行并打印探测结果
  * ③ 确认探测结果（Y 确认 / n 重新探测 / edit 手动编辑——先落盘 habits.yaml
@@ -26,8 +31,8 @@
  * 随 clack 渲染（TTY 环境下 UTF-8）。
  *
  * 模块划分（本文件只留 CLI 装配与输出格式化，其余在同目录）：
- * - `init-scaffold`：SoT 根解析 / 目录与骨架文件物化 / 非交互入口 runInit；
- * - `init-interactive`：-i 交互五步编排与 targetMainRulePaths；
+ * - `init-scaffold`：SoT 根解析 / 目录与骨架文件物化 / 静默入口 runInit；
+ * - `init-interactive`：交互五步编排与 targetMainRulePaths；
  * - `init-artifacts`：取消时的产物清单（挂载 / 取回 / 文案）。
  *
  * 这些符号在此 re-export：既有调用方（cli.ts / 测试）继续从 `./commands/init`
@@ -35,10 +40,10 @@
  */
 import type { Command } from 'commander';
 import type { DetectedSnapshot } from '../core/detector/engine';
-import { assertTty, createClackPrompt, isCancelledError } from '../infra/prompt';
+import { assertTty, createClackPrompt, defaultTtyProbe, isCancelledError } from '../infra/prompt';
 import { VERSION } from '../version';
 import { defaultCommandContext, printJson } from './context';
-import { parseScopeOption, resolveJsonFlag } from './flags';
+import { parseScopeOption, resolveInitMode, resolveJsonFlag } from './flags';
 import { extractInitArtifacts, formatCancelledInitArtifacts } from './init-artifacts';
 import { type InitInteractiveResult, runInitInteractive } from './init-interactive';
 import { runInit } from './init-scaffold';
@@ -84,21 +89,29 @@ export function registerInitCommand(program: Command): void {
   program
     .command('init')
     .description('initialize the SoT directory (habits/profile skeletons + detect snapshot)')
-    .option('--scope <scope>', 'SoT scope: project or user (default: project)')
-    .option('-i, --interactive', 'interactive five-step init (requires a TTY)')
-    .option('--json', 'print machine-readable JSON (absolute paths)')
+    .option('--scope <scope>', 'SoT scope: project or user (asked on a TTY; else project)')
+    .option('-i, --interactive', 'force the interactive five-step init (default on a TTY)')
+    .option('-y, --yes', 'skip all prompts: scope=project, all four targets')
+    .option('--json', 'print machine-readable JSON (absolute paths; silent unless -i is given)')
     .action(
       async (
-        options: { scope?: string; interactive?: boolean; json?: boolean },
+        options: { scope?: string; interactive?: boolean; yes?: boolean; json?: boolean },
         command: Command,
       ) => {
         const json = resolveJsonFlag(command, options.json);
         const scope = parseScopeOption(options.scope);
+        const mode = resolveInitMode({
+          interactive: options.interactive,
+          yes: options.yes,
+          json,
+          isTty: defaultTtyProbe().isInteractive(),
+        });
 
         const baseCtx = defaultCommandContext();
 
-        if (options.interactive === true) {
-          // 交互模式：TTY 前置断言（CI / 管道 → ConfigError(2)）→ clack 动态加载
+        if (mode === 'interactive') {
+          // TTY 前置断言：`-i` 显式指定但环境非 TTY（CI / 管道）→ ConfigError(2)。
+          // 无 `-i` 时 resolveInitMode 已按 isTty 判定，此处必然通过。
           assertTty();
           const prompt = await createClackPrompt();
           let result: InitInteractiveResult;
@@ -126,10 +139,19 @@ export function registerInitCommand(program: Command): void {
           }
 
           if (result.cancelled) {
+            // 写入确认处选 n 时产物已在交互侧回滚（committed 恒 false），result 的
+            // 两个清单此时是**残留**项（常态空）。不能无条件打印 "nothing written"——
+            // 回滚失败时磁盘上确有东西，而 SoT 根非空会让重跑 init 撞
+            // ConfigError(2)，用户必须看见。
+            const leftover = {
+              createdFiles: result.createdFiles,
+              createdDirs: result.createdDirs,
+              committed: false,
+            };
             if (json) {
-              printJson({ cancelled: true });
+              printJson({ cancelled: true, ...leftover });
             } else {
-              console.log('aforge init - cancelled at write confirmation, nothing written');
+              console.log(formatCancelledInitArtifacts(leftover).join('\n'));
             }
             return;
           }
@@ -176,6 +198,7 @@ export function registerInitCommand(program: Command): void {
           printJson({
             scope: result.scope,
             sotRoot: result.sotRoot,
+            targets: result.targets,
             createdFiles: result.createdFiles,
             createdDirs: result.createdDirs,
             detection: result.detection,
@@ -186,6 +209,7 @@ export function registerInitCommand(program: Command): void {
         const lines: string[] = [
           `aforge init - scope: ${result.scope}`,
           `SoT root: ${result.sotRoot}`,
+          `targets: ${result.targets.join(', ')}`,
           '',
           'created files:',
           ...result.createdFiles.map((f) => `  ${f}`),
@@ -196,6 +220,18 @@ export function registerInitCommand(program: Command): void {
           'detected (snapshot saved to habits.yaml):',
           ...detectionSummary(result.detection),
           '',
+          // 静默路径未经询问就把 targets 定成全部四个并写进 profile.yaml，而 init
+          // 拒绝在非空 SoT 上重跑——必须告诉用户改法。只说 targets 不说 scope：
+          // scope 可能来自 --scope 或 AGF_SCOPE，声称它「取了默认」会是假话；
+          // targets 在静默路径恒为默认（windowsDefaultProfile），说它永远成立。
+          // 指引给「删目录后重跑」而非直接 `init -i`：SoT 已非空，直接重跑必被
+          // resolveFreshSoTRoot 抛 ConfigError(2)（与 init-artifacts 同一口径）。
+          // `-y` 是用户自己点名要默认值，不再复述。
+          ...(options.yes === true
+            ? []
+            : [
+                `note: targets took the default (all four) - to choose, delete ${result.sotRoot} and rerun \`aforge init\` on a TTY`,
+              ]),
           'next: run `aforge sync` to project rules to agent targets',
         ];
         console.log(lines.join('\n'));
