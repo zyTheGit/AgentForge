@@ -157,6 +157,10 @@ describe('SyncMetaSchema（Spec §3.3）', () => {
 });
 
 describe('ManifestSchema（Spec §4.5）', () => {
+  /** 只关心 skills/mcp 元素形状的用例：必填头部字段固定，避免逐条重复。 */
+  const manifestWith = (patch: Record<string, unknown>) =>
+    ManifestSchema.safeParse({ name: 'n', version: '1.0.0', min_agentforge: 1, ...patch });
+
   it('Spec 示例合法（min_agentforge 为数字）', () => {
     const data = ManifestSchema.parse({
       name: 'modern-toolchain',
@@ -198,5 +202,46 @@ describe('ManifestSchema（Spec §4.5）', () => {
   it('templates/skills/mcp 缺省 → 默认 []（Spec 示例 skills: [] / mcp: []）', () => {
     const data = ManifestSchema.parse({ name: 'n', version: '1.0.0', min_agentforge: 1 });
     expect(data.templates).toEqual([]);
+  });
+
+  it('skills 元素：缺 name / name 为空串 → 失败；只有 name → 通过', () => {
+    expect(manifestWith({ skills: [{ description: 'pdf skill' }] }).success).toBe(false);
+    expect(manifestWith({ skills: [{ name: '' }] }).success).toBe(false);
+    expect(manifestWith({ skills: [{ name: 'pdf' }] }).success).toBe(true);
+  });
+
+  it('skills 元素：name + description 通过且 description 保留', () => {
+    const data = ManifestSchema.parse({
+      name: 'n',
+      version: '1.0.0',
+      min_agentforge: 1,
+      skills: [{ name: 'pdf', description: 'pdf skill' }],
+    });
+    expect(data.skills).toEqual([{ name: 'pdf', description: 'pdf skill' }]);
+  });
+
+  it('mcp 元素：缺 transport / transport 非枚举值 → 失败', () => {
+    expect(manifestWith({ mcp: [{ name: 'fetch', command: 'npx' }] }).success).toBe(false);
+    expect(manifestWith({ mcp: [{ name: 'fetch', transport: 'grpc' }] }).success).toBe(false);
+  });
+
+  it('mcp 元素：合法 stdio 条目通过，enabled 填默认 true（与 §4.2 同构）', () => {
+    const data = ManifestSchema.parse({
+      name: 'n',
+      version: '1.0.0',
+      min_agentforge: 1,
+      mcp: [
+        { name: 'fetch', transport: 'stdio', command: 'npx', args: ['-y', 'mcp-server-fetch'] },
+      ],
+    });
+    expect(data.mcp).toEqual([
+      {
+        name: 'fetch',
+        enabled: true,
+        transport: 'stdio',
+        command: 'npx',
+        args: ['-y', 'mcp-server-fetch'],
+      },
+    ]);
   });
 });
