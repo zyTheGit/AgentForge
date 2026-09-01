@@ -4,17 +4,21 @@
  * 全项目仅本文件（与 fsutil）允许 import node:fs / node:child_process；
  * 其余模块一律通过注入的 Host 接口访问副作用。
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
 import { homedir, hostname, userInfo } from 'node:os';
 import { currentOs, longPathAware } from '../core/paths';
 import { stripBom } from './fsutil';
-import type { ExecOptions, ExecResult, FileStat, Host } from './host';
+import type { ExecOptions, ExecResult, FileStat, Host, SpawnInteractiveOptions } from './host';
 
 /** execFile 超时上限：防挂死（约定到期 code=124）。 */
 const DEFAULT_EXEC_TIMEOUT_MS = 60_000;
 /** execFile 输出缓冲上限：10 MiB，防探测命令刷屏爆缓冲。 */
 const EXEC_MAX_BUFFER = 10 * 1024 * 1024;
+/** 子进程无法启动（ENOENT / EACCES 等）的约定退出码（与 exec 的映射一致）。 */
+const SPAWN_FAILED_CODE = 127;
+/** 子进程被信号终止的约定退出码（`128+signal` 在 win32 无语义，见 host.spawnInteractive）。 */
+const SPAWN_SIGNALED_CODE = 124;
 
 interface ExecCallbackError extends Error {
   code?: unknown;
@@ -164,6 +168,33 @@ export const realHost: Host = {
           resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code: 0 });
         },
       );
+    });
+  },
+
+  spawnInteractive(
+    cmd: string,
+    args: readonly string[],
+    opts: SpawnInteractiveOptions = {},
+  ): Promise<number> {
+    return new Promise<number>((resolve) => {
+      const child = spawn(cmd, [...args], {
+        cwd: opts.cwd,
+        // 子进程接管当前终端：全屏编辑器（vim / nano）必须拿到真 tty
+        stdio: 'inherit',
+        // GUI 编辑器（notepad / code）要显示窗口，故与 exec 的 windowsHide 相反
+        windowsHide: false,
+        // 恒不经 shell（与 exec 一致：不给命令注入面，§10）
+        shell: false,
+        // 刻意不给 timeout：用户在编辑器里待多久都算正常
+      });
+      child.on('error', () => {
+        // 无法启动（ENOENT / EACCES）：约定码 127，永不 reject
+        resolve(SPAWN_FAILED_CODE);
+      });
+      child.on('close', (code, signal) => {
+        // 信号终止时 code 为 null，给一个确定的非零码（见 host.spawnInteractive 注释）
+        resolve(code ?? (signal === null ? SPAWN_FAILED_CODE : SPAWN_SIGNALED_CODE));
+      });
     });
   },
 

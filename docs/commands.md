@@ -10,7 +10,7 @@
 | `aforge sync [--targets a,b] [--dry-run] [--force] [--json]` | 渲染 SoT 并投影到目标 Agent（规则 marker 区间 + 技能 / MCP / [命令薄壳](skills.md#额外投影成命令expose_as_command)整文件产物） |
 | `aforge learn [--scope s] [--file f\|'-'] [--id id] [--no-auto-promote]` | 记录一条 learning（不投影；`learning.auto_promote: true` 时顺手 promote，`--no-auto-promote` 单次关掉） |
 | `aforge promote <id> [--to user] [--yes]` | 将 learning 升级为 custom 规则或 skill |
-| `aforge learnings list [--json]` / `show <id>` / `edit <id>` / `rm <id>` | 管理两层 SoT 的 learning 条目 |
+| `aforge learnings list [--json]` / `show <id>` / `edit <id>` / `rm <id>` | 管理两层 SoT 的 learning 条目（`edit` 在交互终端拉起 `$EDITOR` 改条目 yaml，退出后重校验；非交互或 `--json` 时只打印路径与正文） |
 | `aforge source add <path\|git-url> [--ref r] [--id id]` | 登记规则/模板/技能来源（local 或 git） |
 | `aforge source list [--json]` / `remove <id>` / `update <id>` | 管理已登记来源（update 离线报错） |
 | `aforge template list [--json]` / `enable <id>` / `disable <id>` | 管理规则模板 |

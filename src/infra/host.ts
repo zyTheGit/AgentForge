@@ -32,6 +32,11 @@ export interface ExecResult {
   readonly code: number;
 }
 
+export interface SpawnInteractiveOptions {
+  /** 子进程工作目录 */
+  readonly cwd?: string;
+}
+
 export interface Host {
   /** 读文本文件：UTF-8 解码并剥离 BOM（Spec §2.1.1）。不存在时 reject。 */
   readFile(path: string): Promise<string>;
@@ -87,6 +92,29 @@ export interface Host {
   rename(from: string, to: string): Promise<void>;
   /** 执行外部命令（有超时保护，永不 reject；失败看 code/stderr）。 */
   exec(cmd: string, args: readonly string[], opts?: ExecOptions): Promise<ExecResult>;
+  /**
+   * 拉起**交互式**子进程并等待其退出（`learnings edit` 拉 `$EDITOR`，Spec §6 命令表）。
+   *
+   * 与 exec 的三处差别——交互式程序不能用 exec 拉起：
+   * - `stdio: 'inherit'`：子进程直接接管当前终端（不捕获 stdout/stderr，
+   *   否则 vim / nano 这类全屏编辑器拿不到 tty，画面与按键全丢）；
+   * - **无超时**：用户在编辑器里待多久都算正常，exec 的 60s 兜底会把人踢出来；
+   * - `windowsHide: false`：GUI 编辑器（notepad / code）需要显示窗口，
+   *   exec 的 `windowsHide: true` 会让窗口开在看不见的地方。
+   *
+   * 与 exec 同样**永不 reject**，失败以约定退出码表达：
+   * - 无法启动（ENOENT / EACCES 等）→ 127；
+   * - 被信号杀掉（此时 node 给的 code 是 null）→ 124。`128 + signal` 在
+   *   Windows 上没有对应语义，故不按 shell 惯例编码，统一取 exec 的
+   *   「非正常终止」码 124，让调用方只需判 `code !== 0`。
+   *
+   * @returns 子进程退出码（正常退出即其 exit code）。
+   */
+  spawnInteractive(
+    cmd: string,
+    args: readonly string[],
+    opts?: SpawnInteractiveOptions,
+  ): Promise<number>;
   /** 当前时间（注入以便测试冻结时钟）。 */
   now(): Date;
   /** 读取环境变量（不存在 → undefined；不 trim）。 */

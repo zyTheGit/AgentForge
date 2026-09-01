@@ -3,13 +3,15 @@
  *
  * - list：两层 SoT 条目汇总；
  * - show：输出条目 YAML 原文；
- * - edit：**简单实现**——读出条目内容与文件绝对路径，提示手动编辑
- *   （$EDITOR / notepad 打开该 yaml；M8 不内嵌编辑器流程）；
+ * - edit：TTY 下拉起 `$EDITOR`（缺省 notepad）编辑条目 yaml，等编辑器退出后
+ *   重校验；非 TTY（CI / 管道）或 `$EDITOR` 在 PATH 上解析不到时退回打印
+ *   「文件路径 + 正文」的旧行为，**不报错**；
  * - rm：删除条目文件（先 show 确认建议由用户自行执行）。
  *
  * 四个子命令都支持 `--json`（§6.2；判定走 resolveJsonFlag，故 `aforge --json
  * learnings show <id>` 与 `aforge learnings show <id> --json` 等价）。JSON 字段
  * 与 list 同风格：条目字段展开 + `scope` + `file`（show/edit 另带正文 `content`）。
+ * **`--json` 恒不拉编辑器**（见 edit action 内的契约注释）。
  *
  * 条目查找：project 层优先于 user 层（与 promote 同序）。
  */
@@ -23,7 +25,8 @@ import {
   removeLearning,
 } from '../../core/learning/store';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
-import { realHost } from '../../infra/real-host';
+import { defaultTtyProbe, type TtyProbe } from '../../infra/prompt';
+import { resolveExecutable } from '../../infra/shell';
 import { getUi, type Ui } from '../../infra/ui';
 import type { Learning } from '../../schema';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
@@ -31,6 +34,9 @@ import { resolveJsonFlag } from '../_shared/flags';
 
 /** 命令上下文。 */
 export type LearningsCommandContext = CommandContext;
+
+/** `$EDITOR` 缺失时的兜底编辑器（沿用改造前的口径）。 */
+const EDITOR_FALLBACK = 'notepad';
 
 /** list 条目（附所在层与文件路径）。 */
 export interface LearningListItem {
@@ -116,6 +122,132 @@ export async function runLearningsRemove(
   return { id, file: found.file, scope: found.scope };
 }
 
+/** edit 的注入上下文：额外带 TTY 探测（测试伪造 CI / 管道环境）。 */
+export interface LearningsEditContext extends LearningsCommandContext {
+  readonly tty: TtyProbe;
+}
+
+/**
+ * edit 的结局：
+ * - `printed`：没拉编辑器，退回「打印文件路径 + 正文」的旧行为；
+ * - `valid`：编辑器退出后重校验通过；
+ * - `deleted`：用户在编辑器里把该文件删了（不算失败）。
+ */
+export type LearningsEditOutcome = 'printed' | 'valid' | 'deleted';
+
+/** 退回打印分支的原因（决定是否先给一条编辑器解析失败的提示）。 */
+export type LearningsEditFallback = 'not-tty' | 'editor-unresolved';
+
+export interface LearningsEditResult {
+  readonly item: LearningListItem;
+  /** `$EDITOR` 原始值（缺省 notepad）；与 `--json` 的 editor 字段同源。 */
+  readonly editor: string;
+  /** 实际拉起的编辑器绝对路径（PATH 解析结果）；未拉起 → undefined。 */
+  readonly editorPath?: string;
+  /** 编辑器退出码；未拉起 → undefined。 */
+  readonly exitCode?: number;
+  readonly outcome: LearningsEditOutcome;
+  /** 条目正文（仅 `printed` 分支需要，用于原地展示给用户手工编辑）。 */
+  readonly content?: string;
+  readonly fallback?: LearningsEditFallback;
+}
+
+/**
+ * edit 核心逻辑：TTY 下拉起 `$EDITOR` 编辑条目文件，退出后重校验。
+ *
+ * 三条边界（都是刻意选择，不要改成抛错）：
+ * - **非 TTY 不报错**：CI / 管道里 `learnings edit` 不该炸，退回打印路径 + 正文
+ *   （与改造前行为一致），故不用 prompt.assertTty；
+ * - **`$EDITOR` 在 PATH 上解析不到 → 同样退回打印**：绝不 spawn 一个解析不出的
+ *   裸名（§10：Windows CreateProcess 解析裸命令名会先搜当前目录）；
+ * - **编辑器非零退出仍然重校验**：用户可能保存后才让编辑器崩掉，跳过校验会漏报
+ *   坏文件；调用方按 exitCode 补一条 warning 即可。
+ *
+ * @throws ConfigError(2) id 不存在；编辑后内容非法（readLearningFile 冒泡，正确行为）。
+ */
+export async function runLearningsEdit(
+  ctx: LearningsEditContext,
+  id: string,
+): Promise<LearningsEditResult> {
+  const found = await requireOne(ctx, id);
+  const editor = ctx.host.env('EDITOR') ?? EDITOR_FALLBACK;
+
+  if (!ctx.tty.isInteractive()) {
+    return {
+      item: found,
+      editor,
+      outcome: 'printed',
+      fallback: 'not-tty',
+      content: await ctx.host.readFile(found.file),
+    };
+  }
+
+  const editorPath = await resolveExecutable(ctx.host, editor, { platform: ctx.os.platform });
+  if (editorPath === undefined) {
+    return {
+      item: found,
+      editor,
+      outcome: 'printed',
+      fallback: 'editor-unresolved',
+      content: await ctx.host.readFile(found.file),
+    };
+  }
+
+  const exitCode = await ctx.host.spawnInteractive(editorPath, [found.file]);
+  // 重校验复用 store.readLearningFile：不存在 → null；内容非法 → ConfigError(2) 冒泡
+  const edited = await readLearningFile(ctx.host, found.file);
+  if (edited === null) {
+    return { item: found, editor, editorPath, exitCode, outcome: 'deleted' };
+  }
+  return {
+    item: { ...found, learning: edited },
+    editor,
+    editorPath,
+    exitCode,
+    outcome: 'valid',
+  };
+}
+
+/** edit 的人类可读输出（调用方 console.log）。 */
+export function formatLearningsEdit(result: LearningsEditResult, ui: Ui = getUi()): string {
+  const { item } = result;
+  if (result.outcome === 'printed') {
+    const lines: string[] = [];
+    if (result.fallback === 'editor-unresolved') {
+      lines.push(
+        `${ui.yellow('editor not found on PATH')}: ${result.editor}`,
+        ui.hint('point $EDITOR at an executable on PATH, then rerun'),
+      );
+    }
+    lines.push(
+      `${ui.dim('learning file')}: ${ui.path(item.file)}`,
+      ui.dim(`open it with your editor (e.g. \`${result.editor} "${item.file}"\`) and save;`),
+      ui.dim('current content:'),
+      ui.dim('---'),
+      result.content ?? '',
+      ui.dim('---'),
+    );
+    return lines.join('\n');
+  }
+
+  const lines: string[] = [];
+  if (result.exitCode !== undefined && result.exitCode !== 0) {
+    lines.push(
+      `${ui.yellow('editor exited abnormally')}: ${result.editor} (code ${result.exitCode})`,
+    );
+  }
+  if (result.outcome === 'deleted') {
+    lines.push(
+      `${ui.yellow('learning file deleted')}: ${ui.bold(item.learning.id)} (${item.scope} layer)\n  ${ui.path(item.file)}`,
+    );
+  } else {
+    lines.push(
+      `${ui.green('learning updated')}: ${ui.bold(item.learning.id)} (${item.scope} layer)\n  ${ui.path(item.file)}`,
+    );
+  }
+  return lines.join('\n');
+}
+
 /** 单行列摘要（两列对齐；promoted 绿 / draft 暗）。 */
 function listLine(item: LearningListItem, ui: Ui): string {
   const l = item.learning;
@@ -170,33 +302,25 @@ export function registerLearningsCommand(program: Command): void {
 
   cmd
     .command('edit <id>')
-    .description('print entry file path and content for manual editing')
+    .description('open a learning entry in $EDITOR (prints the path when non-interactive)')
     .option('--json', 'machine-readable output (Spec 6.2)')
     .action(async (id: string, options: { json?: boolean }, command: Command) => {
-      const found = await requireOne(defaultCommandContext(), id);
-      const content = await realHost.readFile(found.file);
-      const editor = realHost.env('EDITOR') ?? 'notepad';
+      const ctx: LearningsEditContext = { ...defaultCommandContext(), tty: defaultTtyProbe() };
+      // 契约：`--json` **恒不拉编辑器**，只回条目元数据（含 editor 名）+ 正文。
+      // 机器模式下拉起交互程序没有意义（脚本 / 管道无人按键），还会把编辑器的
+      // 终端渲染混进 stdout 破坏 §6.2 的「单次 JSON 输出」约定。
       if (resolveJsonFlag(command, options.json)) {
+        const found = await requireOne(ctx, id);
         printJson({
           ...found.learning,
           scope: found.scope,
           file: found.file,
-          editor,
-          content,
+          editor: ctx.host.env('EDITOR') ?? EDITOR_FALLBACK,
+          content: await ctx.host.readFile(found.file),
         });
         return;
       }
-      const ui = getUi();
-      console.log(
-        [
-          `${ui.dim('learning file')}: ${ui.path(found.file)}`,
-          ui.dim(`open it with your editor (e.g. \`${editor} "${found.file}"\`) and save;`),
-          ui.dim('current content:'),
-          ui.dim('---'),
-          content,
-          ui.dim('---'),
-        ].join('\n'),
-      );
+      console.log(formatLearningsEdit(await runLearningsEdit(ctx, id)));
     });
 
   cmd

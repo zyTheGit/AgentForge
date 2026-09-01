@@ -1,10 +1,13 @@
 /**
- * learnings 子命令 `--json` 契约（Spec §6.2）。
+ * learnings 子命令 `--json` 契约（Spec §6.2）与 `edit` 的编辑器流程。
  *
  * `list` 早已支持 `--json`，`show|edit|rm` 是本轮补齐的三个。这三个 action 走
  * defaultCommandContext（realHost + process.cwd），故用真实临时目录 + AGF_HOME
  * 指向临时 user SoT；条目只放 user 层（project 层 = cwd\.agentforge 不命中，
  * findOne 回落 user 层，故无需 chdir）。
+ *
+ * `edit` 的编辑器流程（#33）不走 commander：它要注入 fake host（内存 fs +
+ * 记账的 spawnInteractive）与 fake TtyProbe，故直接调 runLearningsEdit。
  */
 
 import { existsSync } from 'node:fs';
@@ -15,7 +18,15 @@ import { Command } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify as stringifyYaml } from 'yaml';
 import { registerLearningsCommand } from '../../src/commands/knowledge';
+import {
+  formatLearningsEdit,
+  type LearningsEditContext,
+  runLearningsEdit,
+} from '../../src/commands/knowledge/learnings';
+import { ConfigError } from '../../src/core/errors';
 import { learningFilePath } from '../../src/core/learning/store';
+import { createUi } from '../../src/infra/ui';
+import { abs, createFakeHost, type FakeHost } from './test-utils';
 
 const ID = 'l20260826010203-abc123';
 
@@ -121,5 +132,101 @@ describe('learnings show|edit|rm --json（Spec §6.2）', () => {
     });
     await program.parseAsync(['--json', 'learnings', 'show', ID], { from: 'user' });
     expect((JSON.parse(logs[0] ?? '') as { id: string }).id).toBe(ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// edit 的编辑器流程（#33）：fake host + fake TtyProbe，不起真进程
+// ---------------------------------------------------------------------------
+
+const WIN32 = process.platform === 'win32';
+/** PATH 上的编辑器目录与其绝对路径（win32 候选名由 PATHEXT 展开，故带 .EXE）。 */
+const EDITOR_DIR = abs('tools', 'bin');
+const EDITOR_ABS = path.join(EDITOR_DIR, WIN32 ? 'code.EXE' : 'code');
+
+interface EditFixtureOptions {
+  /** TTY 探测结果（false = CI / 管道）。 */
+  readonly interactive: boolean;
+  /** 「用户在编辑器里做的事」：spawnInteractive 返回前执行。 */
+  readonly onEdit?: (host: FakeHost, file: string) => void;
+}
+
+/** 装配 edit 用的注入上下文：内存条目 + PATH 上的 code + 可控 TTY。 */
+function editFixture(options: EditFixtureOptions): {
+  ctx: LearningsEditContext;
+  host: FakeHost;
+  file: string;
+} {
+  const sotRoot = abs('agf-home');
+  const base = createFakeHost({
+    AGF_HOME: sotRoot,
+    EDITOR: 'code',
+    PATH: EDITOR_DIR,
+    PATHEXT: '.EXE',
+  });
+  const file = learningFilePath(sotRoot, ID);
+  base.files.set(file, stringifyYaml(LEARNING, { lineWidth: 0 }));
+  base.files.set(EDITOR_ABS, 'binary');
+
+  const host: FakeHost = {
+    ...base,
+    async spawnInteractive(cmd, args, opts) {
+      const code = await base.spawnInteractive(cmd, args, opts);
+      options.onEdit?.(base, file);
+      return code;
+    },
+  };
+  const ctx: LearningsEditContext = {
+    host,
+    cwd: abs('proj'),
+    os: { platform: process.platform as 'win32' | 'darwin' | 'linux' },
+    tty: { isInteractive: () => options.interactive },
+  };
+  return { ctx, host, file };
+}
+
+describe('learnings edit 拉起 $EDITOR（#33）', () => {
+  it('TTY：spawn 的是 PATH 上解析出的编辑器绝对路径 + 条目文件路径', async () => {
+    const { ctx, host, file } = editFixture({ interactive: true });
+    const result = await runLearningsEdit(ctx, ID);
+    expect(host.spawnInteractiveCalls).toEqual([{ cmd: EDITOR_ABS, args: [file], cwd: undefined }]);
+    expect(result.outcome).toBe('valid');
+    expect(result.editorPath).toBe(EDITOR_ABS);
+  });
+
+  it('非 TTY：不 spawn，退回打印文件路径 + 正文（不抛错）', async () => {
+    const { ctx, host, file } = editFixture({ interactive: false });
+    const result = await runLearningsEdit(ctx, ID);
+    expect(host.spawnInteractiveCalls).toEqual([]);
+    expect(result.outcome).toBe('printed');
+    expect(result.fallback).toBe('not-tty');
+    expect(result.content).toBe(host.files.get(file));
+  });
+
+  it('编辑后内容非法 → ConfigError(2)', async () => {
+    const { ctx } = editFixture({
+      interactive: true,
+      onEdit: (host, file) => {
+        host.files.set(file, 'confidence: 高\n');
+      },
+    });
+    const err = await runLearningsEdit(ctx, ID).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as ConfigError).code).toBe(2);
+  });
+
+  it('编辑后文件被删 → 不抛错，提示文件已删除', async () => {
+    const { ctx, host } = editFixture({
+      interactive: true,
+      onEdit: (base, file) => {
+        base.files.delete(file);
+      },
+    });
+    const result = await runLearningsEdit(ctx, ID);
+    expect(result.outcome).toBe('deleted');
+    expect(host.spawnInteractiveCalls).toHaveLength(1);
+    expect(
+      formatLearningsEdit(result, createUi({ color: false, unicode: false, columns: 80 })),
+    ).toContain('learning file deleted');
   });
 });
