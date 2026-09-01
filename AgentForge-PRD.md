@@ -221,8 +221,9 @@ Habit-first 的 AI Agent 规则锻造与进化工具：根据个人/项目工具
 - 更丰富探测器与可选官方模板仓库
 - MCP 字段与上游对齐增强
 - import 增强
-- 可选 symlink 模式
 - Interactive 体验改善
+
+> `skills.copy_mode: symlink` 已决定**不予实现**，不列入任何 Phase（与 prune 判据冲突、Windows 默认无创建权限、四家客户端读取行为未实测），理由见 Spec §4.2。
 
 ### Phase 3
 
