@@ -43,6 +43,7 @@
 
 ## 其他缺口
 
-- `aforge learnings edit` 不拉起编辑器，只打印条目路径与内容供手工编辑
-- `manifest` 的 schema 仍是宽松对象数组，待按需收紧
-- 文档缺「在 CI 中使用 aforge」的成篇示例；相关行为散落在 [learning](learning.md) 与 [命令速查](commands.md)
+- `aforge learnings edit` 不拉起编辑器，只打印条目路径与内容供手工编辑（[#33](https://github.com/zyTheGit/AgentForge/issues/33)）
+- `manifest` 的 schema 仍是宽松对象数组，待按需收紧（[#34](https://github.com/zyTheGit/AgentForge/issues/34)）
+- 文档缺「在 CI 中使用 aforge」的成篇示例；相关行为散落在 [learning](learning.md) 与 [命令速查](commands.md)（[#35](https://github.com/zyTheGit/AgentForge/issues/35)）
+
