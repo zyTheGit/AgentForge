@@ -78,5 +78,6 @@ npm run build      # 双轨构建（node + bun）
 - 首选装法与 Windows 一致：`npx -y @zythegit/agentforge@latest`（或 `npm i -g`）；
 - 从源码构建：`fnm env --shell bash | source -`（或 zsh）后 `npm install` + `npm run build:node`；
 - 用户级 SoT 在 `$HOME/.agentforge`；投影换行默认规则同 Windows（profile 可配置）；
+- WSL 内的安装与原生 Linux 完全一致（AgentForge 不检测 WSL）；SoT 该放哪一侧、以及两侧混用的坑见 [平台注意事项 · WSL 互通](platform.md#wsl-互通)；
 - `npm run build:bun` 自动按当前平台选 target，`build:bun:all` 一次交叉编译五平台；
 - macOS 二进制未签名未公证，见上文「方式二」的 `xattr` 说明。
