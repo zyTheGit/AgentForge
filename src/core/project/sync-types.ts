@@ -11,6 +11,7 @@
 import type { Host } from '../../infra/host';
 import type { EnvSnapshot, Scope } from '../env';
 import type { OsContext } from '../paths';
+import type { McpTransportNotice } from './projectors/mcp-transport';
 import { projectorRegistry } from './projectors/registry';
 import type { SyncPrunedEntry, SyncPruneSkip } from './sync-prune';
 import type { ProjectionPlanItem, Projector } from './types';
@@ -87,6 +88,16 @@ export interface SyncResult {
   readonly commandSkips: readonly SyncCommandSkip[];
   /** soft 项（§8.6）apply 失败收集的 warning（不阻塞 sync）。 */
   readonly warnings: readonly SyncWarning[];
+  /**
+   * MCP transport 与目标格式的能力落差（Phase 2「MCP 字段与上游对齐」）：
+   * 某个 target 表达不了某个 server 的 transport 时的降级 / 跳过结论。
+   *
+   * 刻意不并进 `warnings`（同 `commandSkips` 的理由）：writeSyncMetaOnSuccess 按
+   * `warnings` 的 targetId 判定「该 target 投影不完整 → 不记账」，而能力落差是
+   * **上游本身的边界**、投影结果就是该 target 能达到的最佳形态，混进去会让
+   * codex / opencode 的 artifacts 记账整轮丢失（下一轮就永远不清理它的产物）。
+   */
+  readonly mcpTransportNotices: readonly McpTransportNotice[];
   /**
    * 事务设施级警告（**不是**某个 target 的 soft 失败）：崩溃恢复能力降级
    * （备份日志 / 副本写不进去）、保留下来的失败备份目录、恢复阶段需人工核对的条目。

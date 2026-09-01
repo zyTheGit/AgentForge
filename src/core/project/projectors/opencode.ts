@@ -16,9 +16,9 @@
  *   额外产出 §8.7 标记为「可选」的 CLAUDE.md（缺省不产出）；
  * - MCP 恒产出（含空 servers——写入空管理键声明"mcp 键归 AgentForge 管理"，
  *   深合并时未知键/未知 server 保留，Spec §8.2）；
- *   payload 采用 OpenCode 配置惯例：顶层 `mcp` 键，stdio →
- *   `{ type: "local", command: [...], enabled: true }`，http/sse →
- *   `{ type: "remote", url, enabled: true }`；
+ *   payload 采用 OpenCode 配置惯例：顶层 `mcp` 键，条目形状由 mcp-transport
+ *   归一化层给出（stdio → `type: "local"`；http / sse 均 → `type: "remote"`——
+ *   上游远端形态无法区分 SSE，sse 由 doctor / sync 报 degraded 而非硬造字段）；
  * - skills：write 实体 copy（copy_mode=copy，非 symlink，Spec §7.6），
  *   M8 skill add 接入后 skillsToMaterialize 才有内容；
  * - plan 为纯函数：不做任何 IO，路径按注入 os 选择分隔符（Spec §2.1）。
@@ -36,6 +36,7 @@ import {
   shouldWriteAgentsMd,
   shouldWriteOptionalClaudeMd,
 } from '../types';
+import { opencodeMcpObject } from './mcp-transport';
 import { commandFilePath, SKILLS_DIRNAME, skillDocPath } from './shared';
 
 /** Spec §2.3 / §8.3 主规则文件名（project / user 两个 scope 同名）。 */
@@ -70,33 +71,11 @@ function opencodeUserDir(ctx: ProjectContext): string {
 /**
  * OpenCode MCP 管理键 JSON 载荷（merge_json 的 item.content）。
  *
- * 顶层 `mcp` 键；enabled=false 的 server 不投影（Spec §4.2 语义）。
- * 空数组 → `{"mcp":{}}`（保留管理键声明）。
+ * 顶层 `mcp` 键；条目形状由 mcp-transport 归一化层给出，enabled=false 的 server
+ * 不投影（Spec §4.2 语义）。空数组 → `{"mcp":{}}`（保留管理键声明）。
  */
 export function opencodeMcpPayload(servers: readonly McpServer[]): string {
-  const mcp: Record<string, unknown> = {};
-  for (const server of servers) {
-    if (server.enabled === false) {
-      continue;
-    }
-    if (server.transport === 'stdio') {
-      mcp[server.name] = {
-        type: 'local',
-        command: [server.command ?? '', ...(server.args ?? [])],
-        enabled: true,
-        ...(server.env !== undefined ? { environment: server.env } : {}),
-      };
-    } else {
-      // http / sse → remote 形态（url + 可选 headers）
-      mcp[server.name] = {
-        type: 'remote',
-        url: server.url ?? '',
-        enabled: true,
-        ...(server.headers !== undefined ? { headers: server.headers } : {}),
-      };
-    }
-  }
-  return JSON.stringify({ mcp });
+  return JSON.stringify({ mcp: opencodeMcpObject(servers) });
 }
 
 /** 主规则绝对路径（`status` / `init` 打印"实际将写入的路径"也用它，Spec §2.2）。 */

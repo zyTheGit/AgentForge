@@ -18,7 +18,10 @@
  *     "本次不会写入 learnings" → ok（§7.4 护栏 3 / §10；投影正文不受 CI 影响）；
  *     `prompt` 与 `auto_promote: true` 并存 → warn（会与人工 sync 争 `.sync.lock`）；
  * 13. profile.skills.expose_as_command：名单不是 `skills.always` 子集 → error(2)（sync 将失败）；
- *     project scope 且启用 codex → warn（codex 只读 `$CODEX_HOME\prompts\`，该项跳过，§8.8）。
+ *     project scope 且启用 codex → warn（codex 只读 `$CODEX_HOME\prompts\`，该项跳过，§8.8）；
+ * 14. MCP transport × target 能力落差（Phase 2 MCP 对齐）：某家上游表达不了某种
+ *     transport 时报 warn（codex 不支持 sse → 跳过；opencode 的 remote 无法区分 sse
+ *     → 按 streamable HTTP 连接）。
  *
  * 设计原则：
  * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题；
@@ -34,6 +37,7 @@
  * - `check-writable`：SoT 根与目标目录可写性探针（唯一有写副作用的检查）；
  * - `check-residuals`：事务残留（锁 / journal / 回滚失败备份）的级别与提示取舍；
  * - `check-consistency`：渲染基准 / 模板解析 / on_demand / copy_mode / sync-meta / merge_json；
+ * - `check-mcp-transport`：MCP transport × target 能力落差（降级 / 跳过）；
  * - `check-projection-hash`：marker 区间三方比对（当前渲染 vs 记录 vs 磁盘）；
  * - `check-environment`：declared vs detected / OneDrive / skills/ 下的 symlink。
  *
@@ -70,6 +74,7 @@ import {
   checkPiCodingAgentDir,
   checkSkillsSymlinks,
 } from './check-environment';
+import { checkMcpTransport } from './check-mcp-transport';
 import { buildPlanCtx, checkTargetPaths, collectEnabledPlans } from './check-paths';
 import { checkProjectionHashes } from './check-projection-hash';
 import { piLegacyMcpResults, residualResults } from './check-residuals';
@@ -184,6 +189,9 @@ async function runConfigDependentChecks(
 
   // ---- profile.learning.auto_capture：hook 未实现 / CI 不写入 / 与 auto_promote 撞锁（§7.4 / §9）----
   checkLearningAutoCapture(results, config, env);
+
+  // ---- MCP transport × target 能力落差（Phase 2 MCP 对齐：降级 / 跳过 → warn）----
+  checkMcpTransport(results, config);
 
   // ---- sync-meta 读取（损坏 → error(2)；不存在 → 信息性 ok）----
   const syncMeta = await readSyncMetaForDoctor(host, results, roots, config);

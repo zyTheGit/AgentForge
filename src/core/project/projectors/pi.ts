@@ -25,7 +25,9 @@
  * - **MVP soft 语义（Spec §8.6）**：mcp.json 项在 plan 中标记 soft——
  *   引擎 apply 失败（目录/文件异常）时仅收集 warning，不计入失败、不触发回滚，
  *   sync 整体仍算成功（best-effort，扩展没装时这份配置只是躺着不生效）。soft 项
- *   恒产出（含空 servers），payload 为 `{"mcpServers":{...}}`；
+ *   恒产出（含空 servers），payload 为 `{"mcpServers":{...}}`；条目形状由
+ *   mcp-transport 归一化层给出——顶层键与 Claude Code 同名，但**条目形状不同构**
+ *   （适配器没有 `type` 字段，按 command / url / socket 互斥判定 transport）；
  * - skills：write 实体 copy（Spec §7.6 默认不使用 symlink）；
  * - plan 为纯函数：不做任何 IO，路径按注入 os 选择分隔符（Spec §2.1）。
  */
@@ -41,7 +43,7 @@ import {
   type Projector,
   shouldWriteAgentsMd,
 } from '../types';
-import { buildMcpServersObject } from './mcp-payload';
+import { piMcpServersObject } from './mcp-transport';
 import { flatCommandFilePath, SKILLS_DIRNAME, skillDocPath } from './shared';
 
 /** Spec §2.3 / §8.6 主规则文件名（project / user 两个 scope 同名）。 */
@@ -87,11 +89,12 @@ function piUserDir(ctx: ProjectContext): string {
 /**
  * Pi MCP 管理键 JSON 载荷（merge_json 的 item.content）。
  *
- * 顶层 `mcpServers` 键（pi-mcp-adapter 与 Claude Code 同构）；enabled=false 的
+ * 顶层 `mcpServers` 键（与 Claude Code 同名），条目形状由 mcp-transport 归一化层
+ * 给出（无 `type` 键；`transport: sse` 落成 `httpTransport: "sse"`）；enabled=false 的
  * server 不投影。空数组 → `{"mcpServers":{}}`（保留管理键声明，深合并时未知键保留）。
  */
 export function piMcpPayload(servers: readonly McpServer[]): string {
-  return JSON.stringify({ mcpServers: buildMcpServersObject(servers) });
+  return JSON.stringify({ mcpServers: piMcpServersObject(servers) });
 }
 
 /** 主规则绝对路径（`status` / `init` 打印"实际将写入的路径"也用它，Spec §2.2）。 */

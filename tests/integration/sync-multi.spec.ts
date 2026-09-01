@@ -312,7 +312,7 @@ describe('MCP servers 配置后的投影（§8.3/§8.4/§8.5/§8.6 管理键）'
         'model = "gpt-5"',
         '',
         CODEX_MCP_TOML_BEGIN,
-        '[[mcp_servers.old]]',
+        '[mcp_servers.old]',
         'command = "old"',
         CODEX_MCP_TOML_END,
         '',
@@ -343,11 +343,11 @@ describe('MCP servers 配置后的投影（§8.3/§8.4/§8.5/§8.6 管理键）'
       },
     });
 
-    // .mcp.json：otherKey 保留、mcpServers 覆盖管理键
+    // .mcp.json：otherKey 保留、mcpServers 覆盖管理键（claude 每条显式带 type）
     expect(JSON.parse(await readFile(ws.mcpJson, 'utf8'))).toEqual({
       otherKey: [1, 2],
       mcpServers: {
-        fs: { command: 'npx', args: ['-y', 'server-fs'], env: { KEY: 'v' } },
+        fs: { type: 'stdio', command: 'npx', args: ['-y', 'server-fs'], env: { KEY: 'v' } },
         docs: {
           type: 'http',
           url: 'https://example.com/mcp',
@@ -361,25 +361,21 @@ describe('MCP servers 配置后的投影（§8.3/§8.4/§8.5/§8.6 管理键）'
     expect(toml).toContain('# 用户注释（必须保留）');
     expect(toml).toContain('model = "gpt-5"');
     expect(toml).toContain('# 尾部注释（必须保留）');
-    expect(toml).toContain('[[mcp_servers.fs]]');
+    expect(toml).toContain('[mcp_servers.fs]');
     expect(toml).toContain('command = "npx"');
     expect(toml).toContain('args = ["-y", "server-fs"]');
     expect(toml).toContain('env = { KEY = "v" }');
-    expect(toml).toContain('[[mcp_servers.docs]]');
+    expect(toml).toContain('[mcp_servers.docs]');
     expect(toml).toContain('url = "https://example.com/mcp"');
-    expect(toml).toContain('headers = { Authorization = "Bearer x" }');
-    expect(toml).not.toContain('[[mcp_servers.old]]');
+    expect(toml).toContain('http_headers = { Authorization = "Bearer x" }');
+    expect(toml).not.toContain('[mcp_servers.old]');
     expect(toml).not.toContain('command = "old"');
 
-    // pi .pi\mcp.json：mcpServers 同 .mcp.json 管理键形态
+    // pi .pi\mcp.json：顶层键与 .mcp.json 同名，但条目无 type（transport 由字段互斥判定）
     expect(JSON.parse(await readFile(ws.piMcp, 'utf8'))).toEqual({
       mcpServers: {
         fs: { command: 'npx', args: ['-y', 'server-fs'], env: { KEY: 'v' } },
-        docs: {
-          type: 'http',
-          url: 'https://example.com/mcp',
-          headers: { Authorization: 'Bearer x' },
-        },
+        docs: { url: 'https://example.com/mcp', headers: { Authorization: 'Bearer x' } },
       },
     });
 

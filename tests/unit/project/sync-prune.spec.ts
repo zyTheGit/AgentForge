@@ -65,7 +65,7 @@ describe('accountMcpServers（口径与 merge_json 载荷同源）', () => {
     return { mcpServers: servers } as ProjectContext;
   }
 
-  it('enabled=false 不算投影过（与 buildMcpServersObject 同一判据）', () => {
+  it('enabled=false 不算投影过（与 enabledMcpServerNames 同一判据）', () => {
     const names = accountMcpServers(
       ctxWith([
         { name: 'ctx7', transport: 'stdio', command: 'npx' },
