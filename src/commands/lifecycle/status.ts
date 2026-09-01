@@ -15,6 +15,8 @@
  *   （Spec §4.2 注记），在此如实标注，避免该字段静默无效；
  * - profile.learning.auto_capture 的声明值与生效值（§7.4）：`hook` 未实现时标出原因，
  *   `prompt` 时说明投影正文含 `## Learning Protocol` 段，CI 下补一句"本次不会写入"；
+ * - user 层 sources.json 的登记源（含默认注册的官方模板源：禁用态 / 是否已拉取 / pin），
+ *   见 ./status-sources —— 读取零网络、失败降级为空清单；
  * - --json 输出机器可读 JSON（路径一律绝对路径）。
  *
  * 只读命令：不做渲染（profile.templates 未解析不影响路径展示，环境探测
@@ -47,6 +49,7 @@ import {
   renderList,
 } from '../_shared/context';
 import { resolveJsonFlag } from '../_shared/flags';
+import { collectStatusSources, formatStatusSources, type StatusSourceInfo } from './status-sources';
 
 /** 命令上下文（host/os/cwd 注入；测试可换 fake host 与任意平台）。 */
 export type StatusCommandContext = CommandContext;
@@ -108,6 +111,15 @@ export interface StatusResult {
     reason: string | null;
     ciNote: string | null;
   }>;
+  /**
+   * user 层 sources.json 的登记源（含默认注册的官方源）。
+   *
+   * 在 status 展示的理由与 on_demand / auto_capture 同源——"登记了但不生效"必须可见：
+   * 官方源默认以 disabled 落盘，不打这一节的话用户无从知道它存在、也无从知道
+   * 为什么 `template list` 里没有它的模板。读取零网络、失败降级为空数组
+   * （诊断归 aforge doctor）。
+   */
+  readonly sources: readonly StatusSourceInfo[];
 }
 
 /** stat 失败（不存在 / 不可访问）→ 非文件。 */
@@ -293,6 +305,7 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
       reason: describeAutoCaptureReason(autoCapture),
       ciNote: describeAutoCaptureCiNote(autoCapture),
     },
+    sources: await collectStatusSources(host, env, os, cwd, userSoTRoot),
   };
 }
 
@@ -389,6 +402,9 @@ export function formatStatus(result: StatusResult, ui: Ui = getUi()): string {
       WIDE_LABEL_WIDTH,
     ),
   );
+
+  lines.push('');
+  lines.push(...formatStatusSources(result.sources, ui));
 
   lines.push('');
   lines.push(ui.bold('learning (profile.learning):'));

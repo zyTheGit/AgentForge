@@ -151,6 +151,17 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       alwaysSkills: ['code-review'],
       onDemandSkills: ['deep-research'],
       autoCapture: { declared: 'off', effective: 'off', reason: null, ciNote: null },
+      sources: [
+        {
+          id: 'official',
+          type: 'git',
+          enabled: false,
+          ref: 'v0.2.2',
+          commit: null,
+          materialized: false,
+          official: true,
+        },
+      ],
     });
     expect(text).toContain('aforge status');
     expect(text).toContain(USER_SOT);
@@ -165,6 +176,9 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
     // §4.2：always 由 sync 物化；on_demand 在 MVP 只登记不物化，status 需说明这点
     expect(text).toContain('always    : code-review (materialized by sync)');
     expect(text).toContain('on_demand : deep-research (declared only - not projected in MVP)');
+    // §12 Phase 2：默认注册的官方源以 disabled 落盘，status 必须让"登记了但不生效"可见
+    expect(text).toContain('sources (user-level sources.json):');
+    expect(text).toContain('official [official]  git  disabled pin v0.2.2');
     // §6.1 / §8.8：技能调用前缀必须打印——codex 是 `$<name>`，其余三家 `/<name>`
     expect(text).toContain('claude (invoke skills as /<name>):');
     expect(text).toContain('codex (invoke skills as $<name>):');
@@ -189,12 +203,14 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       alwaysSkills: [],
       onDemandSkills: [],
       autoCapture: { declared: 'off', effective: 'off', reason: null, ciNote: null },
+      sources: [],
     });
     expect(text).toContain('(unresolvable - see aforge doctor)');
     expect(text).toContain('last sync: (never - run aforge sync)');
     // 空清单 → (none)，不产生裸行
     expect(text).toContain('always    : (none)');
     expect(text).toContain('on_demand : (none)');
+    expect(text).toContain('(none registered)');
   });
 
   it('auto_capture 声明值与生效值不同时，打出箭头与原因（§7.4）', () => {
@@ -216,6 +232,7 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
         reason: 'hook is not implemented in MVP - behaves as off',
         ciNote: null,
       },
+      sources: [],
     });
     expect(text).toContain('auto_capture: hook -> off');
     expect(text).toContain('hook is not implemented in MVP - behaves as off');
@@ -235,6 +252,7 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       alwaysSkills: [],
       onDemandSkills: [],
       autoCapture: { declared: 'prompt', effective: 'prompt', reason: null, ciNote: null },
+      sources: [],
     });
     expect(text).toContain('auto_capture: prompt');
     expect(text).toContain('projected rules include a ## Learning Protocol section');
@@ -259,6 +277,7 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
         reason: null,
         ciNote: 'CI detected - no learnings will be written (projected rules are unchanged)',
       },
+      sources: [],
     });
     // 生效档位不变 → 不打箭头；只多一行环境说明
     expect(text).toContain('auto_capture: prompt');

@@ -12,8 +12,8 @@
 | `aforge promote <id> [--to user] [--yes]` | 将 learning 升级为 custom 规则或 skill |
 | `aforge learnings list [--json]` / `show <id>` / `edit <id>` / `rm <id>` | 管理两层 SoT 的 learning 条目（`edit` 在交互终端拉起 `$EDITOR` 改条目 yaml，退出后重校验；非交互或 `--json` 时只打印路径与正文） |
 | `aforge source add <path\|git-url> [--ref r] [--id id]` | 登记规则/模板/技能来源（local 或 git） |
-| `aforge source list [--json]` / `remove <id>` / `update <id>` | 管理已登记来源（update 离线报错） |
-| `aforge template list [--json]` / `enable <id>` / `disable <id>` | 管理规则模板 |
+| `aforge source list [--json]` / `remove <id>` / `update <id>` / `enable <id>` / `disable <id>` | 管理已登记来源（`update` 离线报错；`enable` / `disable` 只翻开关位，不联网也不动缓存） |
+| `aforge template list [--json]` / `enable <id>` / `disable <id>` | 管理规则模板（`list` 会为已启用但尚无缓存的 git 源做首次拉取，见下节） |
 | `aforge skill add <name> [--from src]` / `list [--json]` / `remove <name> [--scope s]` | 安装（实体拷贝）/列出/注销技能（`remove` 只改 profile，文件保留） |
 | `aforge mcp add [--scope s] [--from-json] [--json]` / `remove <name> [--scope s] [--json]` | 登记 / 移除 MCP 服务器声明（`--from-json` 从 stdin 读 JSON 声明） |
 | `aforge status [--json]` | SoT 概览：scope、目标路径（含各 target 的技能调用前缀）、最近 sync、内容计数、`learning.auto_capture` 生效档位 |
@@ -57,6 +57,23 @@
 | CI / 提交钩子 | `ci`（全部命中） | github actions / gitlab ci / azure pipelines / jenkins / circleci / travis / dependabot / husky / lint-staged / pre-commit / commitlint |
 
 匹配大小写不敏感且**词边界安全**：`pnpm` 不会被算成 `npm`、`javascript` 不会被算成 `java`、`uvicorn` 不会被算成 `uv`；含空格的关键词（如 `github actions`）允许换行或多空格折断。裸 `go` 与单字符的 `n` 有意不收——在中英文散文里误报率过高，Go 项目靠 `golang` / `go.mod` 等无歧义写法识别。
+
+## 官方模板源（默认注册、默认禁用）
+
+`aforge init` 会往 **user 层** `sources.json` 里写一条官方模板源（id 为 `official`，指向 AgentForge 仓库的 `templates/` 目录），但**默认是禁用状态**：
+
+| 问题 | 答案 |
+|------|------|
+| 装完会联网吗 | 不会。`init` 只写登记表，一条 git 命令都不发；禁用态下 `sync` / `status` / `doctor` 也完全跳过它 |
+| 怎么用起来 | `aforge source enable official`，然后 `aforge template list` —— 内容在**首次真正用到时**才拉取 |
+| 怎么关掉 | `aforge source disable official`（留缓存，随时再开）或 `aforge source remove official`（连 `store\official` 缓存一起回收） |
+| 删了会自己回来吗 | 不会。登记表一旦存在就不再播种，此后任何 `init`（含其他项目里的 `init`，它们共享同一张 user 层登记表）都不会把它加回来 |
+| pin 是什么 | 固定 tag，**不用浮动 `main`**——同一份 SoT 在任何机器上渲染出同样的规则。想换版本就直接改 `sources.json` 的 `ref`，升级 CLI 不会覆盖本机改写 |
+| 老 SoT（本特性之前 init 的）怎么拿到 | 跑一次 `aforge source enable official`：源不在登记表里时，`enable` 会按内置声明补登记并启用 |
+| 离线 / CI 里呢 | `AGF_OFFLINE=1` 或 `CI` 为真时**不自动拉取**；`aforge template list` 照常列出其余来源，并附一行说明与 `aforge source update official` 的下一步。拉取失败也只降级成说明，不影响命令退出码 |
+| 会覆盖内置 `base/default` 吗 | 不会。内置模板恒优先（见 [规则正文装配](rules.md)），启用官方源只**新增**它独有的模板 id |
+
+`aforge source list` 的 `ENABLED` 列、`aforge status` 的 `sources` 一节、`aforge doctor` 的 `sources/default/official` 检查项都会如实反映上述状态（doctor 对它只报 `ok` / `warn`，不会把体检判失败）。
 
 ## 环境变量
 

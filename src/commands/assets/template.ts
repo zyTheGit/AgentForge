@@ -4,7 +4,8 @@
  * `aforge template list | enable <id> | disable <id>`（三条子命令均支持 `--json`，§6.2）：
  * - list：内置 base/default（恒可用，§3.4；渲染层第 4 层恒渲染）+ 两层 SoT
  *   templates\ + 各源 manifest.templates 清单；enabled = 是否在生效
- *   profile.templates（resolveEffectiveConfig 两层合并后）中；
+ *   profile.templates（resolveEffectiveConfig 两层合并后）中。已启用但尚无缓存的
+ *   git 源在此按需首次拉取（离线 / CI / 拉取失败一律降级为 note 行，不影响其余清单）；
  * - enable/disable：**只改 profile.templates 数组**（§7.6），编辑目标层
  *   （AGF_SCOPE > project 在用 > user 在用）自己的 profile.yaml。
  */
@@ -19,6 +20,7 @@ import {
   setTemplateEnabled,
   type TemplateContext,
   type TemplateListItem,
+  type TemplateListResult,
 } from '../../core/sources/template';
 import { getUi, type Ui } from '../../infra/ui';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
@@ -52,7 +54,7 @@ async function buildTemplateContext(ctx: TemplateCommandContext): Promise<Templa
 }
 
 /** list 核心逻辑（可注入、不打印）。 */
-export async function runTemplateList(ctx: TemplateCommandContext): Promise<TemplateListItem[]> {
+export async function runTemplateList(ctx: TemplateCommandContext): Promise<TemplateListResult> {
   return listTemplates(await buildTemplateContext(ctx));
 }
 
@@ -83,14 +85,19 @@ export function registerTemplateCommand(program: Command): void {
     .description('list builtin + SoT + source templates with enabled state')
     .option('--json', 'machine-readable output (Spec 6.2)')
     .action(async (options: { json?: boolean }, command: Command) => {
-      const items = await runTemplateList(defaultCommandContext());
+      const result = await runTemplateList(defaultCommandContext());
       if (resolveJsonFlag(command, options.json)) {
-        printJson(items);
+        // --json 的契约仍是纯清单数组（不因新增降级说明而变形）；说明只进人类可读
+        // 输出与 aforge doctor 的 sources 检查项，两处口径同源
+        printJson(result.items);
         return;
       }
       const ui = getUi();
-      const lines = items.map((item) => templateLine(item, ui));
-      lines.push('', ui.dim(`${items.length} template(s)`));
+      const lines = result.items.map((item) => templateLine(item, ui));
+      lines.push('', ui.dim(`${result.items.length} template(s)`));
+      for (const warning of result.warnings) {
+        lines.push(ui.yellow(`note: ${warning}`));
+      }
       console.log(lines.join('\n'));
     });
 
