@@ -1,14 +1,16 @@
 /**
  * codex projector 单测（Spec §8.4 / §2.3 / §2.2）：plan 纯函数（路径 / 动作 /
  * tomlMarkers / CODEX_HOME 覆盖）、TOML 手写序列化（表块 / basic string 转义 /
- * inline table / 数组 / enabled 过滤）、skills write 项。
+ * inline table / 数组 / enabled 过滤）、skills write 项、§7.4 hook 档的钩子项。
  */
 import { describe, expect, it } from 'vitest';
+import { codexSessionHooksJson } from '../../../../src/core/learning/hook-capture';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
 import {
   CODEX_MCP_TOML_BEGIN,
   CODEX_MCP_TOML_END,
   codexConfigPath,
+  codexHooksPath,
   codexMainRulePath,
   codexProjector,
   codexSkillPath,
@@ -17,6 +19,7 @@ import {
 } from '../../../../src/core/project/projectors/codex';
 import type { ProjectContext } from '../../../../src/core/project/types';
 import {
+  type AutoCapture,
   HabitsSchema,
   type McpServer,
   McpServerSchema,
@@ -40,6 +43,21 @@ function buildCtx(overrides: Partial<ProjectContext> = {}): ProjectContext {
     markerEnd: DEFAULT_MARKER_END,
     ...overrides,
   };
+}
+
+/** 指定 auto_capture 档位的 ctx（§7.4 hook 档的钩子项判据）。 */
+function buildCtxWithAutoCapture(
+  autoCapture: AutoCapture,
+  overrides: Partial<ProjectContext> = {},
+): ProjectContext {
+  return buildCtx({
+    profile: ProfileSchema.parse({
+      version: 1,
+      targets: ['codex'],
+      learning: { auto_capture: autoCapture },
+    }),
+    ...overrides,
+  });
 }
 
 function stdioServer(overrides: Partial<McpServer> = {}): McpServer {
@@ -265,5 +283,87 @@ describe('codex 路径函数（status/init 打印共用）', () => {
     expect(codexSkillPath(buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u' }), 's')).toBe(
       'C:\\Users\\u\\.codex\\skills\\s\\SKILL.md',
     );
+  });
+});
+
+describe('会话钩子项（§7.4 learning.auto_capture: hook / §12 Phase 3）', () => {
+  it('hook 档：末位追加 .codex\\hooks.json（write 整文件），内容 = codexSessionHooksJson()', () => {
+    const plan = codexProjector.plan(buildCtxWithAutoCapture('hook'));
+    expect(plan.items.at(-1)).toEqual({
+      path: 'C:\\proj\\.codex\\hooks.json',
+      action: 'write',
+      content: codexSessionHooksJson(),
+    });
+    // 独占文件 + write 动作 → 直接落进 §7.6 artifacts 记账，档位改回后被 prune 整文件删掉
+    expect(plan.items.filter((item) => item.path.endsWith('hooks.json'))).toHaveLength(1);
+  });
+
+  it.each(['off', 'prompt'] as const)('%s 档：不产出任何钩子项', (autoCapture) => {
+    const plan = codexProjector.plan(buildCtxWithAutoCapture(autoCapture));
+    expect(plan.items.some((item) => item.path.endsWith('hooks.json'))).toBe(false);
+    // 其余产物不受影响（主规则 + config.toml 两项）
+    expect(plan.items).toHaveLength(2);
+  });
+
+  it('钩子项与 MCP 段落在同一个 config 层目录（codex 只在 config 层旁发现 hooks）', () => {
+    const ctx = buildCtxWithAutoCapture('hook');
+    const plan = codexProjector.plan(ctx);
+    expect(codexHooksPath(ctx)).toBe('C:\\proj\\.codex\\hooks.json');
+    expect(plan.items.at(-1)?.path).toBe(codexHooksPath(ctx));
+    expect(codexConfigPath(ctx)).toBe('C:\\proj\\.codex\\config.toml');
+  });
+
+  it('user scope 无 CODEX_HOME：落 <home>\\.codex\\hooks.json', () => {
+    const ctx = buildCtxWithAutoCapture('hook', { scope: 'user', rootDir: 'C:\\Users\\u' });
+    expect(codexProjector.plan(ctx).items.at(-1)?.path).toBe('C:\\Users\\u\\.codex\\hooks.json');
+  });
+
+  it('user scope + CODEX_HOME：钩子跟着全局根被覆盖（Spec §2.2 env 覆盖）', () => {
+    const ctx = buildCtxWithAutoCapture('hook', {
+      scope: 'user',
+      rootDir: 'C:\\Users\\u',
+      env: {
+        agfHome: undefined,
+        agfScope: undefined,
+        offline: false,
+        lineEnding: undefined,
+        ci: false,
+        codexHome: 'C:\\codexhome',
+        userProfile: 'C:\\Users\\u',
+      },
+    });
+    expect(codexProjector.plan(ctx).items.at(-1)?.path).toBe('C:\\codexhome\\hooks.json');
+  });
+
+  it('posix os：分隔符随平台，但钩子**内容**逐字相同（产物与平台无关）', () => {
+    const win = codexProjector.plan(buildCtxWithAutoCapture('hook'));
+    const posix = codexProjector.plan(
+      buildCtxWithAutoCapture('hook', { os: { platform: 'linux' }, rootDir: '/home/u/proj' }),
+    );
+    expect(posix.items.at(-1)?.path).toBe('/home/u/proj/.codex/hooks.json');
+    expect(posix.items.at(-1)?.content).toBe(win.items.at(-1)?.content);
+  });
+
+  it('CI 环境不改变钩子产出（声明驱动，非探测驱动 → contentHash 跨环境稳定）', () => {
+    const env = {
+      agfHome: undefined,
+      agfScope: undefined,
+      offline: false,
+      lineEnding: undefined,
+      ci: true,
+      codexHome: undefined,
+      userProfile: undefined,
+    };
+    expect(codexProjector.plan(buildCtxWithAutoCapture('hook', { env }))).toEqual(
+      codexProjector.plan(buildCtxWithAutoCapture('hook')),
+    );
+  });
+
+  it('钩子产物不含任何本机路径（不写 execPath / 安装目录）', () => {
+    const content =
+      codexProjector.plan(buildCtxWithAutoCapture('hook')).items.at(-1)?.content ?? '';
+    expect(content).not.toContain('C:\\');
+    expect(content).not.toContain('proj');
+    expect(content).not.toContain(process.execPath);
   });
 });

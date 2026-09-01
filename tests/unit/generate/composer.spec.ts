@@ -10,7 +10,10 @@ import { BASE_DEFAULT_TEMPLATE } from '../../../src/assets/templates';
 import { ConfigError, ExitCode } from '../../../src/core/errors';
 import type { ComposeInput } from '../../../src/core/generate/composer';
 import { applyPathStyle, composeRules, renderRules } from '../../../src/core/generate/composer';
-import type { Habits } from '../../../src/schema';
+import { effectiveAutoCapture, resolveAutoCapture } from '../../../src/core/learning/auto-capture';
+import { renderedSectionHash } from '../../../src/core/markers';
+import type { OsContext } from '../../../src/core/paths';
+import type { AutoCapture, Habits } from '../../../src/schema';
 import { HabitsSchema, ProfileSchema } from '../../../src/schema';
 
 /** Spec §13.1 的 habits 数据。 */
@@ -195,7 +198,7 @@ describe('auto_capture: prompt → ## Learning Protocol 段（§5.2 / §7.4）',
     expect(rules).toContain('aforge learn --file -');
   });
 
-  it('缺省 / off / hook → 不产出该段（hook 的降级在 learning 层完成）', async () => {
+  it('缺省 / off / hook → 不产出该段（hook 走会话钩子这条通道，与 prompt 互斥）', async () => {
     const habits = HabitsSchema.parse({ version: 1 });
     for (const autoCapture of [undefined, 'off', 'hook'] as const) {
       const rules = await composeRules(composeInput(habits, undefined, { autoCapture }));
@@ -207,6 +210,58 @@ describe('auto_capture: prompt → ## Learning Protocol 段（§5.2 / §7.4）',
     const habits = HabitsSchema.parse({ version: 1 });
     const input = composeInput(habits, undefined, { autoCapture: 'prompt' });
     expect(await composeRules(input)).toBe(await composeRules(input));
+  });
+});
+
+describe('contentHash 跨环境稳定（§7.4 / §8.2：投影产物与本机环境无关）', () => {
+  /** 走 sync 的真实链路：profile 声明 → effectiveAutoCapture → composeRules → 区间 hash。 */
+  async function hashFor(
+    declared: AutoCapture,
+    env: { readonly ci: boolean },
+    os?: OsContext,
+  ): Promise<string> {
+    const profile = ProfileSchema.parse({
+      version: 1,
+      targets: ['codex', 'claude'],
+      learning: { auto_capture: declared },
+    });
+    // resolveAutoCapture 吃 env 只为展示层；渲染取 effective（对 env 免疫）——这里两者一起
+    // 走一遍，正是为了盯住"env 变了但 effective 没变"
+    expect(resolveAutoCapture(profile, env).effective).toBe(effectiveAutoCapture(profile));
+    const rules = await composeRules({
+      habits: habits131(),
+      profile,
+      customContents: [],
+      promotedLearnings: [],
+      templateContents: [],
+      ...(os === undefined ? {} : { os }),
+      autoCapture: effectiveAutoCapture(profile),
+    });
+    return renderedSectionHash(rules);
+  }
+
+  it.each(['off', 'prompt', 'hook'] as const)('%s 档：CI 与非 CI 的 hash 相同', async (tier) => {
+    expect(await hashFor(tier, { ci: true })).toBe(await hashFor(tier, { ci: false }));
+  });
+
+  it.each([
+    'off',
+    'prompt',
+    'hook',
+  ] as const)('%s 档：win32 与 linux 宿主的 hash 相同（该 SoT 无路径 token）', async (tier) => {
+    expect(await hashFor(tier, { ci: false }, { platform: 'win32' })).toBe(
+      await hashFor(tier, { ci: false }, { platform: 'linux' }),
+    );
+  });
+
+  it('hook 档的 hash 与 off 档相同：hook 不往规则文件插正文（两条通道互斥）', async () => {
+    expect(await hashFor('hook', { ci: false })).toBe(await hashFor('off', { ci: false }));
+  });
+
+  it('prompt 档的 hash 与 off / hook 不同（防"三档 hash 全等"的假绿）', async () => {
+    const promptHash = await hashFor('prompt', { ci: false });
+    expect(promptHash).not.toBe(await hashFor('off', { ci: false }));
+    expect(promptHash).not.toBe(await hashFor('hook', { ci: false }));
   });
 });
 

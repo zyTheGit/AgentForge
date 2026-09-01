@@ -248,14 +248,33 @@ describe('runDoctorChecks — learning.auto_capture（§7.4 / §9）', () => {
   const profileWithCapture = (value: string) =>
     `version: 1\nscope: project\ntargets: [claude]\nlearning:\n  auto_capture: ${value}\n`;
 
-  it('hook → learning-auto-capture warn（MVP 未实现），不影响退出码', async () => {
+  it('hook + 仅启用 claude → learning-auto-capture-hook warn（等同 off），不影响退出码', async () => {
     const host = createDoctorHost();
     await seedProjectSoT(host, profileWithCapture('hook'));
     const report = await runDoctorChecks(doctorOpts(host));
-    const r = resultOf(report, 'learning-auto-capture');
-    expect(r.level).toBe('warn');
-    expect(r.detail).toContain('hook');
-    expect(r.hint).toContain('prompt');
+    // 档位本身如实报 ok（三档都生效），降级发生在 target 粒度
+    const tier = resultOf(report, 'learning-auto-capture');
+    expect(tier.level).toBe('ok');
+    expect(tier.detail).toContain('hook');
+    const hook = resultOf(report, 'learning-auto-capture-hook');
+    expect(hook.level).toBe('warn');
+    expect(hook.detail).toContain('claude');
+    expect(hook.hint).toContain('prompt');
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('hook + 启用 codex → 无降级 warn，ok 里点名钩子落在 codex', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(
+      host,
+      'version: 1\nscope: project\ntargets: [codex]\nlearning:\n  auto_capture: hook\n',
+    );
+    const report = await runDoctorChecks(doctorOpts(host));
+    const tier = resultOf(report, 'learning-auto-capture');
+    expect(tier.level).toBe('ok');
+    expect(tier.detail).toContain('codex');
+    expect(tier.detail).toContain('SessionStart');
+    expect(report.results.some((r) => r.item === 'learning-auto-capture-hook')).toBe(false);
     expect(report.exitCode).toBe(0);
   });
 
@@ -288,12 +307,12 @@ describe('runDoctorChecks — learning.auto_capture（§7.4 / §9）', () => {
     expect(r.detail).not.toContain('Learning Protocol');
   });
 
-  it('hook + CI → warn 里仍带上"本次不会写入"（与 status 的 ciNote 口径一致）', async () => {
+  it('hook + CI → ok 里仍带上"本次不会写入"（与 status 的 ciNote 口径一致）', async () => {
     const host = createDoctorHost({ CI: '1' });
     await seedProjectSoT(host, profileWithCapture('hook'));
     const report = await runDoctorChecks(doctorOpts(host));
     const r = resultOf(report, 'learning-auto-capture');
-    expect(r.level).toBe('warn');
+    expect(r.level).toBe('ok');
     expect(r.detail).toContain('CI');
     expect(report.exitCode).toBe(0);
   });

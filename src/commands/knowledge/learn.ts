@@ -12,6 +12,12 @@
  * - 内容与既有未晋升条目高度相似 → warning（§7.5：仍创建）；中等相似 → 合并建议；
  * - 完成后提示 `aforge promote <id>`（§7.4-4）。
  *
+ * `aforge learn --print-protocol` 是一条**只读旁路**：只把 `## Learning Protocol`
+ * 正文打到 stdout 后立刻返回，不解析配置、不读 SoT、不写盘、不取锁、不进交互。
+ * 它是 `learning.auto_capture: hook` 档下会话钩子执行的唯一命令（见
+ * core/learning/hook-capture.ts）——正因为只读，才能在 CI、无 TTY、与人工
+ * `aforge sync` 并发这三种场景下都安全运行。
+ *
  * 核心逻辑在 core/learning/store.createLearning；本层只做输入采集与输出。
  *
  * **auto_promote（§4.2 `learning.auto_promote`，默认 false）**：为真时条目落盘后
@@ -32,6 +38,7 @@ import { resolveWriteTargetLayer } from '../../core/config/target-layer';
 import type { EnvSnapshot, Scope } from '../../core/env';
 import { readEnv } from '../../core/env';
 import { ConfigError } from '../../core/errors';
+import { sessionHookProtocolText } from '../../core/learning/hook-capture';
 import { type PromoteResult, promoteLearning } from '../../core/learning/promote';
 import { type CreateLearningResult, createLearning } from '../../core/learning/store';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
@@ -261,6 +268,10 @@ export function registerLearnCommand(program: Command): void {
       'explicit confidence 0-1 (default: scored by heuristics from the content)',
     )
     .option('--no-auto-promote', 'do not promote right away even if learning.auto_promote is true')
+    .option(
+      '--print-protocol',
+      'print the learning protocol text and exit (used by the session hook of learning.auto_capture: hook)',
+    )
     .action(
       async (
         options: {
@@ -270,9 +281,19 @@ export function registerLearnCommand(program: Command): void {
           confidence?: string;
           json?: boolean;
           autoPromote?: boolean;
+          printProtocol?: boolean;
         },
         command: Command,
       ) => {
+        // ---- --print-protocol：会话钩子唯一执行的分支（§7.4 hook 档）----
+        // 必须在一切之前返回：只读、不解析配置、不读 SoT、不写盘、不取锁、不进交互，
+        // 因此在 CI 下、无 TTY 下、与 aforge sync 并发时都能安全跑（见
+        // core/learning/hook-capture.ts 的约束 2）。--json 不影响它：钩子要的是
+        // 能直接进上下文的纯文本，包一层 JSON 反而要 target 侧再解一次。
+        if (options.printProtocol === true) {
+          console.log(sessionHookProtocolText());
+          return;
+        }
         const json = resolveJsonFlag(command, options.json);
         const scope = parseScopeOption(options.scope);
         const explicitConfidence = parseConfidenceOption(options.confidence);

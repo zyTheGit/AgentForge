@@ -251,3 +251,20 @@ describe('opencode 路径函数（status/init 打印共用）', () => {
     );
   });
 });
+
+describe('会话钩子能力（§7.4 hook 档支持矩阵）', () => {
+  it('opencode 无可声明式写入的钩子落点（会话事件要投放可执行 plugin 代码）', () => {
+    expect(opencodeProjector.writesSessionHooks).toBe(false);
+  });
+
+  it('hook 档不改变 opencode 的投影：与 off 档逐字相同（降级由 sync-notices / doctor 明说）', () => {
+    const withHook = buildCtx({
+      profile: ProfileSchema.parse({
+        version: 1,
+        targets: ['opencode'],
+        learning: { auto_capture: 'hook' },
+      }),
+    });
+    expect(opencodeProjector.plan(withHook)).toEqual(opencodeProjector.plan(buildCtx()));
+  });
+});

@@ -11,6 +11,7 @@ import {
   LEARNING_PROTOCOL_SECTION,
   rendersLearningProtocol,
   resolveAutoCapture,
+  writesSessionHooks,
 } from '../../../src/core/learning/auto-capture';
 import type { AutoCapture } from '../../../src/schema';
 import { ProfileSchema } from '../../../src/schema';
@@ -32,26 +33,26 @@ describe('effectiveAutoCapture — 渲染层口径与环境无关（§7.4）', (
     expect(effectiveAutoCapture(profileWith('prompt'))).toBe('prompt');
   });
 
-  it('hook → off（MVP 无 target 侧钩子写入）', () => {
-    expect(effectiveAutoCapture(profileWith('hook'))).toBe('off');
+  it('hook → hook（§12 Phase 3 起不再折叠为 off）', () => {
+    expect(effectiveAutoCapture(profileWith('hook'))).toBe('hook');
   });
 });
 
 describe('resolveAutoCapture — 展示层状态（§7.4）', () => {
-  it('缺省 → off，无未实现声明、非 CI', () => {
+  it('缺省 → off、非 CI', () => {
     expect(resolveAutoCapture(profileWith(), { ci: false })).toEqual({
       declared: 'off',
       effective: 'off',
       ciNoCapture: false,
-      unimplemented: false,
     });
   });
 
-  it('hook → 生效 off 并标记未实现', () => {
-    const state = resolveAutoCapture(profileWith('hook'), { ci: false });
-    expect(state.declared).toBe('hook');
-    expect(state.effective).toBe('off');
-    expect(state.unimplemented).toBe(true);
+  it('三档的 declared 与 effective 恒等（降级只发生在 target 粒度）', () => {
+    for (const declared of ['off', 'prompt', 'hook'] as const) {
+      const state = resolveAutoCapture(profileWith(declared), { ci: false });
+      expect(state.declared).toBe(declared);
+      expect(state.effective).toBe(declared);
+    }
   });
 
   it('CI 为真 → 只标 ciNoCapture，**不改变生效档位**（hash 跨环境稳定）', () => {
@@ -65,12 +66,26 @@ describe('resolveAutoCapture — 展示层状态（§7.4）', () => {
   });
 });
 
-describe('rendersLearningProtocol — 渲染判据（三处共用，§5.2）', () => {
-  it('prompt → true；off / hook 归并后 → false', () => {
+describe('writesSessionHooks / rendersLearningProtocol — 两条投递通道互斥（§5.2 / §7.4）', () => {
+  it('prompt 渲染正文、不写钩子', () => {
     expect(rendersLearningProtocol('prompt')).toBe(true);
+    expect(writesSessionHooks('prompt')).toBe(false);
+  });
+
+  it('hook 写钩子、不渲染正文（同一份协议不投两遍）', () => {
+    expect(writesSessionHooks('hook')).toBe(true);
+    expect(rendersLearningProtocol('hook')).toBe(false);
+  });
+
+  it('off 两者皆否', () => {
     expect(rendersLearningProtocol('off')).toBe(false);
-    // hook 先经 effectiveAutoCapture 归并为 off，渲染层不会直接拿到 hook
-    expect(rendersLearningProtocol(effectiveAutoCapture(profileWith('hook')))).toBe(false);
+    expect(writesSessionHooks('off')).toBe(false);
+  });
+
+  it('任一档位下两者不同时为真', () => {
+    for (const tier of ['off', 'prompt', 'hook'] as const) {
+      expect(rendersLearningProtocol(tier) && writesSessionHooks(tier)).toBe(false);
+    }
   });
 });
 

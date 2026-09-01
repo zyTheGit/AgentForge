@@ -63,8 +63,10 @@
  * - `sync-transaction`：备份与回滚；`sync-recovery`：崩溃恢复与备份保全；
  * - `sync-abort`：信号处理器用的同步回滚；`sync-verify`：冲突预检查与 sync-meta；
  * - `sync-residuals`：残留物盘点；`sync-gitignore`：生成物 .gitignore 段；
- * - `sync-notices`：plan 派生的附带结论（命令跳过 / MCP transport 能力落差）；
- * - `sync-prune`：上一轮投影产物的差集清理（§7.6）。
+ * - `sync-result`：dry-run / apply 两条返回路径的 SyncResult 装配；
+ * - `sync-prune`：上一轮投影产物的差集清理（§7.6）；
+ * - `sync-notices`：plan 派生的提示类产出（命令跳过 / MCP transport 能力落差 /
+ *   `learning.auto_capture: hook` 的 target 降级），三类共用「不进 warnings」不变式。
  *
  * 这些符号在此 re-export：既有调用方（命令层 / doctor / 测试）继续从 `./engine`
  * 单点 import，拆分不改变对外导出面。
@@ -78,9 +80,9 @@ import { resolveProjectSoT, resolveUserSoT } from '../paths';
 import { readSkillsToMaterialize } from '../sources/skill';
 import { resolveCommandsToExpose } from './commands';
 import { projectorRegistry } from './projectors/registry';
-import { buildGitignoreItem, GITIGNORE_MARKERS, GITIGNORE_TARGET_ID } from './sync-gitignore';
+import { GITIGNORE_MARKERS, GITIGNORE_TARGET_ID, planGitignoreItem } from './sync-gitignore';
 import { acquireSyncLocks, releaseSyncLocks, resolveLockRoots } from './sync-lock';
-import { collectCommandSkips, collectPlanMcpTransportNotices } from './sync-notices';
+import { collectSyncAdvisories } from './sync-notices';
 import {
   assertInitialized,
   filterTargets,
@@ -92,6 +94,7 @@ import {
 } from './sync-prepare';
 import { pruneStaleProjections } from './sync-prune';
 import { preserveBackupArtifacts, recoverPendingTransaction } from './sync-recovery';
+import { buildAppliedSyncResult, buildDryRunSyncResult, type SyncResultBase } from './sync-result';
 import {
   backupTarget,
   beginTransaction,
@@ -154,6 +157,7 @@ export {
   type SyncCommandSkip,
   type SyncFailureReport,
   type SyncItemStatus,
+  type SyncNotice,
   type SyncOptions,
   type SyncResult,
   type SyncRollbackEntry,
@@ -240,18 +244,33 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
 
   const contentHash = renderedSectionHash(renderedRulesMd, ctx.markerBegin, ctx.markerEnd);
 
-  // ---- plan 派生的附带结论（§8.8.4 命令跳过 + Phase 2 MCP 能力落差；dry-run 也给）----
-  const commandSkips = collectCommandSkips(planned, ctx);
-  const mcpTransportNotices = collectPlanMcpTransportNotices(planned, ctx);
+  // ---- plan 派生的提示类产出（投影仍完整，只是有事要告诉用户；dry-run 同样成立）----
+  // §8.8.4 命令薄壳整项跳过 + Phase 2 MCP transport 能力落差 + §7.4 hook 档下无钩子
+  // 落点的 target 降级。三类都不进 warnings（否则误伤 §7.6 记账），判定见 sync-notices。
+  const advisories = collectSyncAdvisories({
+    profile: config.profile,
+    scope: ctx.scope,
+    commandsToExpose,
+    targetIds: planned.map((t) => t.targetId),
+    projectors: projectorRegistry.list(),
+    mcpServers: ctx.mcpServers,
+  });
 
   const sotRoot = config.effectiveScope === 'project' ? projectSoTRoot : userSoTRoot;
 
-  // ---- 阶段 1.4：.gitignore 项（§4.2 gitignore_generated；仅 project scope）----
-  // user scope 的投影落在用户目录，没有"项目仓库"概念，故不产出。
-  const gitignoreItem =
-    config.profile.projection.gitignore_generated === true && config.effectiveScope === 'project'
-      ? buildGitignoreItem(planned, cwd, sotRoot, os)
-      : undefined;
+  // ---- 阶段 1.4：.gitignore 项（§4.2 gitignore_generated；判定见 sync-gitignore）----
+  const gitignoreItem = planGitignoreItem(config.profile, ctx.scope, planned, cwd, sotRoot, os);
+
+  // 两条返回路径共享的本轮事实（装配见 sync-result：字段加漏一处即 TS 报错）
+  const resultBase: SyncResultBase = {
+    scope: config.effectiveScope,
+    userSoTRoot,
+    projectSoTRoot,
+    sotRoot,
+    contentHash,
+    skippedTargets,
+    advisories,
+  };
 
   // ---- 阶段 1.5：marker 区间冲突预检查（§8.2-4；--force 跳过；此刻零写入）----
   // 上一轮记账在此读一次，冲突预检查与阶段 5.4 的 prune 共用（--force 下损坏容忍）
@@ -262,32 +281,7 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
 
   // ---- dry-run：返回完整计划，不 mkdirp / 不备份 / 不 apply / 不写 sync-meta ----
   if (opts.dryRun) {
-    return {
-      scope: config.effectiveScope,
-      userSoTRoot,
-      projectSoTRoot,
-      sotRoot,
-      contentHash,
-      dryRun: true,
-      targets: planned.map((t) => ({
-        targetId: t.targetId,
-        items: t.plan.items,
-        statuses: t.plan.items.map(() => 'planned' as const),
-      })),
-      skippedTargets,
-      commandSkips,
-      warnings: [],
-      mcpTransportNotices,
-      transactionWarnings: [],
-      gitignore:
-        gitignoreItem === undefined
-          ? null
-          : { targetId: GITIGNORE_TARGET_ID, items: [gitignoreItem], statuses: ['planned'] },
-      recovered: [],
-      // dry-run 不报 prune 候选：差集要在本轮产物落定后才成立，而 dry-run 什么都不写
-      pruned: [],
-      pruneSkipped: [],
-    };
+    return buildDryRunSyncResult(resultBase, planned, gitignoreItem);
   }
 
   // ---- 阶段 1.6：取事务锁（覆盖备份 → apply → 写 sync-meta 整段）----
@@ -458,28 +452,13 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
       prune,
     );
 
-    return {
-      scope: config.effectiveScope,
-      userSoTRoot,
-      projectSoTRoot,
-      sotRoot,
-      contentHash,
-      dryRun: false,
-      targets: planned.map((t) => ({
-        targetId: t.targetId,
-        items: t.plan.items,
-        statuses: t.statuses,
-      })),
-      skippedTargets,
-      commandSkips,
+    return buildAppliedSyncResult(resultBase, planned, {
       warnings,
-      mcpTransportNotices,
       transactionWarnings: transactionWarningsOf(tx, sotRoot, recovery.preservedDir),
       gitignore: gitignoreResult,
       recovered,
-      pruned: prune.pruned,
-      pruneSkipped: prune.skipped,
-    };
+      prune,
+    });
   } finally {
     if (tx !== undefined) {
       if (rollbackIncomplete && preservedBackupDir === null) {

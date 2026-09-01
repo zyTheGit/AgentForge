@@ -6,6 +6,7 @@
  * | 主规则   | `<root>\AGENTS.md`               | `CODEX_HOME` 或 `%USERPROFILE%\.codex\AGENTS.md` |
  * | Skills   | `.agents\skills\<name>\SKILL.md` | `CODEX_HOME\skills\` 或 `~\.codex\skills\` |
  * | MCP      | `.codex\config.toml` 中 `# BEGIN AGENTFORGE MCP` 标记段 | 全局 config.toml |
+ * | 会话钩子 | `.codex\hooks.json`（整文件）    | `CODEX_HOME\hooks.json` 或 `~\.codex\hooks.json` |
  *
  * - 主规则动作按 profile.projection.marker_mode（§4.2；merge_marker 时 marker 外
  *   保留，Spec §8.2；none 时整文件 write）；`write_agents_md: false` 关闭该项；
@@ -15,11 +16,16 @@
  *   `mcp_servers` 是 name → table 的映射，写成数组表会让整个 config.toml 加载失败）；
  *   字段名与跳过判据由 projectors/mcp-transport 给出，本文件只负责 TOML 文本化
  *   （手写序列化，无 TOML 库依赖：basic string 转义 / bare key 判定 / inline table / 数组）；
+ * - **会话钩子（§7.4 hook 档 / §12 Phase 3）**：`learning.auto_capture: hook` 时
+ *   额外产出 `hooks.json`。四家里只有 codex 支持"独立文件 + 纯配置数据"的钩子
+ *   声明（实测 codex 0.147.0：合法 hooks.json 下 `codex doctor` 正常，结构非法时
+ *   报 "config could not be loaded"），因此只有它 `writesSessionHooks: true`；
  * - skills：write 实体 copy（Spec §7.6 默认不使用 symlink）；
  * - plan 为纯函数：不做任何 IO，路径按注入 os 选择分隔符（Spec §2.1）；
  *   CODEX_HOME 经 ctx.env（engine 注入，Spec §2.4）覆盖。
  */
 import type { McpServer } from '../../../schema';
+import { codexSessionHooksJson } from '../../learning/hook-capture';
 import { pathApiFor } from '../../paths';
 import { renderCommandShell } from '../commands';
 import {
@@ -30,6 +36,7 @@ import {
   type ProjectionPlanItem,
   type Projector,
   shouldWriteAgentsMd,
+  shouldWriteSessionHook,
 } from '../types';
 import { type CodexMcpEntry, codexMcpEntries } from './mcp-transport';
 import { flatCommandFilePath, SKILLS_DIRNAME, skillDocPath } from './shared';
@@ -45,6 +52,21 @@ export const CODEX_PROJECT_SKILLS_DIRNAME = '.agents';
 
 /** Spec §2.3 / §8.4 MCP 配置文件（config.toml）。 */
 export const CODEX_CONFIG_FILENAME = 'config.toml';
+
+/**
+ * 会话钩子文件（§7.4 hook 档）：codex 在每个 config 层旁同时读 `hooks.json` 与
+ * inline `[hooks]`，这里取独立文件。
+ *
+ * 为什么不写进 config.toml 的标记段：一个 `ProjectionPlan` 只带**一对**
+ * `tomlMarkers`（plan 级，非 item 级），而 MCP 段已经占用了它；再塞一对要么改
+ * 契约，要么与 MCP 段混在一起（语义错乱）。取独立文件后该文件由 AgentForge 独占，
+ * 于是可以用 `write` 动作 → 直接落进 §7.6 的 `artifacts` 记账 → `auto_capture`
+ * 改回 `off` / `prompt` 时被 prune 整文件删掉，不需要任何新的清理路径。
+ *
+ * 代价：codex 在同一层同时存在 `hooks.json` 与 inline `[hooks]` 时会启动告警
+ * （上游文档："Prefer one representation per layer"）。已在 docs/learning.md 写明。
+ */
+export const CODEX_HOOKS_FILENAME = 'hooks.json';
 
 /**
  * Spec §8.4 Commands 目录名（§8.8）：codex 用 `prompts`，且**只有 user 级生效**。
@@ -208,9 +230,21 @@ export function codexCommandPath(ctx: ProjectContext, command: CommandArtifact):
 
 /** MCP 配置绝对路径（project 级 `<root>\.codex\config.toml`；user 级全局 config.toml）。 */
 export function codexConfigPath(ctx: ProjectContext): string {
+  return pathApiFor(ctx.os).join(codexConfigDir(ctx), CODEX_CONFIG_FILENAME);
+}
+
+/**
+ * 会话钩子文件绝对路径（§7.4 hook 档）：与 config.toml 同目录——codex 只在
+ * **config 层旁**发现 hooks（project 层要求该 `.codex\` 已被信任）。
+ */
+export function codexHooksPath(ctx: ProjectContext): string {
+  return pathApiFor(ctx.os).join(codexConfigDir(ctx), CODEX_HOOKS_FILENAME);
+}
+
+/** config 层目录（project = `<root>\.codex`；user = CODEX_HOME 或 `~\.codex`）。 */
+function codexConfigDir(ctx: ProjectContext): string {
   const api = pathApiFor(ctx.os);
-  const base = ctx.scope === 'project' ? api.join(ctx.rootDir, CODEX_DIRNAME) : codexUserDir(ctx);
-  return api.join(base, CODEX_CONFIG_FILENAME);
+  return ctx.scope === 'project' ? api.join(ctx.rootDir, CODEX_DIRNAME) : codexUserDir(ctx);
 }
 
 /** Codex projector 实例（纯函数 plan；apply 由引擎统一执行）。 */
@@ -222,6 +256,12 @@ export const codexProjector: Projector = {
    * `/<name>` 不展开。status 必须显式提示，否则用户会以为 codex 没生效。
    */
   skillInvokePrefix: '$',
+
+  /**
+   * 四家里唯一支持"独立文件 + 纯配置数据"的会话钩子声明（§7.4 hook 档）。
+   * 落点与形状见 CODEX_HOOKS_FILENAME 与 learning/hook-capture.codexSessionHooksJson。
+   */
+  writesSessionHooks: true,
 
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];
@@ -265,6 +305,16 @@ export const codexProjector: Projector = {
       action: 'merge_toml',
       content: serializeMcpServersToml(ctx.mcpServers),
     });
+
+    // 会话钩子（§7.4 hook 档）：整文件 write → 走 §7.6 artifacts 记账 + prune，
+    // `auto_capture` 改回 off / prompt 后该项不再产出，下一轮 sync 把文件删掉
+    if (shouldWriteSessionHook(ctx)) {
+      items.push({
+        path: codexHooksPath(ctx),
+        action: 'write',
+        content: codexSessionHooksJson(),
+      });
+    }
 
     return {
       targetId: 'codex',

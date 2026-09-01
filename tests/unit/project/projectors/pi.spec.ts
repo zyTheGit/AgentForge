@@ -249,3 +249,20 @@ describe('pi 路径函数（status/init 打印共用）', () => {
     );
   });
 });
+
+describe('会话钩子能力（§7.4 hook 档支持矩阵）', () => {
+  it('pi 无可声明式写入的钩子落点（会话事件要投放可执行 extension 代码）', () => {
+    expect(piProjector.writesSessionHooks).toBe(false);
+  });
+
+  it('hook 档不改变 pi 的投影：与 off 档逐字相同（降级由 sync-notices / doctor 明说）', () => {
+    const withHook = buildCtx({
+      profile: ProfileSchema.parse({
+        version: 1,
+        targets: ['pi'],
+        learning: { auto_capture: 'hook' },
+      }),
+    });
+    expect(piProjector.plan(withHook)).toEqual(piProjector.plan(buildCtx()));
+  });
+});
