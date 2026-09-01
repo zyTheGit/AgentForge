@@ -7,7 +7,7 @@
 ```powershell
 # 免安装试跑（每次拉最新版；@latest 用于绕开 npx 的本地缓存）
 npx -y @zythegit/agentforge@latest --version
-npx -y @zythegit/agentforge@latest init -i
+npx -y @zythegit/agentforge@latest init
 
 # 常用则全局装，之后直接 aforge
 npm i -g @zythegit/agentforge

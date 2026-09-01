@@ -32,7 +32,13 @@ import type { ProjectContext } from '../core/project/types';
 import { isCancelledError, type PromptApi, type PromptOption } from '../infra/prompt';
 import type { HabitsInput, ProfileInput } from '../schema';
 import { HabitsSchema, ProfileSchema } from '../schema';
-import { attachInitArtifacts, type MutableInitArtifacts, recordCreated } from './init-artifacts';
+import {
+  attachInitArtifacts,
+  type CancelledInitArtifacts,
+  type MutableInitArtifacts,
+  recordCreated,
+} from './init-artifacts';
+
 import {
   habitsSkeleton,
   type InitContext,
@@ -40,6 +46,7 @@ import {
   materializeSoT,
   projectionRootDir,
   resolveFreshSoTRoot,
+  rollbackMaterialized,
   type SoTFile,
   sotSubdirPaths,
 } from './init-scaffold';
@@ -52,13 +59,15 @@ export interface InteractiveInitContext extends InitContext {
   readonly agentforgeVersion: string;
 }
 
-/** 交互 init 结果（cancelled=true 表示用户在写入确认处选 n，未写任何文件）。 */
+/** 交互 init 结果（cancelled=true 表示用户在写入确认处选 n，产物已回滚）。 */
 export interface InitInteractiveResult {
   readonly scope: Scope;
   readonly sotRoot: string;
-  /** ④ 选择的 target id 列表（按固定顺序 opencode → codex → claude → pi）。 */
+  /** ④ 选择并落盘到 profile.yaml 的 target 列表（顺序固定 opencode → codex → claude → pi）。 */
   readonly targets: readonly string[];
+  /** cancelled=false 时为本次创建的文件；cancelled=true 时为回滚后**残留**的文件（常态空）。 */
   readonly createdFiles: readonly string[];
+  /** 同 createdFiles：取消时语义为回滚后残留的目录。 */
   readonly createdDirs: readonly string[];
   readonly detection: DetectedSnapshot;
   readonly cancelled: boolean;
@@ -108,27 +117,67 @@ export function targetMainRulePaths(
 /**
  * 交互 init（对外入口）：在核心流程外裹一层取消捕获。
  *
- * 用户在任一提问处 Ctrl-C（prompt 层抛 CancelledError）时，把此前已落盘的
- * 文件/目录清单挂到错误上再原样重抛——命令层据此打印清单（见
- * formatCancelledInitArtifacts），退出码仍由 main.ts 统一出口给出 130。
+ * 用户在任一提问处 Ctrl-C（prompt 层抛 CancelledError）时，按「是否已过写入确认」
+ * 分两种处置（见 CancelledInitArtifacts.committed）：未确认 → 回滚 ③ edit 分支的
+ * 落盘并回报残留；已确认 → 保留有效 SoT 并回报产物。清单挂到错误上原样重抛，命令层
+ * 据此打印（见 formatCancelledInitArtifacts），退出码仍由 main.ts 统一出口给出 130。
  */
 export async function runInitInteractive(
   ctx: InteractiveInitContext,
   options: InitOptions = {},
 ): Promise<InitInteractiveResult> {
   // 函数级累加器：materializeSoT 每次成功落盘后累加（见 recordCreated 调用点）
-  const created: MutableInitArtifacts = { createdFiles: [], createdDirs: [] };
+  const created: MutableInitArtifacts = { createdFiles: [], createdDirs: [], committed: false };
   try {
     return await runInitInteractiveFlow(ctx, options, created);
   } catch (err) {
     if (isCancelledError(err)) {
-      throw attachInitArtifacts(err, {
-        createdFiles: [...created.createdFiles],
-        createdDirs: [...created.createdDirs],
-      });
+      throw attachInitArtifacts(err, await settleCancelledArtifacts(ctx, created));
     }
     throw err;
   }
+}
+
+/**
+ * 取消时决定产物去留，返回给命令层打印的清单。
+ *
+ * - 已过写入确认（committed）：**不回滚**，原样回报——habits.yaml 与 profile.yaml
+ *   已原子写成功，SoT 是有效初始化状态，删掉用户刚确认写下的配置比留着糟得多
+ *   （这条路径就是在「立即 sync？」处 Ctrl-C）。
+ * - 未过写入确认：回滚 ③ edit 分支落的 habits.yaml 与子目录。不回滚则 SoT 根非空，
+ *   重跑 `aforge init` 必被 resolveFreshSoTRoot 判为「目录非空」→ ConfigError(2)，
+ *   用户只能手删；交互已是默认模式（见 flags.resolveInitMode），这条路径的命中面是
+ *   全部终端用户。
+ *
+ * 回滚复用 init-scaffold 的 rollbackMaterialized（与 materializeSoT 的失败回滚同一套
+ * best-effort 语义），随后逐项 exists 复核：删不掉的（文件被编辑器占用、权限不足）
+ * 如实回报，好过谎称已清理干净。SoT 根本身不清理——空目录不影响重跑。
+ */
+async function settleCancelledArtifacts(
+  ctx: InitContext,
+  created: MutableInitArtifacts,
+): Promise<CancelledInitArtifacts> {
+  if (created.committed) {
+    return {
+      createdFiles: [...created.createdFiles],
+      createdDirs: [...created.createdDirs],
+      committed: true,
+    };
+  }
+  await rollbackMaterialized(ctx, created.createdFiles, created.createdDirs);
+  const leftoverFiles: string[] = [];
+  const leftoverDirs: string[] = [];
+  for (const file of created.createdFiles) {
+    if (await ctx.host.exists(file)) {
+      leftoverFiles.push(file);
+    }
+  }
+  for (const dir of created.createdDirs) {
+    if (await ctx.host.exists(dir)) {
+      leftoverDirs.push(dir);
+    }
+  }
+  return { createdFiles: leftoverFiles, createdDirs: leftoverDirs, committed: false };
 }
 
 /** 交互 init 核心逻辑（五步；探测/写入与 runInit 共用底层，可注入 prompt 测试）。 */
@@ -239,15 +288,17 @@ async function runInitInteractiveFlow(
 
   const confirmed = await ctx.prompt.confirm('写入以上文件？');
   if (!confirmed) {
-    // 取消时返回实际已创建的文件/目录列表（③ edit 分支已写入 habits.yaml + 子目录）。
-    // 取 recordCreated 累加的同一份来源（与 Ctrl-C 路径一致）：按 habitsWritten 重算
-    // 会在 ③ 之外再加落盘点时漏报。
+    // 与 Ctrl-C 路径同一处置（此处恒未 committed）：先回滚 ③ edit 分支已落盘的
+    // habits.yaml + 子目录，再返回**残留**清单（常态为空）。不回滚会让 SoT 根非空、
+    // 重跑 init 撞 ConfigError(2)；只返回「已创建」清单则会让命令层打出「什么都
+    // 没写」的假话。
+    const leftover = await settleCancelledArtifacts(ctx, created);
     return {
       scope,
       sotRoot,
       targets: selectedTargets,
-      createdFiles: [...created.createdFiles],
-      createdDirs: [...created.createdDirs],
+      createdFiles: leftover.createdFiles,
+      createdDirs: leftover.createdDirs,
       detection,
       cancelled: true,
       synced: false,
@@ -269,6 +320,8 @@ async function runInitInteractiveFlow(
 
   const { createdFiles, createdDirs } = await materializeSoT(ctx, sotRoot, files);
   recordCreated(created, { createdFiles, createdDirs });
+  // 过了这一行 SoT 才算有效初始化：此后的取消（「立即 sync？」处 Ctrl-C）不得回滚
+  created.committed = true;
 
   // ---- ⑤末：可选立即 sync（Spec §7.1-4）----
   const doSync = await ctx.prompt.confirm('立即执行 aforge sync 投影到目标 Agent？');
@@ -289,7 +342,7 @@ async function runInitInteractiveFlow(
   return {
     scope,
     sotRoot,
-    targets,
+    targets: selectedTargets,
     createdFiles,
     createdDirs,
     detection,

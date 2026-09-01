@@ -203,6 +203,40 @@ describe('§11.2.1 init -i 探测 fnm/uv + 投影变量渲染', () => {
 });
 
 // ---------------------------------------------------------------------------
+// init 运行模式默认值（Spec §7.1 / §7.1.1）：TTY 交互、非 TTY 静默
+// ---------------------------------------------------------------------------
+
+describe('init 模式默认值（子进程恒非 TTY）', () => {
+  let ws: Workspace;
+  beforeEach(async () => {
+    ws = await createWorkspace('init-mode');
+  });
+  afterEach(async () => {
+    await disposeWorkspace(ws);
+  });
+
+  it('裸 init 在非 TTY 下静默落盘，并在输出里点明 targets 与「用了默认值」', () => {
+    const init = runCli(['init'], ws.root, ws.home);
+    expect(init.status).toBe(0);
+    expect(init.stdout).toContain('scope: project');
+    expect(init.stdout).toContain('targets: opencode, codex, claude, pi');
+    expect(init.stdout).toContain('took the default (all four)');
+  });
+
+  it('--yes 同样静默，但不再复述「用了默认值」（用户自己点名要的）', () => {
+    const init = runCli(['init', '--yes'], ws.root, ws.home);
+    expect(init.status).toBe(0);
+    expect(init.stdout).toContain('targets: opencode, codex, claude, pi');
+    expect(init.stdout).not.toContain('took the default (all four)');
+  });
+
+  it('-i 在非 TTY 下 → ConfigError(2)，不静默降级', () => {
+    const init = runCli(['init', '-i'], ws.root, ws.home);
+    expect(init.status).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // §11.2.5 断网（AGF_OFFLINE=1）下 init → sync 走通
 // ---------------------------------------------------------------------------
 

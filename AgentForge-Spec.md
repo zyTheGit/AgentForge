@@ -315,7 +315,15 @@ extensions: object
 
 **`projection.gitignore_generated`：** `true` 且 effective scope 为 `project` 时，`sync` 成功后把全部落在项目根内的投影产物写入项目 `.gitignore`，包在 `# BEGIN AGENTFORGE` / `# END AGENTFORGE` 标记段内（`.gitignore` 不支持 HTML 注释，故不复用 `marker_begin/end`）；段外用户条目原样保留，段内每次全量重算 → 幂等。项目根之外的产物（user scope 投影、`CODEX_HOME` 覆盖）不写入。该写入与投影产物同属一个事务（同一 `.sync.lock` + 备份/回滚），失败按硬项处理；不计入 `sync-meta.targets`。
 
-**`skills.copy_mode`（MVP 决定）：** `symlink` 属 Phase 2（§12）——schema 仍接受该取值（避免既有 profile 直接加载失败），但 MVP **忽略它、恒为实体 copy**：`skill add` 与四个 projector 都只做实体拷贝。声明 `symlink` 时 `aforge doctor` 报 `skills-copy-mode` warn（仅提示，不影响退出码与投影结果），改回 `copy` 即可消除该告警。
+**`skills.copy_mode`（决定：`symlink` 不予实现）：** schema 仍接受该取值（改成拒绝会让既有写了它的 profile 直接加载失败，属破坏性变更），但**恒被忽略**：`skill add` 与四个 projector 都只做实体拷贝。声明 `symlink` 时 `aforge doctor` 报 `skills-copy-mode` warn（仅提示，不影响退出码与投影结果），改回 `copy` 即可消除该告警。
+
+不实现的理由（三条独立成立，故不列入任何 Phase）：
+
+1. **与 §7.6 prune 的判据冲突。** prune 敢删投影产物，靠的是"磁盘内容 == 上一轮记账 hash"；投影是 symlink 时读到的永远是 SoT 本体，该判据恒真，"手工改过的那份保留"退化为不可达分支。同时用户对投影文件的编辑会直接改写 SoT，绕过 `skill add` / `.sync.lock` / 备份回滚，且 doctor 再也无法检出投影被改。
+2. **Windows 上默认没有创建权限**（需 Developer Mode 或 `SeCreateSymbolicLinkPrivilege`；junction 只能指目录且不跨卷）。作为 Windows-first 工具（§11），`copy` 必须永久保留为 fallback → 四个 projector 与 prune 各自维护两条路径，换来的只是省下几份 markdown 副本。
+3. **四家客户端对 symlink 的读取行为未经实测**（§8.8 的落点与调用前缀均为实测结论），验证成本与收益不成比例。
+
+`copy_mode: symlink` 想解决的"源更新后本地技能自动跟上"应由显式命令承担（重新拉取并覆盖 SoT 副本，复用 `skill add` 的事务与 `skipped` 报告）；"多项目共享一份声明"由 user scope SoT 解决。
 
 **`skills.on_demand`（MVP 决定）：** 只登记不物化——`sync` 仅投影 `skills.always`；`on_demand` 清单由 `aforge status` 展示并标注"declared only - not projected in MVP"。按需装载属 Phase 2。
 
@@ -451,7 +459,7 @@ mcp: []
 
 | 命令 | 说明 |
 |------|------|
-| `aforge init [--scope user\|project] [-i]` | 初始化 |
+| `aforge init [--scope user\|project] [-i] [-y\|--yes]` | 初始化（TTY 默认交互，见 §7.1） |
 | `aforge detect` | 仅探测 |
 | `aforge sync [--targets ...] [--dry-run]` | 渲染并投影 |
 | `aforge learn [--scope project\|user]` | 学习提取 |
@@ -494,13 +502,17 @@ mcp: []
 
 ### 7.1 Init
 
-1. 确定 scope 与根目录。
-2. Detector 运行 → 候选 habits（写入 `detected`，交互可确认到声明字段）。
-3. 写入默认 `habits.yaml`、`profile.yaml`（Windows：`copy_mode=copy`，`line_ending=lf`）。
-4. 可选执行一次 sync。
-5. 打印各 target 绝对路径。
+**运行模式**：`aforge init` 在 TTY 下**默认走 §7.1.1 交互五步**；非 TTY（CI / 管道）、`--yes`、`--json` 走下面的静默路径。`-i` 强制交互（非 TTY 下报退出码 2，不静默降级）。翻转默认值的理由：静默路径会替用户定下 scope 与全部四个 target 并写进 `profile.yaml`，而 init 拒绝在非空 SoT 上重跑——默认值不可撤回，就该在有人能应答时先问。
 
-### 7.1.1 Init 交互流程（-i 模式）
+静默路径：
+
+1. 确定 scope 与根目录（`--scope` > `AGF_SCOPE` > `project`）。
+2. Detector 运行 → 候选 habits（写入 `detected`，交互可确认到声明字段）。
+3. 写入默认 `habits.yaml`、`profile.yaml`（Windows：`copy_mode=copy`，`line_ending=lf`；`targets` 为全部四个）。
+4. 可选执行一次 sync。
+5. 打印各 target 绝对路径，并回报生效的 scope 与 targets；未带 `--yes` 时额外提示这两项取了默认值。
+
+### 7.1.1 Init 交互流程（TTY 默认；`-i` 强制）
 
 1. **Scope 选择**：默认 project，可选 user。
 2. **Detector 运行**：打印探测结果（Node manager、Python manager、包管理器、Shell、已有规则文件）。
@@ -840,8 +852,8 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 - 打印各 target 解析后的绝对路径。
 - 检查目录可写；不可写 → 退出码 4。
 - 比较 SoT content hash 与投影 marker 内 hash。
-- 检测 `skills/` 下断开的 symlink（MVP 投影恒为实体 copy，此类 symlink 来自手工创建或历史遗留 → warn）。
-- `profile.skills.copy_mode` 声明 `symlink` 时告警（已声明未实现，见 §4.2 / §12 Phase 2 → warn）。
+- 扫描 `skills/` 顶层，**任何** symlink 条目都报 `skills-symlink` warn（投影恒为实体 copy，此类条目只可能来自手工创建或历史遗留）。分两类打印：断开的（`readlink` 目标不存在）与仍有效的。有效的那类也必须报，否则用户直到 `aforge bundle export` 才会发现它被整个跳过（§7.9 symlink 一律不跟随）——而 `skill list` 用 stat 能看见它、`sync` 也照常物化，三者口径不一致的代价全压在迁移那一刻。
+- `profile.skills.copy_mode` 声明 `symlink` 时告警（该取值恒被忽略且不计划实现，见 §4.2 → warn）。
 - 报告未解析的 template id、损坏的 YAML。
 - `skills.expose_as_command` 里的名字（条目最后一段）不在 `skills.always` 中 → 与"点名未装"同口径报错（§4.2）；条目本身非法（空段、`.` / `..`、含 `\ : * ? " < > |`）→ 同样退出码 2；project scope 且 target 含 codex 时报 `commands/codex-project-unsupported` warning（§8.8.4 → warn）；带命名空间的条目遇到目录平铺的 target（pi / codex）时报 `commands/namespace-flattened` warning，列出 `ns/name → ns-name` 的改名结果（§8.8.2 → warn）。
 - `learning.auto_capture`（§7.4）报一条 `learning-auto-capture`：声明 `hook` → warn（**MVP 未实现任何 target 侧钩子写入**，行为等同 `off`；等 hook 落地后再按 target 细分成 `learning/hook-unsupported`）；`prompt` → `ok` 并说明投影正文含 `## Learning Protocol` 段；`CI` 为真 → 仍报 `ok`，附一句"本次运行不会写入任何 learnings"（护栏 3 只约束**写入**，不改变生效档位与渲染正文——否则同一份 SoT 在 CI 与本机的 `contentHash` 不同，跨环境 hash 比对全部失真）。
@@ -902,7 +914,7 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 | 阶段 | 范围 |
 |------|------|
 | Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、`learning.auto_capture: prompt`（§7.4）、Commands 投影（§8.8）、Windows 门禁 |
-| Phase 2 | MCP 对齐、import 增强、可选 symlink、更多模板；其中 Commands 的命名空间与 `$1..$9` 归一化（§8.8.2）已提前落地 |
+| Phase 2 | MCP 对齐、import 增强、更多模板；其中 Commands 的命名空间与 `$1..$9` 归一化（§8.8.2）已提前落地。**不含 `skills.copy_mode: symlink`**——已决定不实现，理由见 §4.2 |
 | Phase 3 | Learning 启发式、`auto_capture: hook`（含 opencode plugin / pi extension 适配）、适配器插件化、WSL 说明 |
 
 ---

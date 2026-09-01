@@ -187,7 +187,7 @@ describe('init -i 交互五步（Spec §7.1.1）', () => {
     expect(await ws.host.exists(ws.profileFile)).toBe(false);
   });
 
-  it('edit 分支后取消 → 返回已创建的 habits.yaml + 子目录（cancelled=true）', async () => {
+  it('edit 分支后取消 → 回滚 habits.yaml + 子目录，清单为空（cancelled=true）', async () => {
     const scripted = createScriptedPrompt([
       { kind: 'select', value: 'project' },
       { kind: 'select', value: 'edit' },
@@ -212,18 +212,16 @@ describe('init -i 交互五步（Spec §7.1.1）', () => {
     );
 
     expect(result.cancelled).toBe(true);
-    // edit 分支已在 L295-297 写入 habits.yaml + 子目录
-    expect(result.createdFiles).toEqual([ws.habitsFile]);
-    expect(result.createdDirs).toEqual(SOT_SUBDIRS.map((d) => path.join(ws.sotRoot, d)));
-    // habits.yaml 确实存在且包含用户编辑内容
-    expect(await ws.host.exists(ws.habitsFile)).toBe(true);
-    const habits = parseYaml(await readFile(ws.habitsFile, 'utf8'));
-    expect(habits.runtime?.node?.manager).toBe('fnm');
+    // 未过写入确认 → 一律回滚：edit 分支落的 habits.yaml 与子目录全部删除，清单为空
+    expect(result.createdFiles).toEqual([]);
+    expect(result.createdDirs).toEqual([]);
+    // 代价明确：用户在「等待编辑」期间手改的内容也一并回滚
+    expect(await ws.host.exists(ws.habitsFile)).toBe(false);
     // profile.yaml 未创建（因为取消了）
     expect(await ws.host.exists(ws.profileFile)).toBe(false);
   });
 
-  it('第④步 Ctrl-C（edit 分支已落盘）→ CancelledError 带产物清单，退出码 130', async () => {
+  it('第④步 Ctrl-C（edit 分支已落盘）→ CancelledError 带回滚后清单，退出码 130', async () => {
     const scripted = createScriptedPrompt([
       { kind: 'select', value: 'project' },
       { kind: 'select', value: 'edit' },
@@ -260,18 +258,17 @@ describe('init -i 交互五步（Spec §7.1.1）', () => {
     }
     expect(caught.exitCode).toBe(130);
 
-    // 清单包含 edit 分支已落盘的 habits.yaml 与全部子目录
+    // 未过写入确认 → edit 分支落的 habits.yaml 与子目录被回滚，清单（残留）为空
     const artifacts = extractInitArtifacts(caught);
-    expect(artifacts?.createdFiles).toEqual([ws.habitsFile]);
-    expect(artifacts?.createdDirs).toEqual(SOT_SUBDIRS.map((d) => path.join(ws.sotRoot, d)));
-    expect(await ws.host.exists(ws.habitsFile)).toBe(true);
+    expect(artifacts?.createdFiles).toEqual([]);
+    expect(artifacts?.createdDirs).toEqual([]);
+    expect(await ws.host.exists(ws.habitsFile)).toBe(false);
     expect(await ws.host.exists(ws.profileFile)).toBe(false);
 
-    // 命令层文案：逐条 created file/dir + 删除指引
-    const lines = formatCancelledInitArtifacts(artifacts);
-    expect(lines).toContain(`created file: ${ws.habitsFile}`);
-    expect(lines).toContain(`created dir: ${path.join(ws.sotRoot, 'custom')}`);
-    expect(lines.join('\n')).toContain('aforge init -i');
+    // 命令层文案：已回滚干净
+    expect(formatCancelledInitArtifacts(artifacts)).toEqual([
+      'aforge init - cancelled: rolled back, nothing was written',
+    ]);
   });
 
   it('第①步（scope 询问）Ctrl-C → 清单为空，文案为 nothing was written', async () => {
@@ -303,9 +300,9 @@ describe('init -i 交互五步（Spec §7.1.1）', () => {
 
     expect(caught).toBeInstanceOf(CancelledError);
     const artifacts = extractInitArtifacts(caught);
-    expect(artifacts).toEqual({ createdFiles: [], createdDirs: [] });
+    expect(artifacts).toEqual({ createdFiles: [], createdDirs: [], committed: false });
     expect(formatCancelledInitArtifacts(artifacts)).toEqual([
-      'aforge init - cancelled: nothing was written',
+      'aforge init - cancelled: rolled back, nothing was written',
     ]);
     // 磁盘未留任何产物
     expect(await ws.host.exists(ws.habitsFile)).toBe(false);

@@ -13,7 +13,7 @@
  * 8. 现有 merge_json 投影损坏（硬项 error(3)，soft 项 warn——§8.2/§8.6）；
  * 9. profile.skills.on_demand 清单（信息项：MVP 只登记不物化，§4.2 注记）；
  * 10. pi 的 MCP 历史落点残留（`.pi\settings.json` 含 `mcpServers` → warn，只诊断不删）；
- * 11. profile.skills.copy_mode 声明 `symlink`（已声明未实现 → warn，§4.2 注记 / §12 Phase 2）；
+ * 11. profile.skills.copy_mode 声明 `symlink`（恒被忽略且不计划实现 → warn，§4.2）；
  * 12. profile.learning.auto_capture：`hook` 已声明未实现 → warn；CI 为真时补一句
  *     "本次不会写入 learnings" → ok（§7.4 护栏 3 / §10；投影正文不受 CI 影响）；
  *     `prompt` 与 `auto_promote: true` 并存 → warn（会与人工 sync 争 `.sync.lock`）；
@@ -35,7 +35,7 @@
  * - `check-residuals`：事务残留（锁 / journal / 回滚失败备份）的级别与提示取舍；
  * - `check-consistency`：渲染基准 / 模板解析 / on_demand / copy_mode / sync-meta / merge_json；
  * - `check-projection-hash`：marker 区间三方比对（当前渲染 vs 记录 vs 磁盘）；
- * - `check-environment`：declared vs detected / OneDrive / 断开的 symlink。
+ * - `check-environment`：declared vs detected / OneDrive / skills/ 下的 symlink。
  *
  * 类型与 doctorExitCode 在此 re-export：既有调用方（commands/doctor、测试）继续从
  * `./checks` 单点 import，拆分不改变对外导出面。
@@ -65,10 +65,10 @@ import {
   renderForDoctor,
 } from './check-consistency';
 import {
-  checkBrokenSymlinks,
   checkDeclaredVsDetected,
   checkOneDrive,
   checkPiCodingAgentDir,
+  checkSkillsSymlinks,
 } from './check-environment';
 import { buildPlanCtx, checkTargetPaths, collectEnabledPlans } from './check-paths';
 import { checkProjectionHashes } from './check-projection-hash';
@@ -141,8 +141,8 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
   // ---- PI_CODING_AGENT_DIR 置位确认（§2.2：user scope 落点按它解析 → ok）----
   checkPiCodingAgentDir(results, env);
 
-  // ---- §9 symlink 失败检查：扫描 SoT skills/ 目录，检测断开的 symlink → warn ----
-  await checkBrokenSymlinks(host, results, userSoTRoot, projectSoTRoot);
+  // ---- §9 symlink 检查：扫描 SoT skills/，任何 symlink 条目 → warn（含仍有效的）----
+  await checkSkillsSymlinks(host, results, userSoTRoot, projectSoTRoot);
 
   return { results, exitCode: doctorExitCode(results) };
 }

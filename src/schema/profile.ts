@@ -47,7 +47,12 @@ import { SchemaVersion, ScopeEnum } from './common';
 /** Spec §4.2 targets 元素：四个投影目标。 */
 export const TargetEnum = z.enum(['opencode', 'codex', 'claude', 'pi']);
 
-/** Spec §4.2 skills.copy_mode。 */
+/**
+ * Spec §4.2 skills.copy_mode。
+ *
+ * `symlink` 恒被忽略（投影与 skill add 恒为实体 copy）且**不计划实现**；enum 保留该
+ * 取值只为不让既有写了它的 profile 加载失败，doctor 报 `skills-copy-mode` warn。
+ */
 export const CopyMode = z.enum(['copy', 'symlink']);
 
 /** Spec §4.2 merge.strategy。 */

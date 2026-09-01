@@ -377,7 +377,7 @@ describe('runStatus — 状态装配', () => {
 });
 
 describe('runInit — --json 序列化形态', () => {
-  it('init 结果可 JSON 序列化：scope / sotRoot / createdFiles / createdDirs / detection 字段齐全', async () => {
+  it('init 结果可 JSON 序列化：scope / sotRoot / targets / createdFiles / createdDirs / detection 字段齐全', async () => {
     const host = createCommandHost();
     const result = await runInit({ host, cwd: CWD, os: OS }, { scope: 'project' });
     const json = JSON.parse(JSON.stringify(result)) as Record<string, unknown>;
@@ -388,6 +388,8 @@ describe('runInit — --json 序列化形态', () => {
     expect(typeof json.detection).toBe('object');
     expect((json.createdFiles as string[]).length).toBeGreaterThan(0);
     expect((json.createdDirs as string[]).length).toBeGreaterThan(0);
+    // 静默路径未询问 target，默认投影给全部四个——必须回报，否则用户不知道装到哪了
+    expect(json.targets).toEqual(['opencode', 'codex', 'claude', 'pi']);
   });
 });
 

@@ -100,7 +100,7 @@ export function defaultTtyProbe(
 export function assertTty(probe: TtyProbe = defaultTtyProbe()): void {
   if (!probe.isInteractive()) {
     throw new ConfigError('当前环境不支持交互式输入（stdin/stdout 非 TTY，常见于 CI 与管道）', {
-      hint: '非交互环境请使用非交互参数（例如：aforge init --scope project）',
+      hint: '非交互环境请使用非交互参数（例如：aforge init --yes）',
     });
   }
 }
