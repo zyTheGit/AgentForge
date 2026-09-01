@@ -24,6 +24,7 @@ import { readEnv } from '../../core/env';
 import {
   getSyncFailureReport,
   type SyncResult,
+  type SyncSkillSkip,
   type SyncTargetResult,
   syncOnce,
 } from '../../core/project/engine';
@@ -74,6 +75,22 @@ export async function runSync(
     dryRun: options.dryRun === true,
     force: options.force === true,
   });
+}
+
+/**
+ * `skills.on_demand` 跳过原因的英文一行说明（口径与 doctor 的 skills-on-demand 一致）。
+ *
+ * 三种原因都不是失败：投影仍然完整，只是这个名字没拿到「按需装载」的待遇。
+ */
+function describeSkillSkip(skip: SyncSkillSkip): string {
+  switch (skip.reason) {
+    case 'not-installed':
+      return 'not installed in either SoT layer - not projected (run `aforge skill add`)';
+    case 'shadowed-by-always':
+      return 'also listed in skills.always - projected as always (still auto-routed)';
+    default:
+      return 'SKILL.md has no frontmatter - projected as-is, on-demand marker not applied';
+  }
 }
 
 /** 单个 target 的明细行（`[claude] merge (marker): <path>`，附状态标注）。 */
@@ -148,6 +165,13 @@ export function printSyncResult(result: SyncResult, ui: Ui = getUi()): void {
   for (const skip of result.commandSkips) {
     // §8.8.4：命令薄壳整项跳过（该 target 的其余产物照常投影）
     lines.push(ui.yellow(`[${skip.targetId}] commands skipped: ${skip.reason}`));
+  }
+  for (const skip of result.skillSkips) {
+    // `skills.on_demand` 侧的非致命跳过（未安装 / 被 always 遮蔽 / 无 frontmatter）；
+    // 与 target 无关，故不带 [target] 前缀
+    lines.push(
+      ui.yellow(`[on_demand] ${skip.name}: ${describeSkillSkip(skip)} ${ui.dim(skip.detail)}`),
+    );
   }
 
   if (result.targets.length > 0) {

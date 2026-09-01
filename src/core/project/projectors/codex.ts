@@ -15,7 +15,10 @@
  *   `mcp_servers` 是 name → table 的映射，写成数组表会让整个 config.toml 加载失败）；
  *   字段名与跳过判据由 projectors/mcp-transport 给出，本文件只负责 TOML 文本化
  *   （手写序列化，无 TOML 库依赖：basic string 转义 / bare key 判定 / inline table / 数组）；
- * - skills：write 实体 copy（Spec §7.6 默认不使用 symlink）；
+ * - skills：write 实体 copy（Spec §7.6 默认不使用 symlink）；`skills.on_demand`
+ *   的技能额外产出 `<name>\agents\openai.yaml`（`policy.allow_implicit_invocation:
+ *   false`）——codex 不认 frontmatter 的 `disable-model-invocation`，按需语义只能
+ *   走这个 sidecar（见 codexSkillPolicyPath）；
  * - plan 为纯函数：不做任何 IO，路径按注入 os 选择分隔符（Spec §2.1）；
  *   CODEX_HOME 经 ctx.env（engine 注入，Spec §2.4）覆盖。
  */
@@ -42,6 +45,19 @@ export const CODEX_DIRNAME = '.codex';
 
 /** Spec §2.3：codex project 级 skills 目录（`.agents\skills\`）。 */
 export const CODEX_PROJECT_SKILLS_DIRNAME = '.agents';
+
+/** codex 技能 sidecar 的目录名与文件名（官方 Optional metadata：`agents\openai.yaml`）。 */
+export const CODEX_SKILL_AGENTS_DIRNAME = 'agents';
+export const CODEX_SKILL_POLICY_FILENAME = 'openai.yaml';
+
+/**
+ * 按需装载技能的 codex sidecar 正文（`skills.on_demand`）。
+ *
+ * `allow_implicit_invocation: false` = 不按用户 prompt 隐式触发，显式 `$name`
+ * 仍然可用。只写这一个键：sidecar 的其余字段（display_name / icon / dependencies）
+ * 是技能作者的事，AgentForge 无从代填，多写一个空壳只会覆盖不掉的噪音。
+ */
+export const CODEX_SKILL_ON_DEMAND_POLICY = 'policy:\n  allow_implicit_invocation: false\n';
 
 /** Spec §2.3 / §8.4 MCP 配置文件（config.toml）。 */
 export const CODEX_CONFIG_FILENAME = 'config.toml';
@@ -177,16 +193,40 @@ export function codexMainRulePath(ctx: ProjectContext): string {
   return api.join(base, CODEX_MAIN_RULE_FILENAME);
 }
 
-/** 单个 skill 的目标 SKILL.md 路径（project / user 两个 scope 的 skills 根不同）。 */
-export function codexSkillPath(ctx: ProjectContext, skillName: string): string {
+/** 本次 scope 下的 skills 根：project = `<root>\.agents\skills`；user = `CODEX_HOME\skills`。 */
+function codexSkillsRoot(ctx: ProjectContext): string {
   const api = pathApiFor(ctx.os);
   // §2.3：project = `<root>\.agents\skills\<name>\SKILL.md`
   // §8.4：user = `CODEX_HOME\skills\` 或 `~\.codex\skills\`
-  const skillsRoot =
-    ctx.scope === 'project'
-      ? api.join(ctx.rootDir, CODEX_PROJECT_SKILLS_DIRNAME, SKILLS_DIRNAME)
-      : api.join(codexUserDir(ctx), SKILLS_DIRNAME);
-  return skillDocPath(api, skillsRoot, skillName);
+  return ctx.scope === 'project'
+    ? api.join(ctx.rootDir, CODEX_PROJECT_SKILLS_DIRNAME, SKILLS_DIRNAME)
+    : api.join(codexUserDir(ctx), SKILLS_DIRNAME);
+}
+
+/** 单个 skill 的目标 SKILL.md 路径（project / user 两个 scope 的 skills 根不同）。 */
+export function codexSkillPath(ctx: ProjectContext, skillName: string): string {
+  return skillDocPath(pathApiFor(ctx.os), codexSkillsRoot(ctx), skillName);
+}
+
+/**
+ * 按需装载技能的 codex sidecar 路径：`<skills 根>\<name>\agents\openai.yaml`。
+ *
+ * codex 是四家里唯一**不认** frontmatter 的 `disable-model-invocation` 的：它的
+ * 调用策略写在技能目录下的 `agents\openai.yaml`（官方 Optional metadata），
+ * `policy.allow_implicit_invocation: false` 表示「不按用户 prompt 隐式触发，显式
+ * `$name` 仍可用」——正是 `skills.on_demand` 要的语义。故 on_demand 技能在 codex
+ * 侧多一个 write 项（§7.6 记账与 prune 自动覆盖：它就是个整文件产物）。
+ *
+ * 只在 `skill.onDemand === true` 时产出：`always` 的产物集合因此完全不变。
+ */
+export function codexSkillPolicyPath(ctx: ProjectContext, skillName: string): string {
+  const api = pathApiFor(ctx.os);
+  return api.join(
+    codexSkillsRoot(ctx),
+    skillName,
+    CODEX_SKILL_AGENTS_DIRNAME,
+    CODEX_SKILL_POLICY_FILENAME,
+  );
 }
 
 /**
@@ -236,13 +276,22 @@ export const codexProjector: Projector = {
       });
     }
 
-    // skills：write 实体 copy（M8 skill add 接入后非空；事务内由引擎统一备份/回滚）
+    // skills：write 实体 copy（M8 skill add 接入后非空；事务内由引擎统一备份/回滚）。
+    // on_demand 的技能额外产出 sidecar：codex 的「不隐式调用」开关在
+    // agents\openai.yaml 而不是 frontmatter（见 codexSkillPolicyPath）
     for (const skill of ctx.skillsToMaterialize) {
       items.push({
         path: codexSkillPath(ctx, skill.name),
         action: 'write',
         content: skill.content,
       });
+      if (skill.onDemand === true) {
+        items.push({
+          path: codexSkillPolicyPath(ctx, skill.name),
+          action: 'write',
+          content: CODEX_SKILL_ON_DEMAND_POLICY,
+        });
+      }
     }
 
     // Commands 薄壳（§8.8）：**只在 user scope 产出**。project scope 整项跳过

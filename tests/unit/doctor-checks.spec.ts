@@ -244,6 +244,112 @@ describe('runDoctorChecks — skills.copy_mode: symlink 恒被忽略且不实现
   });
 });
 
+describe('runDoctorChecks — skills.on_demand 按需装载（Phase 2，§4.2）', () => {
+  /** 布置一个已安装的 skill（project 层）。 */
+  async function installSkill(host: FakeHost, name: string, doc: string): Promise<void> {
+    await host.writeFile(path.join(PROJECT_SOT, 'skills', name, 'SKILL.md'), doc);
+  }
+
+  const GOOD_DOC = '---\nname: lazy\ndescription: 备货技能\n---\n正文\n';
+
+  it('未声明 → skills-on-demand ok（单条，不产出逐名条目）', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host);
+    const r = resultOf(await runDoctorChecks(doctorOpts(host)), 'skills-on-demand');
+    expect(r.level).toBe('ok');
+    expect(r.detail).toContain('未声明');
+  });
+
+  it('声明且已安装 → ok 并说明"投影正文 + 不进模型自动路由清单"', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(
+      host,
+      'version: 1\nscope: project\ntargets: [claude]\nskills:\n  on_demand: [lazy]\n',
+    );
+    await installSkill(host, 'lazy', GOOD_DOC);
+
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'skills-on-demand');
+    expect(r.level).toBe('ok');
+    expect(r.detail).toContain('lazy');
+    expect(r.detail).toContain('disable-model-invocation');
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('声明但未安装 → 逐名 warn（列出查找路径 + skill add 提示），不影响退出码', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(
+      host,
+      'version: 1\nscope: project\ntargets: [claude]\nskills:\n  on_demand: [ghost]\n',
+    );
+
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'skills-on-demand/ghost');
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain(path.join(PROJECT_SOT, 'skills', 'ghost', 'SKILL.md'));
+    expect(r.hint).toContain('aforge skill add');
+    // 与 always 的 fail-fast 刻意不同：备货清单缺项不该阻塞 sync
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('同名同时在 always → warn 说明按 always 投影（按需语义不生效）', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(
+      host,
+      'version: 1\nscope: project\ntargets: [claude]\nskills:\n  always: [lazy]\n  on_demand: [lazy]\n',
+    );
+    await installSkill(host, 'lazy', GOOD_DOC);
+
+    const r = resultOf(await runDoctorChecks(doctorOpts(host)), 'skills-on-demand/lazy');
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain('skills.always');
+    expect(r.hint).toContain('skills.always');
+  });
+
+  it('SKILL.md 无 frontmatter → warn（正文照常投影，但无处注入按需标记）', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(
+      host,
+      'version: 1\nscope: project\ntargets: [claude]\nskills:\n  on_demand: [bare]\n',
+    );
+    await installSkill(host, 'bare', '# 裸文档\n');
+
+    const r = resultOf(await runDoctorChecks(doctorOpts(host)), 'skills-on-demand/bare');
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain('frontmatter');
+  });
+
+  it('opencode 启用 + 有生效的 on_demand → 降级 warn（该 target 无对应开关）', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(
+      host,
+      'version: 1\nscope: project\ntargets: [claude, opencode]\nskills:\n  on_demand: [lazy]\n',
+    );
+    await installSkill(host, 'lazy', GOOD_DOC);
+
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'skills-on-demand/opencode-unsupported');
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain('lazy');
+    expect(r.hint).toContain('permission.skill');
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('opencode 未启用 → 不产出降级 warn', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(
+      host,
+      'version: 1\nscope: project\ntargets: [claude]\nskills:\n  on_demand: [lazy]\n',
+    );
+    await installSkill(host, 'lazy', GOOD_DOC);
+
+    const report = await runDoctorChecks(doctorOpts(host));
+    expect(
+      report.results.some((item) => item.item === 'skills-on-demand/opencode-unsupported'),
+    ).toBe(false);
+  });
+});
+
 describe('runDoctorChecks — learning.auto_capture（§7.4 / §9）', () => {
   const profileWithCapture = (value: string) =>
     `version: 1\nscope: project\ntargets: [claude]\nlearning:\n  auto_capture: ${value}\n`;

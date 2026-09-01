@@ -35,10 +35,16 @@
  *   → `prompt` 档由 core/generate/composer 插入 `## Learning Protocol` 段
  *   （§5.2 / §7.4）；`hook` 档 MVP 未实现，由 doctor 的 learning-auto-capture
  *   条目显式告警，不静默失效；
- * - skills.always → core/sources/skill.readSkillsToMaterialize（物化并投影）；
- * - skills.on_demand → **MVP 决定：只登记不物化**，由 aforge status 展示清单
- *   （Spec §4.2 注记）。按需装载属 Phase 2，MVP 不投影、不生成占位文件——
- *   在此登记该决定，避免字段静默无效。
+ * - skills.always → core/sources/skill-materialize.readSkillsToMaterialize（物化并投影，
+ *   正文逐字节等于 SoT 原文，且可被暴露为命令薄壳）；
+ * - skills.on_demand → 同一个 readSkillsToMaterialize（Phase 2 已落地）：正文照常
+ *   物化投影——四家客户端本身就是"只常驻 name+description，选中才读正文"的渐进披露
+ *   模型，不投影正文等于该 skill 对客户端不存在——区别在于**不进模型的自动路由清单**：
+ *   claude / pi 注入 frontmatter `disable-model-invocation: true`，codex 额外写
+ *   `<skill>/agents/openai.yaml` 关闭 allow_implicit_invocation，opencode 无对应
+ *   开关（由 doctor 的 skills-on-demand/opencode-unsupported 显式降级告警）。
+ *   on_demand 不进命令薄壳，缺失/被 always 遮蔽/无 frontmatter 均由 sync 的
+ *   skillSkips 与 doctor 告警说明，不静默失效。
  */
 import { z } from 'zod';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../core/markers';
@@ -141,7 +147,7 @@ export const ProfileSchema = z.object({
         .array(z.string())
         .optional()
         .describe(
-          'MVP 只登记不物化：声明的 skill 名不会被 sync 物化或投影，仅由 aforge status / doctor 列出（Spec §4.2 注记）',
+          '按需装载：正文照常物化投影，但不进模型的自动路由清单（claude/pi 注入 frontmatter disable-model-invocation、codex 写 agents/openai.yaml 关闭隐式调用、opencode 无对应开关由 doctor 告警），需显式调用；未安装的名字只告警不阻塞 sync',
         ),
       copy_mode: CopyMode.default('copy'),
       expose_as_command: z

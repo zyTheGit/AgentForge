@@ -25,13 +25,28 @@ import {
   CODEX_PROJECT_COMMANDS_SKIP_REASON,
   commandCanonicalName,
   flattenCommandName,
+  frontmatterRange,
   parseCommandEntry,
 } from '../project/commands';
 import { readSyncMeta, SYNC_META_FILE } from '../project/sync-meta';
 import { renderRulesMd } from '../project/sync-prepare';
+import { ON_DEMAND_FRONTMATTER_KEY, skillDocCandidates } from '../sources/skill';
 import type { DoctorRoots } from './check-config';
 import type { EnabledPlan } from './check-paths';
 import { type DoctorCheckResult, errHint, errMessage, toDoctorCode } from './check-types';
+
+/** 候选路径里第一个存在的文件（全都不存在 → undefined）。 */
+async function firstExisting(
+  host: Host,
+  candidates: readonly string[],
+): Promise<string | undefined> {
+  for (const file of candidates) {
+    if (await host.exists(file)) {
+      return file;
+    }
+  }
+  return undefined;
+}
 
 /**
  * 当前 SoT 渲染（hash 基准；与 sync 共用 sync-prepare.renderRulesMd）。失败 → error 并返回 undefined。
@@ -120,20 +135,96 @@ export async function checkTemplates(
   }
 }
 
-/** profile.skills.on_demand：MVP 只登记不物化（Spec §4.2 注记）。 */
-export function checkSkillsOnDemand(results: DoctorCheckResult[], config: EffectiveConfig): void {
-  // 与 status 的展示口径一致（同一句 "declared only - not projected in MVP"），
-  // 让"声明了但不会被投影"这件事在 doctor 里也可见；纯信息项，恒 ok（不影响退出码）
-  const onDemandSkills = config.profile.skills.on_demand ?? [];
-  results.push({
-    section: 'config',
-    level: 'ok',
-    item: 'skills-on-demand',
-    detail:
-      onDemandSkills.length === 0
-        ? 'profile.skills.on_demand 未声明'
-        : `${onDemandSkills.join(', ')} (declared only - not projected in MVP)`,
-  });
+/**
+ * `profile.skills.on_demand`：按需装载的名单状态与各 target 的支持差异（Phase 2）。
+ *
+ * 语义提醒：`on_demand` 的技能**正文照常投影**，区别只在产物 frontmatter 多一行
+ * `disable-model-invocation: true`（claude / pi 据此不把它放进模型的自动路由清单，
+ * 仍可 `/name` 显式调用）；codex 走 sidecar `agents\openai.yaml`。四条落点：
+ *
+ * - 名字未安装 → warn（**不是** error）：`on_demand` 是「备货清单」，允许先写名字
+ *   再逐个 `aforge skill add`。sync 也只是跳过并记一条 skillSkips，不失败——两处
+ *   口径必须一致，否则用户会看到 doctor 说没事而 sync 报错（或反过来）；
+ * - 同名也在 `skills.always` 里 → warn：按 always 投影，按需标记不生效；
+ * - 启用了 opencode 且确有可投影的 on_demand 技能 → warn：opencode 只认
+ *   `name` / `description` / `license` / `compatibility` / `metadata`，未知 frontmatter
+ *   键一律忽略，该技能在 opencode 里**仍会**进模型清单（降级提示，不静默）；
+ * - 其余情况 → ok（列出生效的名字）。
+ *
+ * 全部 warn 都不影响退出码：投影结果本身是自洽的，只是与「按需」的期望有差距。
+ */
+export async function checkSkillsOnDemand(
+  host: Host,
+  results: DoctorCheckResult[],
+  roots: DoctorRoots,
+  config: EffectiveConfig,
+): Promise<void> {
+  const onDemand = config.profile.skills.on_demand ?? [];
+  if (onDemand.length === 0) {
+    results.push({
+      section: 'config',
+      level: 'ok',
+      item: 'skills-on-demand',
+      detail: 'profile.skills.on_demand 未声明',
+    });
+    return;
+  }
+
+  const always = new Set(config.profile.skills.always ?? []);
+  const effective: string[] = [];
+  for (const name of onDemand) {
+    if (always.has(name)) {
+      results.push({
+        section: 'config',
+        level: 'warn',
+        item: `skills-on-demand/${name}`,
+        detail: `${name} 同时出现在 skills.always 与 skills.on_demand 中：按 always 投影，不注入 ${ON_DEMAND_FRONTMATTER_KEY}（仍会进模型的自动路由清单）`,
+        hint: '从 skills.always 中摘掉该名字（aforge skill remove）才能让按需装载生效',
+      });
+      continue;
+    }
+    const candidates = skillDocCandidates(roots.userRootForLoad, roots.projectSoTRoot, name);
+    const found = await firstExisting(host, candidates);
+    if (found === undefined) {
+      results.push({
+        section: 'config',
+        level: 'warn',
+        item: `skills-on-demand/${name}`,
+        detail: `skills.on_demand 声明的 skill 未安装: ${name}（查找 ${candidates.join(' / ')}）——本轮 sync 跳过它，不投影`,
+        hint: '运行 aforge skill add <name> --no-register 安装（on_demand 不需要登记进 always），或从 profile.yaml 的 skills.on_demand 中移除该名字',
+      });
+      continue;
+    }
+    if (frontmatterRange(await host.readFile(found)) === null) {
+      results.push({
+        section: 'config',
+        level: 'warn',
+        item: `skills-on-demand/${name}`,
+        detail: `${found} 没有 frontmatter，无处注入 ${ON_DEMAND_FRONTMATTER_KEY}：正文照常投影，但按需语义不生效（四家客户端也都要求 name/description 必填）`,
+        hint: `给该 SKILL.md 补上 --- 包裹的 frontmatter（至少 name 与 description）`,
+      });
+      continue;
+    }
+    effective.push(name);
+  }
+
+  if (effective.length > 0) {
+    results.push({
+      section: 'config',
+      level: 'ok',
+      item: 'skills-on-demand',
+      detail: `${effective.join(', ')}（投影正文 + ${ON_DEMAND_FRONTMATTER_KEY}: true，不进模型自动路由清单）`,
+    });
+    if (config.profile.targets.includes('opencode')) {
+      results.push({
+        section: 'config',
+        level: 'warn',
+        item: 'skills-on-demand/opencode-unsupported',
+        detail: `opencode 只识别 name / description / license / compatibility / metadata，忽略 ${ON_DEMAND_FRONTMATTER_KEY}：${effective.join(', ')} 在 opencode 里仍会进模型的技能清单（正文仍是按需读取，上下文开销只有一行 description）`,
+        hint: '需要在 opencode 侧也挡住自动调用，在 opencode.json 里配 permission.skill.<name>: "ask" 或 "deny"',
+      });
+    }
+  }
 }
 
 /**
@@ -146,8 +237,9 @@ export function checkSkillsOnDemand(results: DoctorCheckResult[], config: Effect
  *
  * 恒不影响退出码（warn 不参与 §6.1 的码计算），因为投影结果本身是正确的，
  * 只是与声明不符；与 skills-on-demand 同属"声明 vs 实际"的信息类落点。注意两者的
- * 后续走向不同：on_demand 仍排在 Phase 2，copy_mode: symlink 已明确不做（理由见
- * §4.2：与 §7.6 prune 判据冲突、Windows 默认无创建权限、四家读取行为未实测）。
+ * 后续走向不同：on_demand 已在 Phase 2 落地（投影正文 + 按需标记，见
+ * checkSkillsOnDemand），copy_mode: symlink 已明确不做（理由见 §4.2：与 §7.6 prune
+ * 判据冲突、Windows 默认无创建权限、四家读取行为未实测）。
  */
 export function checkSkillsCopyMode(results: DoctorCheckResult[], config: EffectiveConfig): void {
   const copyMode = config.profile.skills.copy_mode;

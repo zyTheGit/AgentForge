@@ -7,7 +7,7 @@
  * 此处聚焦命令层的输入输出契约（纯 ASCII、绝对路径、--json 序列化形态）。
  */
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runLearn } from '../../src/commands/knowledge';
 import {
   attachExitCodeOverride,
@@ -16,6 +16,7 @@ import {
   formatFailureReport,
   formatStatus,
   getExitCodeOverride,
+  printSyncResult,
   runDoctor,
   runInit,
   runStatus,
@@ -162,9 +163,11 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
     expect(text).toContain('learnings : 5');
     expect(text).toContain('templates : 2');
     expect(text).toContain('future-target: (no projector in this version)');
-    // §4.2：always 由 sync 物化；on_demand 在 MVP 只登记不物化，status 需说明这点
+    // §4.2：always 由 sync 物化并进模型清单；on_demand 也物化，但不进自动路由清单
     expect(text).toContain('always    : code-review (materialized by sync)');
-    expect(text).toContain('on_demand : deep-research (declared only - not projected in MVP)');
+    expect(text).toContain(
+      'on_demand : deep-research (projected, hidden from model auto-routing - invoke explicitly)',
+    );
     // §6.1 / §8.8：技能调用前缀必须打印——codex 是 `$<name>`，其余三家 `/<name>`
     expect(text).toContain('claude (invoke skills as /<name>):');
     expect(text).toContain('codex (invoke skills as $<name>):');
@@ -551,6 +554,34 @@ describe('sync 失败汇总措辞与退出码（P2）', () => {
     expect(formatFailureReport(report as NonNullable<typeof report>)).toContain(
       'rollback incomplete',
     );
+  });
+});
+
+describe('printSyncResult — skills.on_demand 跳过行（命令层输出契约）', () => {
+  it('未安装的 on_demand 名字 → 打出 [on_demand] <name>: ... 一行，sync 本身成功', async () => {
+    const host = createCommandHost();
+    await host.writeFile(
+      path.join(PROJECT_SOT, 'profile.yaml'),
+      'version: 1\nscope: project\ntargets: [claude]\nskills:\n  on_demand: [ghost]\n',
+    );
+    await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), HABITS_YAML);
+
+    const result = await runSync({ host, cwd: CWD, os: OS, agentforgeVersion: 'test-0.1.0' });
+    const printed: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line: unknown) => {
+      printed.push(String(line));
+    });
+    try {
+      printSyncResult(result);
+    } finally {
+      spy.mockRestore();
+    }
+
+    const text = printed.join('\n');
+    expect(text).toContain('[on_demand] ghost:');
+    expect(text).toContain('not installed in either SoT layer');
+    // 跳过不改变结论：仍打出 sync complete
+    expect(text).toContain('sync complete');
   });
 });
 

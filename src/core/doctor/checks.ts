@@ -11,7 +11,8 @@
  * 6. OneDrive 检测（§2.1.1 → warn）；
  * 7. 声明值与 detected 不一致（§4.1：声明优先，仅提示 → warn）；
  * 8. 现有 merge_json 投影损坏（硬项 error(3)，soft 项 warn——§8.2/§8.6）；
- * 9. profile.skills.on_demand 清单（信息项：MVP 只登记不物化，§4.2 注记）；
+ * 9. profile.skills.on_demand 名单（Phase 2 按需装载：未装 / 被 always 遮蔽 /
+ *    SKILL.md 无 frontmatter / opencode 不支持该 frontmatter 键 → warn）；
  * 10. pi 的 MCP 历史落点残留（`.pi\settings.json` 含 `mcpServers` → warn，只诊断不删）；
  * 11. profile.skills.copy_mode 声明 `symlink`（恒被忽略且不计划实现 → warn，§4.2）；
  * 12. profile.learning.auto_capture：`hook` 已声明未实现 → warn；CI 为真时补一句
@@ -178,8 +179,8 @@ async function runConfigDependentChecks(
   // ---- §9 第 5 条：未解析的 template id（sync 将失败，error(2)）----
   await checkTemplates(host, results, roots, config);
 
-  // ---- profile.skills.on_demand：MVP 只登记不物化（Spec §4.2 注记）----
-  checkSkillsOnDemand(results, config);
+  // ---- profile.skills.on_demand：按需装载名单（未装 / 被 always 遮蔽 / opencode 不支持 → warn）----
+  await checkSkillsOnDemand(host, results, roots, config);
 
   // ---- profile.skills.copy_mode：symlink 已声明未实现（§4.2 注记 / §12 Phase 2）----
   checkSkillsCopyMode(results, config);

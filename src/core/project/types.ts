@@ -52,14 +52,29 @@ export interface ProjectionPlan {
 }
 
 /**
- * 待物化的 Skill 产物（M5 最小结构，M8 扩展附属文件 / 来源等）。
- * M5 不投影 skills，仅保留契约位。
+ * 待物化的 Skill 产物（正文 + 是否按需装载）。
  */
 export interface SkillArtifact {
   /** skill 名（即目标目录名，Spec §4.3 文件名约束同样适用）。 */
   readonly name: string;
-  /** SKILL.md 正文。 */
+  /**
+   * 要落盘的 SKILL.md 正文。
+   *
+   * `skills.always` 时逐字节等于 SoT 原文；`skills.on_demand` 时已由
+   * core/sources/skill-materialize 在 frontmatter 里注入
+   * `disable-model-invocation: true`（正文加工是 SoT 侧职责，projector 只负责落点）。
+   */
   readonly content: string;
+  /**
+   * 来自 `profile.skills.on_demand`（Phase 2 按需装载）→ true；来自
+   * `skills.always` → 缺省（undefined）。
+   *
+   * projector 需要这个位是因为 codex 的「不自动调用」开关不在 frontmatter 里，
+   * 而在技能目录下的 sidecar `agents\openai.yaml`（`policy.allow_implicit_invocation`），
+   * 只能由 codex projector 额外产出一个 write 项——其余三家靠 content 里的
+   * frontmatter 键即可，故它们不读这个字段。
+   */
+  readonly onDemand?: boolean;
 }
 
 /**

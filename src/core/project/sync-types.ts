@@ -11,6 +11,7 @@
 import type { Host } from '../../infra/host';
 import type { EnvSnapshot, Scope } from '../env';
 import type { OsContext } from '../paths';
+import type { SkillMaterializeSkip } from '../sources/skill';
 import type { McpTransportNotice } from './projectors/mcp-transport';
 import { projectorRegistry } from './projectors/registry';
 import type { SyncPrunedEntry, SyncPruneSkip } from './sync-prune';
@@ -67,6 +68,14 @@ export interface SyncCommandSkip {
   readonly reason: string;
 }
 
+/**
+ * `skills.on_demand` 里未按预期物化的一项（原样透传 SoT 侧的判定结果）。
+ *
+ * 类型别名而非另立结构：判定发生在 core/sources/skill-materialize，命令层与
+ * doctor 呈现的必须是同一份 reason 取值域，重新定义一遍必然漂移。
+ */
+export type SyncSkillSkip = SkillMaterializeSkip;
+
 /** syncOnce 结果：命令层据此打印绝对路径与摘要。 */
 export interface SyncResult {
   readonly scope: Scope;
@@ -86,6 +95,18 @@ export interface SyncResult {
   readonly skippedTargets: readonly string[];
   /** 命令薄壳被整项跳过的 target（§8.8.4：codex + project scope；提示用，非失败）。 */
   readonly commandSkips: readonly SyncCommandSkip[];
+  /**
+   * `skills.on_demand` 里未按预期物化的名字（未安装 / 被 always 遮蔽 / 无
+   * frontmatter 无处注入按需标记）。
+   *
+   * 与 `warnings` 分开的理由同 `commandSkips`：writeSyncMetaOnSuccess 按
+   * `warnings` 的 targetId 判定「该 target 投影不完整 → 不记账」，而这里说的是
+   * **SoT 侧名单**的问题，与哪个 target 无关，混进去会整轮丢记账。
+   *
+   * 也刻意不做 fail-fast：`on_demand` 的定位是「备货清单」，允许先写名字再逐个
+   * `aforge skill add`（`always` 点名未装仍是 ConfigError(2)）。
+   */
+  readonly skillSkips: readonly SyncSkillSkip[];
   /** soft 项（§8.6）apply 失败收集的 warning（不阻塞 sync）。 */
   readonly warnings: readonly SyncWarning[];
   /**

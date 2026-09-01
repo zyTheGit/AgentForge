@@ -8,10 +8,12 @@ import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/m
 import {
   CODEX_MCP_TOML_BEGIN,
   CODEX_MCP_TOML_END,
+  CODEX_SKILL_ON_DEMAND_POLICY,
   codexConfigPath,
   codexMainRulePath,
   codexProjector,
   codexSkillPath,
+  codexSkillPolicyPath,
   serializeMcpServersToml,
   tomlBasicString,
 } from '../../../../src/core/project/projectors/codex';
@@ -149,6 +151,35 @@ describe('codexProjector.plan（Spec §8.4 主规则 / MCP 标记段 / skills）
     });
     const plan = codexProjector.plan(ctx);
     expect(plan.items[1]?.path).toBe('C:\\codexhome\\skills\\s1\\SKILL.md');
+  });
+
+  it('on_demand 技能：SKILL.md 之后额外产出 agents\\openai.yaml sidecar（关闭隐式调用）', () => {
+    const ctx = buildCtx({
+      skillsToMaterialize: [
+        { name: 'always-one', content: '# A\n' },
+        { name: 'lazy', content: '# L\n', onDemand: true },
+      ],
+    });
+    const plan = codexProjector.plan(ctx);
+    // always 的技能不带 sidecar（产物形态与本功能之前完全一致）
+    expect(plan.items[1]).toEqual({
+      path: 'C:\\proj\\.agents\\skills\\always-one\\SKILL.md',
+      action: 'write',
+      content: '# A\n',
+    });
+    expect(plan.items[2]).toEqual({
+      path: 'C:\\proj\\.agents\\skills\\lazy\\SKILL.md',
+      action: 'write',
+      content: '# L\n',
+    });
+    expect(plan.items[3]).toEqual({
+      path: 'C:\\proj\\.agents\\skills\\lazy\\agents\\openai.yaml',
+      action: 'write',
+      content: CODEX_SKILL_ON_DEMAND_POLICY,
+    });
+    expect(CODEX_SKILL_ON_DEMAND_POLICY).toBe('policy:\n  allow_implicit_invocation: false\n');
+    // sidecar 也是 write 项 → 自动进 §7.6 记账，迁回 always 时由 prune 删除
+    expect(codexSkillPolicyPath(ctx, 'lazy')).toBe(plan.items[3]?.path);
   });
 
   it('plan 为纯函数：同一 ctx 多次调用结果一致，不改写 ctx', () => {

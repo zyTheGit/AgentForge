@@ -170,10 +170,35 @@ export function assertAllowedPlaceholders(body: string, skill: string): void {
 }
 
 /**
- * 从 `SKILL.md` 正文提取 frontmatter 的透传键（§8.8.1）。
+ * 定位 `SKILL.md` 的 frontmatter 区间（行下标；`start` 与 `end` 分别指两条 fence）。
  *
  * 只认「首行即 `---`」的标准形态：正文前有空行或其它内容时视为无 frontmatter，
- * 不做容错猜测——猜错会把正文首段当成 description 投出去。
+ * 不做容错猜测——猜错会把正文首段当成 description 投出去。没有结束 fence 同样
+ * 视为无 frontmatter（半截的 fence 不是合法 frontmatter）。
+ *
+ * 导出而非内部私有：`core/sources/skill-materialize` 的 `on_demand` 标记注入要往
+ * 同一个区间里插行，两处各写一遍 fence 判定必然漂移（一处放过 CRLF、另一处不放过
+ * 时，同一份 SKILL.md 在薄壳派生与按需注入里会被判成两种形态）。
+ *
+ * @returns fence 行下标；无 frontmatter → null。
+ */
+export function frontmatterRange(content: string): { start: number; end: number } | null {
+  const lines = content.split('\n');
+  if (lines.length === 0 || !FRONTMATTER_FENCE.test(lines[0] ?? '')) {
+    return null;
+  }
+  for (let i = 1; i < lines.length; i += 1) {
+    if (FRONTMATTER_FENCE.test(lines[i] ?? '')) {
+      return { start: 0, end: i };
+    }
+  }
+  return null;
+}
+
+/**
+ * 从 `SKILL.md` 正文提取 frontmatter 的透传键（§8.8.1）。
+ *
+ * 区间定位见 `frontmatterRange`（无 frontmatter → 空对象）。
  *
  * 解析失败（YAML 损坏、顶层不是映射）一律返回空对象而不抛：技能正文的
  * frontmatter 不合法不该阻断整次 sync，薄壳退化成「无 frontmatter」仍可用。
@@ -184,24 +209,19 @@ export function parseSkillFrontmatter(content: string): {
   argumentHint?: string;
   commandBody?: string;
 } {
-  const lines = content.split('\n');
-  if (lines.length === 0 || !FRONTMATTER_FENCE.test(lines[0] ?? '')) {
-    return {};
-  }
-  let end = -1;
-  for (let i = 1; i < lines.length; i += 1) {
-    if (FRONTMATTER_FENCE.test(lines[i] ?? '')) {
-      end = i;
-      break;
-    }
-  }
-  if (end === -1) {
+  const range = frontmatterRange(content);
+  if (range === null) {
     return {};
   }
 
   let parsed: unknown;
   try {
-    parsed = parseYaml(lines.slice(1, end).join('\n'));
+    parsed = parseYaml(
+      content
+        .split('\n')
+        .slice(range.start + 1, range.end)
+        .join('\n'),
+    );
   } catch {
     return {};
   }
