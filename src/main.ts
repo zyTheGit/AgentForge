@@ -8,7 +8,7 @@
  *   3) node: esbuild bundle    → dist/aforge.js（package.json "bin" 指向它）
  */
 import { runCli } from './cli';
-import { EXIT_CODE_ROLLBACK_INCOMPLETE, getExitCodeOverride } from './commands/sync';
+import { EXIT_CODE_ROLLBACK_INCOMPLETE, getExitCodeOverride } from './commands/lifecycle';
 import { AgentForgeError, describeFatal, toExitCode } from './core/errors';
 import { getActiveSyncTransaction, rollbackActiveSyncTransactionSync } from './core/project/engine';
 import { isCancelledError } from './infra/prompt';
@@ -21,7 +21,7 @@ const EXIT_CODE_INTERRUPTED = 130;
  * - 用户取消交互（CancelledError）→ 打印取消提示，退出码 130；
  * - AgentForgeError → 打印 message + hint，退出码取 error.code（2/3/4/5 各归其位）；
  * - 未知错误 → 打印堆栈，退出码 1；
- * - 退出码覆盖（sync 回滚未完成 → 6，见 commands/sync.ts）优先于以上映射。
+ * - 退出码覆盖（sync 回滚未完成 → 6，见 commands/lifecycle/sync.ts）优先于以上映射。
  *
  * 首行标签经 describeFatal 决定：可预期的 AgentForgeError 报出自己的归类与**最终**
  * 退出码（`configuration error (exit code 2)`），只有真的意外才落到调用方给的 kind 上。

@@ -9,7 +9,7 @@
  *   由构建验证覆盖；
  * - 用户取消（Ctrl+C / Esc）：抛出 CancelledError（退出码 130），**不再**静默
  *   exit 0——init -i 的 edit 分支会先落盘 habits.yaml 与全部子目录（见
- *   commands/init.ts），此后取消确实留下半初始化的 SoT，需要由命令层打印
+ *   commands/lifecycle/init.ts），此后取消确实留下半初始化的 SoT，需要由命令层打印
  *   已创建的文件/目录清单后再退出（P2 修复；原注释「无中途状态需要清理」已过时）；
  * - assertTty：CI / 管道（stdin 或 stdout 非 TTY）→ ConfigError(2)，
  *   hint 引导非交互参数。

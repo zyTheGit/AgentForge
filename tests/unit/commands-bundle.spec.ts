@@ -15,7 +15,7 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { renderImport, runBundleExport, runBundleImport } from '../../src/commands/bundle';
+import { renderImport, runBundleExport, runBundleImport } from '../../src/commands/knowledge';
 import { BUNDLE_CONTENT_DIR, BUNDLE_MANIFEST_FILE } from '../../src/core/bundle/layout';
 import { REDACTED_PLACEHOLDER } from '../../src/core/bundle/redact';
 import { currentOs } from '../../src/core/paths';

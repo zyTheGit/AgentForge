@@ -84,7 +84,7 @@ export async function setSkillAlways(
  * setSkillAlways 的**内层**版本：同一段登记，但走 editProfileLocked（不再自持锁）。
  *
  * 供**已持有 targetLayer.sotRoot 事务锁**的调用方使用——`skill add` 把
- * 「copy → 登记 → 失败回滚」整段包进一次 withSotLock（见 commands/skill.runSkillAdd），
+ * 「copy → 登记 → 失败回滚」整段包进一次 withSotLock（见 commands/assets/skill.runSkillAdd），
  * 内层若再走 editProfile 会撞自己刚建的锁目录（非递归目录锁）而抛 ConflictError(3)。
  *
  * @throws ConfigError(2) 名字非法 / profile.yaml 损坏 / 修改后校验失败。

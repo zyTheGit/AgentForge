@@ -37,7 +37,7 @@
  * - `check-projection-hash`：marker 区间三方比对（当前渲染 vs 记录 vs 磁盘）；
  * - `check-environment`：declared vs detected / OneDrive / skills/ 下的 symlink。
  *
- * 类型与 doctorExitCode 在此 re-export：既有调用方（commands/doctor、测试）继续从
+ * 类型与 doctorExitCode 在此 re-export：既有调用方（commands/lifecycle/doctor、测试）继续从
  * `./checks` 单点 import，拆分不改变对外导出面。
  */
 

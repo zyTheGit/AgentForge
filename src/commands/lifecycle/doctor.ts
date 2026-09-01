@@ -16,10 +16,10 @@ import {
   type DoctorReport,
   type DoctorSection,
   runDoctorChecks,
-} from '../core/doctor/checks';
-import { readEnv } from '../core/env';
-import { type CommandContext, defaultCommandContext, printJson } from './context';
-import { resolveJsonFlag } from './flags';
+} from '../../core/doctor/checks';
+import { readEnv } from '../../core/env';
+import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
+import { resolveJsonFlag } from '../_shared/flags';
 
 /** 命令上下文（host/os/cwd 注入；测试可换 fake host 与任意平台）。 */
 export type DoctorCommandContext = CommandContext;

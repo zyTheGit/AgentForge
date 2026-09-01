@@ -13,10 +13,10 @@
  */
 import path from 'node:path';
 import type { Command } from 'commander';
-import { HABITS_FILE, loadHabits, PROFILE_FILE } from '../core/config/load';
-import { serializeYamlDoc } from '../core/config/serialize';
-import { readEnv } from '../core/env';
-import { ConfigError } from '../core/errors';
+import { HABITS_FILE, loadHabits, PROFILE_FILE } from '../../core/config/load';
+import { serializeYamlDoc } from '../../core/config/serialize';
+import { readEnv } from '../../core/env';
+import { ConfigError } from '../../core/errors';
 import {
   buildCustomContent,
   buildImportDetected,
@@ -26,11 +26,11 @@ import {
   identifyImportFile,
   importTimestamp,
   parseImportedFile,
-} from '../core/importer/importer';
-import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
-import { atomicWrite } from '../infra/fsutil';
-import { type CommandContext, defaultCommandContext, printJson } from './context';
-import { resolveJsonFlag } from './flags';
+} from '../../core/importer/importer';
+import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
+import { atomicWrite } from '../../infra/fsutil';
+import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
+import { resolveJsonFlag } from '../_shared/flags';
 
 /** 命令上下文（host/os/cwd 注入；测试用真实临时目录 + realHost）。 */
 export type ImportCommandContext = CommandContext;

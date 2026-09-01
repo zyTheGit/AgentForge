@@ -22,9 +22,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-
-import { runInit, runInitInteractive } from '../../src/commands/init';
-import { runSync } from '../../src/commands/sync';
+import { runInit, runInitInteractive, runSync } from '../../src/commands/lifecycle';
 import { currentOs } from '../../src/core/paths';
 import type { Host } from '../../src/infra/host';
 import { realHost } from '../../src/infra/real-host';

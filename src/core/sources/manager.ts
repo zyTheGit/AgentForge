@@ -26,7 +26,7 @@
  * - `store`：sources.json 登记表读写、`<userSoT>\store\<id>` 路径推导，以及
  *   §10 的 id / url / ref / store 边界守卫（决定"往哪写盘、给 git 传什么参数"）。
  *
- * 这些符号在此 re-export：既有调用方（commands/source.ts、sources/skill.ts、
+ * 这些符号在此 re-export：既有调用方（commands/assets/source.ts、sources/skill.ts、
  * sources/template.ts 与测试）继续从 `./manager` 单点 import，拆分不改变对外导出面。
  */
 import path from 'node:path';

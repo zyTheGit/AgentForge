@@ -9,10 +9,10 @@
  * 与 flags.ts 的分工：flags.ts 负责**判定**是否要 JSON 输出（resolveJsonFlag），
  * 本模块的 printJson 只负责**格式化并打印**，两者不重叠。
  */
-import type { EnvSnapshot, Scope } from '../core/env';
-import { currentOs, type OsContext, resolveProjectSoT, resolveUserSoT } from '../core/paths';
-import type { Host } from '../infra/host';
-import { realHost } from '../infra/real-host';
+import type { EnvSnapshot, Scope } from '../../core/env';
+import { currentOs, type OsContext, resolveProjectSoT, resolveUserSoT } from '../../core/paths';
+import type { Host } from '../../infra/host';
+import { realHost } from '../../infra/real-host';
 
 /**
  * 命令核心逻辑的注入上下文。

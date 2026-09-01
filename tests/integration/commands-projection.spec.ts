@@ -14,11 +14,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-
-import { runInit } from '../../src/commands/init';
-import { runSkillAdd } from '../../src/commands/skill';
-import { runSourceAdd } from '../../src/commands/source';
-import { runSync } from '../../src/commands/sync';
+import { runSkillAdd, runSourceAdd } from '../../src/commands/assets';
+import { runInit, runSync } from '../../src/commands/lifecycle';
 import { ExitCode } from '../../src/core/errors';
 import { currentOs } from '../../src/core/paths';
 import type { Host } from '../../src/infra/host';

@@ -134,7 +134,7 @@ export function toExitCode(err: unknown): number {
  * 不会静悄悄退化成泛化 `error`（severityOf 的 switch 有 default 兜底，卡不住这件事）。
  * Success(0) 排除在外——成功路径不打错误首行。
  *
- * 表外的码（如 sync 回滚未完成的 6，定义在 commands/sync.ts、不属于 ExitCode）
+ * 表外的码（如 sync 回滚未完成的 6，定义在 commands/lifecycle/sync.ts、不属于 ExitCode）
  * 按设计退化成 `error`，具体语义由输出末行的 `exit code 6: rollback incomplete` 交代。
  */
 const EXIT_CODE_LABEL: Record<Exclude<ExitCode, typeof ExitCode.Success>, string> = {
@@ -160,7 +160,7 @@ function labelFor(code: number): string {
  * @param fallback 非 AgentForgeError（真的意外）时沿用的标签，由调用方按抛出路径给出
  *                 （`unexpected error` / `uncaught exception` / `unhandled rejection`）。
  * @param finalCode 进程**实际**要退出的码。存在退出码覆盖（sync 回滚未完成 → 6，见
- *                  commands/sync.ts）时首行必须报这个码，否则首行说 3、进程退 6，
+ *                  commands/lifecycle/sync.ts）时首行必须报这个码，否则首行说 3、进程退 6，
  *                  脚本按首行判断就会走错分支。未登记的码（如 6）退化成泛化
  *                  `error`，具体语义由后续那行 `exit code 6: rollback incomplete` 交代。
  *                  非 AgentForgeError 也要带上它：attachExitCodeOverride 与

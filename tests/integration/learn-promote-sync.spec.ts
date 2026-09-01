@@ -18,19 +18,18 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-
-import { runInit } from '../../src/commands/init';
-import { runLearn } from '../../src/commands/learn';
-import { runMcpAdd, runMcpRemove } from '../../src/commands/mcp';
-import { runPromote } from '../../src/commands/promote';
-import { runSkillAdd, runSkillRemove } from '../../src/commands/skill';
 import {
+  runMcpAdd,
+  runMcpRemove,
+  runSkillAdd,
+  runSkillRemove,
   runSourceAdd,
   runSourceList,
   runSourceRemove,
   runSourceUpdate,
-} from '../../src/commands/source';
-import { runSync } from '../../src/commands/sync';
+} from '../../src/commands/assets';
+import { runLearn, runPromote } from '../../src/commands/knowledge';
+import { runInit, runSync } from '../../src/commands/lifecycle';
 import { OfflineError, toExitCode } from '../../src/core/errors';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END, splitByMarkers } from '../../src/core/markers';
 import { currentOs } from '../../src/core/paths';

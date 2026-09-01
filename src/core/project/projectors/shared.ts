@@ -3,7 +3,7 @@
  *
  * 依赖方向说明：SKILLS_DIRNAME / SKILL_DOC_FILENAME 的**定义**已下沉到
  * `core/paths`（最底层纯路径模块）——SoT 侧消费者（core/sources/skill、
- * core/learning/promote、core/doctor/checks、commands/init）与投影侧消费者
+ * core/learning/promote、core/doctor/checks、commands/lifecycle/init）与投影侧消费者
  * （四个 projector）互不依赖，共享物必须落在两者共同的下游；若留在本文件，
  * SoT 侧就得反向 import 一个 projector 内部模块。本文件原样再导出这两个名字，
  * 投影侧调用点保持不变。此处只放"目录/文件名约定 + 纯路径拼装"，无 IO。

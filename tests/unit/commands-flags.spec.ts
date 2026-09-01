@@ -1,5 +1,5 @@
 /**
- * commands/flags 单测（Spec §6.2 全局 `--json`；§7.1 / §7.1.1 init 运行模式）：
+ * commands/_shared/flags 单测（Spec §6.2 全局 `--json`；§7.1 / §7.1.1 init 运行模式）：
  * - resolveJsonFlag：`aforge --json <cmd>` 与 `aforge <cmd> --json` 必须等价——
  *   沿 commander 的 parent 链向上查找，任一层出现 --json 即为机器可读输出；
  * - resolveInitMode：裸 `aforge init` 在 TTY 下默认交互，`--yes` / `--json` / 非 TTY
@@ -7,7 +7,7 @@
  */
 import { Command } from 'commander';
 import { describe, expect, it } from 'vitest';
-import { resolveInitMode, resolveJsonFlag } from '../../src/commands/flags';
+import { resolveInitMode, resolveJsonFlag } from '../../src/commands/_shared';
 
 /** 构造 program（带全局 --json）+ 子命令 + 孙命令，返回三层引用。 */
 function buildProgram(): { program: Command; sub: Command; grandchild: Command } {

@@ -14,7 +14,7 @@ import path from 'node:path';
 import { Command } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify as stringifyYaml } from 'yaml';
-import { registerLearningsCommand } from '../../src/commands/learnings';
+import { registerLearningsCommand } from '../../src/commands/knowledge';
 import { learningFilePath } from '../../src/core/learning/store';
 
 const ID = 'l20260826010203-abc123';

@@ -17,20 +17,20 @@
  *
  * 拆分后的模块清单（对外导出面不变，remove 侧的符号在文件末尾原样 re-export）：
  * - 本文件：上下文构造 + add / list 逻辑 + 三个子命令的注册与输出渲染；
- * - commands/skill-remove.ts：remove 的结果类型与核心逻辑（含「层选错了」的 hint）。
+ * - commands/assets/skill-remove.ts：remove 的结果类型与核心逻辑（含「层选错了」的 hint）。
  */
 import type { Command } from 'commander';
-import { defaultHabits, windowsDefaultProfile } from '../core/config/defaults';
-import { resolveWriteTargetLayer, type TargetLayer } from '../core/config/target-layer';
-import { type EnvSnapshot, readEnv, type Scope } from '../core/env';
-import { resolveProjectSoT, resolveUserSoT } from '../core/paths';
-import { claudeSkillPath } from '../core/project/projectors/claude';
-import { codexSkillPath } from '../core/project/projectors/codex';
-import { opencodeSkillPath } from '../core/project/projectors/opencode';
-import { piSkillPath } from '../core/project/projectors/pi';
-import { projectorRegistry } from '../core/project/projectors/registry';
-import { withSotLock } from '../core/project/sync-lock';
-import type { ProjectContext, SkillInvokePrefix } from '../core/project/types';
+import { defaultHabits, windowsDefaultProfile } from '../../core/config/defaults';
+import { resolveWriteTargetLayer, type TargetLayer } from '../../core/config/target-layer';
+import { type EnvSnapshot, readEnv, type Scope } from '../../core/env';
+import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
+import { claudeSkillPath } from '../../core/project/projectors/claude';
+import { codexSkillPath } from '../../core/project/projectors/codex';
+import { opencodeSkillPath } from '../../core/project/projectors/opencode';
+import { piSkillPath } from '../../core/project/projectors/pi';
+import { projectorRegistry } from '../../core/project/projectors/registry';
+import { withSotLock } from '../../core/project/sync-lock';
+import type { ProjectContext, SkillInvokePrefix } from '../../core/project/types';
 import {
   type AddSkillResult,
   addSkill,
@@ -40,16 +40,16 @@ import {
   type SkillContext,
   type SkillListItem,
   setSkillAlwaysLocked,
-} from '../core/sources/skill';
-import { HabitsSchema, ProfileSchema } from '../schema';
+} from '../../core/sources/skill';
+import { HabitsSchema, ProfileSchema } from '../../schema';
 import {
   type CommandContext,
   defaultCommandContext,
   printJson,
   projectionRootFor,
   renderList,
-} from './context';
-import { parseScopeOption, resolveJsonFlag } from './flags';
+} from '../_shared/context';
+import { parseScopeOption, resolveJsonFlag } from '../_shared/flags';
 import { runSkillRemove } from './skill-remove';
 
 /** 命令上下文。 */
@@ -145,7 +145,7 @@ export async function runSkillList(ctx: SkillCommandContext): Promise<SkillListI
 
 /**
  * remove 侧的导出面 re-export：`runSkillRemove` / `SkillRemoveResult` 实现已搬到
- * commands/skill-remove.ts，这里保证调用方与测试仍能从 `commands/skill` 原路径拿到。
+ * commands/assets/skill-remove.ts，这里保证调用方与测试仍能从 `commands/assets/skill` 原路径拿到。
  */
 export { runSkillRemove, type SkillRemoveResult } from './skill-remove';
 

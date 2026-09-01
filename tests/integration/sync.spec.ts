@@ -17,9 +17,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-
-import { runInit, SOT_SUBDIRS } from '../../src/commands/init';
-import { runSync } from '../../src/commands/sync';
+import { runInit, runSync, SOT_SUBDIRS } from '../../src/commands/lifecycle';
 import { ConfigError, ExitCode, PermissionError, toExitCode } from '../../src/core/errors';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END, splitByMarkers } from '../../src/core/markers';
 import { currentOs } from '../../src/core/paths';

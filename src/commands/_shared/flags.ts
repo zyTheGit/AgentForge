@@ -17,8 +17,8 @@
  * 单测也没有单一出处。
  */
 import type { Command } from 'commander';
-import type { Scope } from '../core/env';
-import { ConfigError } from '../core/errors';
+import type { Scope } from '../../core/env';
+import { ConfigError } from '../../core/errors';
 
 /**
  * 本次调用是否要求机器可读输出（Spec §6.2 `--json`）。

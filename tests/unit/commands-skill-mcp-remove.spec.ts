@@ -13,10 +13,8 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { renderList } from '../../src/commands/context';
-import { parseScopeOption } from '../../src/commands/flags';
-import { runMcpAdd, runMcpRemove } from '../../src/commands/mcp';
-import { runSkillRemove } from '../../src/commands/skill';
+import { parseScopeOption, renderList } from '../../src/commands/_shared';
+import { runMcpAdd, runMcpRemove, runSkillRemove } from '../../src/commands/assets';
 import { loadProfile } from '../../src/core/config/load';
 import { currentOs } from '../../src/core/paths';
 import { SYNC_LOCK_DIRNAME, SYNC_LOCK_META_FILE } from '../../src/core/project/sync-lock';
