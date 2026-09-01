@@ -5,7 +5,15 @@
  *   总长 2–64，其余字符仅限 a-z0-9_-）；
  * - created_at/updated_at/promoted_at 为 ISO-8601 datetime 字符串；
  * - promoted/promoted_at/promote_target 有默认值（learn 创建时的初始状态），
- *   其余字段必填——learning 是数据文件而非可省略配置。
+ *   其余字段必填——learning 是数据文件而非可省略配置；
+ * - confidence_source 是**可选**字段（无默认值）：标记 `confidence` 这个 base 值
+ *   是启发式自动打分（`auto`）还是人显式给定（`manual`）。可选而非必填是为了让
+ *   自动打分上线前写下的旧条目仍能被 validateLearningData 解析——缺席即"未知
+ *   来源"，展示层按 manual 保守对待。
+ *
+ * **不落盘的两样东西**（见 core/learning/scoring.ts 模块头）：打分 breakdown 是
+ * 派生量（权重一改旧值即过期，故读时重算），衰减后的 effective 值同理（落盘等于
+ * 每次 list 都重写文件）。
  */
 import { z } from 'zod';
 import { ScopeEnum } from './common';
@@ -41,11 +49,19 @@ export const PromoteTarget = z.enum(['custom_rule', 'skill', 'habits_note']);
 /** promote_target 字面量联合（值 + 类型同名导出）。 */
 export type PromoteTarget = z.infer<typeof PromoteTarget>;
 
+/** `confidence` 这个 base 值的来源（启发式自动打分 / 人显式给定）。 */
+export const ConfidenceSource = z.enum(['auto', 'manual']);
+
+/** confidence 来源字面量联合（值 + 类型同名导出）。 */
+export type ConfidenceSource = z.infer<typeof ConfidenceSource>;
+
 export const LearningSchema = z.object({
   id: LearningId,
   scope: ScopeEnum,
-  /** 置信度 0–1（含端点）。 */
+  /** 置信度 0–1（含端点）。落盘的恒为 **base** 值，衰减后的 effective 值读时算。 */
   confidence: z.number().min(0).max(1),
+  /** base 值的来源；缺席 = 自动打分上线前的旧条目（展示层按 manual 对待）。 */
+  confidence_source: ConfidenceSource.optional(),
   trigger: z.string(),
   content: z.string(),
   category: LearningCategory,

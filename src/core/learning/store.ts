@@ -8,8 +8,11 @@
  *   Windows 非法文件名字符（<>:"/\|?*），自定义 id 时显式校验并给出可操作报错；
  * - CI 守卫（§10"不在 CI 中写入 learnings"）：env.CI 为真时 createLearning
  *   → ConfigError(2)；
- * - 重复检测（§7.5）：新 content 与现有未 promote 条目相同 → 结果携带
- *   duplicateOf（仍创建，warning 由命令层输出）。
+ * - 重复检测（§7.5）：新 content 与现有未 promote 条目**高度相似**（trigram
+ *   相似度 >= SIMILARITY_DUPLICATE）→ 结果携带 duplicateOf（仍创建，warning 由
+ *   命令层输出）；中等相似 → similarTo（合并**建议**，绝不静默合并）；
+ * - confidence：调用方未给值时走 scoring.scoreConfidence 自动打分（不再硬编码
+ *   0.5），落盘的恒为 base 值 + confidence_source 标记。
  */
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -17,6 +20,7 @@ import { parse as parseYaml, YAMLParseError } from 'yaml';
 import { atomicWrite } from '../../infra/fsutil';
 import type { Host } from '../../infra/host';
 import {
+  type ConfidenceSource,
   type Learning,
   type LearningCategory,
   LearningIdPattern,
@@ -27,6 +31,8 @@ import { serializeYamlDoc } from '../config/serialize';
 import type { Scope } from '../env';
 import { readEnv } from '../env';
 import { ConfigError } from '../errors';
+import { type ConfidenceScore, scoreConfidence } from './scoring';
+import { findMostSimilar, type SimilarityCandidate, type SimilarityMatch } from './similarity';
 
 /** Spec §3.1/§3.2：learnings 子目录名。 */
 export const LEARNINGS_DIR = 'learnings';
@@ -86,7 +92,7 @@ export interface CreateLearningInput {
   readonly trigger?: string;
   /** 分类；缺省 'other'。 */
   readonly category?: LearningCategory;
-  /** 置信度 0-1；缺省 0.5。 */
+  /** 置信度 0-1；**缺省走启发式自动打分**（scoring.scoreConfidence）。 */
   readonly confidence?: number;
   /** 来源标识；缺省 'manual'。 */
   readonly source?: string;
@@ -105,11 +111,27 @@ export interface CreateLearningResult {
   /**
    * 内容重复的既有未晋升条目 id（§7.5：仍创建，命令层输出 warning）。
    *
+   * 判据是 trigram 相似度 >= SIMILARITY_DUPLICATE（全等自然满足），比原先的
+   * `content` 全等宽松：改一个标点就绕过判重会让同一条约定攒出好几份。
+   *
    * **best-effort**：判重与写入不在同一把锁内（createLearning 全程无 SoT 锁），
    * 并发 learn 时可能双方都判为"不重复"。这是有意的取舍——重复只影响一条提示，
    * 为它引入锁会让 `auto_capture: prompt` 下的会话内写入与人工 sync 争锁。
    */
   readonly duplicateOf: string | undefined;
+  /**
+   * 中等相似度（[SIMILARITY_SIMILAR, SIMILARITY_DUPLICATE)）的既有未晋升条目。
+   *
+   * **只提示、不阻断、不自动合并**：roadmap 的「非目标」排除无人值守的全自动晋升，
+   * 合并两条学习同样是需要人看一眼的判断。命令层据此打印「与 <id> 相似度 N%，
+   * 考虑合并」。
+   */
+  readonly similarTo: SimilarityMatch | undefined;
+  /**
+   * 自动打分的 breakdown（「为什么是这个分」）；调用方显式给了 confidence 时为
+   * undefined —— 人给的值没有 breakdown 可言。
+   */
+  readonly confidenceScore: ConfidenceScore | undefined;
 }
 
 /**
@@ -185,6 +207,12 @@ export async function readLearningFile(host: Host, file: string): Promise<Learni
 /**
  * 创建 learning 条目（§7.4：写入 learnings/，不自动进入投影）。
  *
+ * confidence 两条路径：
+ * - 调用方给了值（`aforge learn --confidence 0.9` / 交互填写）→ 原样落盘，
+ *   `confidence_source: manual`，**跳过**自动打分；
+ * - 未给 → scoring.scoreConfidence 按内容与元数据算一个可解释的初始分，
+ *   `confidence_source: auto`，breakdown 经 `confidenceScore` 带回命令层展示。
+ *
  * @throws ConfigError(2) CI 为真（§10 禁写）/ id 非法 / 既有文件同名；
  * @throws PermissionError(4) 写入失败（权限域，atomicWrite 映射）。
  */
@@ -213,33 +241,48 @@ export async function createLearning(
     });
   }
 
-  // 重复检测（§7.5）：同 content 的未晋升条目 → 仍创建但报告 duplicateOf
-  let duplicateOf: string | undefined;
+  // 相似度判重（§7.5）：只比未晋升条目——已 promote 的条目要合并得先回退产物，
+  // 超出「给一条提示」的范围
+  const candidates: SimilarityCandidate[] = [];
   for (const existing of await readLearningLayer(host, store.sotRoot)) {
-    if (!existing.promoted && existing.content === input.content) {
-      duplicateOf = existing.id;
-      break;
+    if (!existing.promoted) {
+      candidates.push({ id: existing.id, content: existing.content });
     }
   }
+  const match = findMostSimilar(input.content, candidates);
+  const duplicateOf = match?.verdict === 'duplicate' ? match.id : undefined;
+  const similarTo = match?.verdict === 'similar' ? match : undefined;
+
+  // 默认值先解析出来再打分：打分只看落盘形态，scoreLearningConfidence 重算才能一致
+  const scope: Scope = input.scope ?? 'project';
+  const trigger = input.trigger ?? '';
+  const category: LearningCategory = input.category ?? 'other';
+  const promoteTarget: PromoteTarget = input.promoteTarget ?? 'custom_rule';
+  const confidenceScore =
+    input.confidence === undefined
+      ? scoreConfidence({ content: input.content, trigger, category, scope, promoteTarget })
+      : undefined;
+  const confidenceSource: ConfidenceSource = confidenceScore === undefined ? 'manual' : 'auto';
 
   const now = host.now().toISOString();
   const learning: Learning = LearningSchema.parse({
     id,
-    scope: input.scope ?? 'project',
-    confidence: input.confidence ?? 0.5,
-    trigger: input.trigger ?? '',
+    scope,
+    confidence: input.confidence ?? confidenceScore?.value,
+    confidence_source: confidenceSource,
+    trigger,
     content: input.content,
-    category: input.category ?? 'other',
+    category,
     source: input.source ?? 'manual',
     created_at: now,
     updated_at: now,
     promoted: false,
     promoted_at: null,
-    promote_target: input.promoteTarget ?? 'custom_rule',
+    promote_target: promoteTarget,
   });
 
   await atomicWrite(host, file, serializeYamlDoc(learning));
-  return { learning, file, duplicateOf };
+  return { learning, file, duplicateOf, similarTo, confidenceScore };
 }
 
 /** 列出一层 SoT 的全部 learning（按文件名序）。 */
@@ -267,12 +310,26 @@ export async function showLearning(store: LearningStore, id: string): Promise<Le
 export type LearningPatch = Partial<
   Pick<
     Learning,
-    'trigger' | 'content' | 'category' | 'confidence' | 'source' | 'scope' | 'promote_target'
+    | 'trigger'
+    | 'content'
+    | 'category'
+    | 'confidence'
+    | 'confidence_source'
+    | 'source'
+    | 'scope'
+    | 'promote_target'
   >
 >;
 
 /**
  * 更新单条 learning（updated_at 刷新为 now）。
+ *
+ * 改了 `confidence` 但没显式给 `confidence_source` → 自动标成 `manual`：值一旦被
+ * 人改过，就不该再挂着 `auto` 让展示层解释成"启发式算出来的"。
+ *
+ * `updated_at` 前移会顺带**重置衰减**（decayConfidence 以它为锚点），这正是想要的
+ * 语义：条目刚被复核过。
+ *
  * @throws ConfigError(2) id 不存在 / 修改后校验失败。
  */
 export async function updateLearning(
@@ -281,9 +338,13 @@ export async function updateLearning(
   patch: LearningPatch,
 ): Promise<Learning> {
   const current = await showLearning(store, id);
+  const confidenceSource =
+    patch.confidence_source ??
+    (patch.confidence === undefined ? current.confidence_source : 'manual');
   const updated: Learning = LearningSchema.parse({
     ...current,
     ...patch,
+    confidence_source: confidenceSource,
     updated_at: store.host.now().toISOString(),
   });
   await atomicWrite(store.host, learningFilePath(store.sotRoot, id), serializeYamlDoc(updated));

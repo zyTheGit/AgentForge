@@ -1,8 +1,9 @@
 /**
  * aforge learnings 命令（Spec §6 命令表：list | show <id> | edit <id> | rm <id>）。
  *
- * - list：两层 SoT 条目汇总；
- * - show：输出条目 YAML 原文；
+ * - list：两层 SoT 条目汇总（含**衰减后**的 confidence）；
+ * - show：输出条目 YAML 原文 + confidence 质量段（打分 breakdown、衰减档位、
+ *   stale 清理提示，见 confidence-view）；
  * - edit：TTY 下拉起 `$EDITOR`（缺省 notepad）编辑条目 yaml，等编辑器退出后
  *   重校验；非 TTY（CI / 管道）或 `$EDITOR` 在 PATH 上解析不到时退回打印
  *   「文件路径 + 正文」的旧行为，**不报错**；
@@ -31,6 +32,11 @@ import { getUi, type Ui } from '../../infra/ui';
 import type { Learning } from '../../schema';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
 import { resolveJsonFlag } from '../_shared/flags';
+import {
+  confidenceBreakdownLines,
+  confidenceSummary,
+  learningQualityJson,
+} from './confidence-view';
 
 /** 命令上下文。 */
 export type LearningsCommandContext = CommandContext;
@@ -104,12 +110,6 @@ async function requireOne(ctx: LearningsCommandContext, id: string): Promise<Lea
 /** list 核心逻辑（可注入）。 */
 export async function runLearningsList(ctx: LearningsCommandContext): Promise<LearningListItem[]> {
   return listAll(ctx);
-}
-
-/** show 核心逻辑。@throws ConfigError(2) id 不存在。 */
-export async function runLearningsShow(ctx: LearningsCommandContext, id: string): Promise<string> {
-  const found = await requireOne(ctx, id);
-  return await ctx.host.readFile(found.file);
 }
 
 /** rm 核心逻辑（在条目所在层删除）。@throws ConfigError(2) id 不存在。 */
@@ -248,11 +248,17 @@ export function formatLearningsEdit(result: LearningsEditResult, ui: Ui = getUi(
   return lines.join('\n');
 }
 
-/** 单行列摘要（两列对齐；promoted 绿 / draft 暗）。 */
-function listLine(item: LearningListItem, ui: Ui): string {
+/**
+ * 单行列摘要（两列对齐；promoted 绿 / draft 暗）。
+ *
+ * confidence 展示的是**衰减后**的 effective 值（见 core/learning/scoring）：list 是
+ * 判断"哪几条该先 promote / 该清掉"的入口，摆一个不随时间变化的 base 值没有意义。
+ */
+function listLine(item: LearningListItem, now: Date, ui: Ui): string {
   const l = item.learning;
   const state = l.promoted ? ui.green('promoted') : ui.dim('draft   ');
-  return `  ${ui.bold(l.id)}  [${item.scope}]  ${state}  ${ui.dim(l.category.padEnd(12))}${l.trigger === '' ? '' : `  ${l.trigger}`}`;
+  const conf = confidenceSummary(l, now);
+  return `  ${ui.bold(l.id)}  [${item.scope}]  ${state}  ${ui.dim(l.category.padEnd(12))}${ui.dim(conf)}${l.trigger === '' ? '' : `  ${l.trigger}`}`;
 }
 
 export function registerLearningsCommand(program: Command): void {
@@ -265,9 +271,18 @@ export function registerLearningsCommand(program: Command): void {
     .description('list all learning entries in both SoT layers')
     .option('--json', 'machine-readable output (Spec 6.2)')
     .action(async (options: { json?: boolean }, command: Command) => {
-      const items = await runLearningsList(defaultCommandContext());
+      const ctx = defaultCommandContext();
+      const items = await runLearningsList(ctx);
+      const now = ctx.host.now();
       if (resolveJsonFlag(command, options.json)) {
-        printJson(items.map((i) => ({ ...i.learning, scope: i.scope, file: i.file })));
+        printJson(
+          items.map((i) => ({
+            ...i.learning,
+            scope: i.scope,
+            file: i.file,
+            quality: learningQualityJson(i.learning, now),
+          })),
+        );
         return;
       }
       const ui = getUi();
@@ -275,7 +290,7 @@ export function registerLearningsCommand(program: Command): void {
         console.log(`no learnings yet - run ${ui.code('aforge learn')} to create one`);
         return;
       }
-      const lines = items.map((item) => listLine(item, ui));
+      const lines = items.map((item) => listLine(item, now, ui));
       lines.push('', ui.dim(`${items.length} learning(s)`));
       console.log(lines.join('\n'));
     });
@@ -293,11 +308,16 @@ export function registerLearningsCommand(program: Command): void {
           scope: found.scope,
           file: found.file,
           content: await ctx.host.readFile(found.file),
+          quality: learningQualityJson(found.learning, ctx.host.now()),
         });
         return;
       }
-      const yaml = await runLearningsShow(ctx, id);
-      console.log(yaml);
+      // 人类可读：YAML 原文在前（既有契约），质量 breakdown 附在后
+      const found = await requireOne(ctx, id);
+      const yaml = await ctx.host.readFile(found.file);
+      console.log(
+        [yaml, ...confidenceBreakdownLines(found.learning, ctx.host.now(), getUi())].join('\n'),
+      );
     });
 
   cmd

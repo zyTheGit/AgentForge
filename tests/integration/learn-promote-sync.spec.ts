@@ -651,6 +651,75 @@ describe('aforge learn/promote/source/skill（子进程端到端）', () => {
     expect(existsSync(path.join(root, '.agentforge', 'custom', 'cli-off.md'))).toBe(false);
   }, 120_000);
 
+  it('confidence 自动打分 / --confidence 显式给值 / 相似度提示 / learnings list|show 展示 effective（子进程）', () => {
+    const root = path.join(base, 'proj');
+    mkdirSync(root);
+    expect(runCli(['init'], root).status).toBe(0);
+
+    // ① 未给 --confidence：走启发式打分，输出带 (auto) 而不是固定 0.5
+    const auto = runCli(['learn', '--file', '-', '--id', 'conf-auto'], root, {
+      input: `${LEARNING_CONTENT}\n`,
+    });
+    expect(auto.status).toBe(0);
+    expect(auto.stdout).toContain('conf');
+    expect(auto.stdout).toContain('(auto)');
+    expect(auto.stdout).not.toContain('0.50 (auto)');
+
+    // ② --confidence 显式给值：原样落盘并标 manual
+    const manual = runCli(
+      ['learn', '--file', '-', '--id', 'conf-manual', '--confidence', '0.95'],
+      root,
+      { input: '提交信息一律用中文，首行不超过 50 个字符。\n' },
+    );
+    expect(manual.status).toBe(0);
+    expect(manual.stdout).toContain('0.95 (manual)');
+    const manualEntry = parseYaml(
+      readFileSync(path.join(root, '.agentforge', 'learnings', 'conf-manual.yaml'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(manualEntry.confidence).toBe(0.95);
+    expect(manualEntry.confidence_source).toBe('manual');
+
+    // ③ 非法 --confidence → ConfigError(2)，不静默退化成自动打分
+    const bad = runCli(['learn', '--file', '-', '--id', 'conf-bad', '--confidence', '9'], root, {
+      input: 'x\n',
+    });
+    expect(bad.status).toBe(2);
+    expect(existsSync(path.join(root, '.agentforge', 'learnings', 'conf-bad.yaml'))).toBe(false);
+
+    // ④ 中等相似 → 合并建议（仍创建）
+    const similar = runCli(['learn', '--file', '-', '--id', 'conf-similar'], root, {
+      input: `${LEARNING_CONTENT} 锁文件必须一起提交。\n`,
+    });
+    expect(similar.status).toBe(0);
+    expect(similar.stdout).toContain('similar to conf-auto');
+    expect(similar.stdout).toContain('consider merging');
+    expect(existsSync(path.join(root, '.agentforge', 'learnings', 'conf-similar.yaml'))).toBe(true);
+
+    // ⑤ 极高相似（只差标点）→ 走既有的重复 warning 路径（§7.5 仍创建）
+    const dup = runCli(['learn', '--file', '-', '--id', 'conf-dup'], root, {
+      input: `${LEARNING_CONTENT.replace('，', '；').replace('。', '')}\n`,
+    });
+    expect(dup.status).toBe(0);
+    expect(dup.stdout).toContain('duplicates unpromoted entry conf-auto');
+
+    // ⑥ list 展示 effective 值 + 来源标注
+    const list = runCli(['learnings', 'list'], root);
+    expect(list.status).toBe(0);
+    expect(list.stdout).toContain('conf-auto');
+    expect(list.stdout).toContain('(auto)');
+    expect(list.stdout).toContain('(manual)');
+
+    // ⑦ show 展示 YAML 原文 + 打分 breakdown（六个信号名）
+    const show = runCli(['learnings', 'show', 'conf-auto'], root);
+    expect(show.status).toBe(0);
+    expect(show.stdout).toContain('content:');
+    expect(show.stdout).toContain('effective');
+    expect(show.stdout).toContain('heuristic');
+    for (const signal of ['length', 'actionable', 'reference', 'directive', 'metadata', 'scope']) {
+      expect(show.stdout).toContain(signal);
+    }
+  }, 120_000);
+
   it('source add local + skill add：SoT skills/ 落地实体文件（§11.2.6）', async () => {
     const root = path.join(base, 'proj');
     const vendor = path.join(base, 'vendor-src');

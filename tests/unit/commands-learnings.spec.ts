@@ -92,14 +92,28 @@ async function runJson(argv: readonly string[]): Promise<unknown> {
 }
 
 describe('learnings show|edit|rm --json（Spec §6.2）', () => {
-  it('show --json：条目字段 + scope + file + content（YAML 原文）', async () => {
+  it('show --json：条目字段 + scope + file + content（YAML 原文）+ quality（读时派生量）', async () => {
     const raw = await readFile(learningFile, 'utf8');
-    expect(await runJson(['learnings', 'show', ID, '--json'])).toEqual({
+    const json = (await runJson(['learnings', 'show', ID, '--json'])) as Record<string, unknown>;
+    const { quality, ...entry } = json;
+
+    expect(entry).toEqual({
       ...LEARNING,
       scope: 'user',
       file: learningFile,
       content: raw,
     });
+
+    // quality 恒不落盘（core/learning/scoring 的架构约束）：base 来自条目，
+    // effective / ageDays / breakdown 都是按 host.now() 现算的。这里只断言不随
+    // 真实时钟变化的部分，避免用例随日期推移变红。
+    const q = quality as Record<string, unknown>;
+    expect(q.confidenceBase).toBe(0.9);
+    // 该 fixture 是"自动打分上线前"的老条目：没有 confidence_source
+    expect(q.confidenceSource).toBeNull();
+    expect(typeof q.ageDays).toBe('number');
+    expect(q.confidenceEffective as number).toBeLessThanOrEqual(0.9);
+    expect((q.heuristic as { signals: unknown[] }).signals).toHaveLength(6);
   });
 
   it('edit --json：另带 editor（EDITOR 环境变量）与 content，不打印人类提示', async () => {
