@@ -472,6 +472,7 @@ mcp: []
 | `aforge status` | 状态与路径（含各 target 的技能调用前缀：codex 为 `$<name>`，其余为 `/<name>`，见 §8.8） |
 | `aforge doctor` | 诊断 |
 | `aforge import <path>` | 导入现有规则（MVP 基础版） |
+| `aforge bundle export\|import` | SoT 打包迁移（见 §7.9；与 `import <path>` 语义不同，刻意分开命名） |
 
 ### 6.1 退出码
 
