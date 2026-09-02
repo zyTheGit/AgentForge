@@ -67,11 +67,13 @@ fnm use 22
 npm install
 npm test           # 全量测试（vitest）
 npm run typecheck  # tsc --noEmit，覆盖 src/ 与 tests/（tsconfig.json 的 include）
-npm run lint       # biome（--error-on-warnings：warn 也算失败）+ 文件行数卡口（单个 src/*.ts <= 500 行）
+npm run lint       # biome（--error-on-warnings：warn 也算失败）+ 文件行数卡口（单个 src/*.ts <= 500 行，>= 450 行报 warn）
 npm run build      # 双轨构建（node + bun）
 ```
 
 `typecheck` 的范围包含 `tests/`：测试里的类型错误（夹具缺字段、接口新增必填项没跟上）必须在 tsc 阶段就挡住，而不是等 vitest 运行时才炸。`lint` 带 `--error-on-warnings`，因为 Biome 把 `noUnusedImports` 这类「代码里有死东西」的规则默认报成 warning、退出码仍是 0——不加这个开关等于没卡。
+
+行数卡口除了超标即失败，还会把 **>= 450 行（上限的 90%）** 的文件打成 warn（不影响退出码），并支持 `node scripts/check-file-size.mjs --report [N]` 打印行数 Top N。要看某个文件离上限还有多少余量就跑卡口本身，别用 `Get-Content | Measure-Object -Line` 之类的口径估——那个口径**不计空行**，会比卡口的物理行数少几十行。
 
 改了 `src/schema/*` 后跑 `npm run emit-schema` 重新生成 `schemas/*.json`：该脚本自带 `biome check --write schemas/`，一次跑完即最终形态，不需要再手工补格式化。
 

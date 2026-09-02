@@ -27,6 +27,9 @@
  * 模块划分（本文件只留 CRUD 流程编排与 manifest 解析）：
  * - `store`：sources.json 登记表读写、`<userSoT>\store\<id>` 路径推导，以及
  *   §10 的 id / url / ref / store 边界守卫（决定"往哪写盘、给 git 传什么参数"）。
+ * - `git-pin`：远端传输层——离线闸门、git 命令的错误映射，以及 clone→fetch→
+ *   checkout→rev-parse 的 pin 序列（决定"怎么把 ref 变成落定的 commit"）。
+ *   本文件保留的是登记表事务编排，两者变化速率不同。
  * - `official`：默认注册项常量表与其播种 / 启停（`enabled` 位的唯一写入方）。
  *   它单向依赖 `store`，与本文件同级、互不 import——"官方源是哪几条、什么时候进
  *   登记表"与"怎么 clone / pin"是两种变化速率不同的关注点。
@@ -36,8 +39,6 @@
  */
 import path from 'node:path';
 import { parse as parseYaml, YAMLParseError } from 'yaml';
-import { mkdirp } from '../../infra/fsutil';
-import { gitExec } from '../../infra/shell';
 import {
   type GitSource,
   type LocalSource,
@@ -45,8 +46,8 @@ import {
   ManifestSchema,
   type Source,
 } from '../../schema';
-import type { EnvSnapshot } from '../env';
-import { ConfigError, GenericError, OfflineError } from '../errors';
+import { ConfigError } from '../errors';
+import { assertNotOffline, clonePinned, gitMust } from './git-pin';
 import {
   assertGitRef,
   assertGitUrl,
@@ -89,94 +90,6 @@ export interface UpdateSourceResult {
   readonly commit: string;
   readonly file: string;
   readonly storeDir: string;
-}
-
-// ---------------------------------------------------------------------------
-// 基础设施：git 命令 / 离线守卫（sources.json 读写与 id 派生见 ./store）
-// ---------------------------------------------------------------------------
-
-/** 执行一条 git 命令；失败 → GenericError(1)（网络 / ref 不存在等通用域）。 */
-async function gitMust(
-  ctx: SourceManagerContext,
-  args: readonly string[],
-  opts: { cwd?: string; what: string },
-): Promise<string> {
-  const result = await gitExec(ctx.host, args, { cwd: opts.cwd });
-  if (result.code !== 0) {
-    const stderr = result.stderr.trim();
-    throw new GenericError(
-      `git ${opts.what} 失败（exit ${result.code}）${stderr ? `: ${stderr}` : ''}`,
-      {
-        hint:
-          opts.what === 'clone'
-            ? '检查 url 可达性与本机网络（或先配置凭证），然后重试 aforge source add'
-            : `检查 ref 是否存在于远端（git ls-remote 验证），然后重试`,
-        details: { args, code: result.code, stderr: result.stderr, stdout: result.stdout },
-      },
-    );
-  }
-  return result.stdout;
-}
-
-/** 离线守卫（§7.8）：AGF_OFFLINE=1 时网络操作 → OfflineError(5)。 */
-function assertNotOffline(env: EnvSnapshot, operation: string): void {
-  if (env.offline) {
-    throw new OfflineError(`离线模式（AGF_OFFLINE=1）禁止 ${operation}`, {
-      hint: '移除 AGF_OFFLINE 环境变量后重试；离线时可用 source add local / 已缓存内容',
-    });
-  }
-}
-
-/**
- * clone 到 store 并 pin 到 ref，返回落定的 commit（§7.6 pin 流程的单一实现）。
- *
- * 序列：clone --depth 1（默认分支）→ fetch --depth 1 origin \<ref\> →
- * checkout --detach FETCH_HEAD → rev-parse HEAD。
- * （分支 / 标签 / commit sha 统一走 fetch+FETCH_HEAD 路径；sha 依赖远端
- * allowReachableSHA1InWant，GitHub 支持。）
- *
- * addGitSource 与 materializeGitSource 共用：前者是"登记同时拉取"，后者是
- * "登记在先、内容后补"（默认注册的官方源走这条）。两处若各写一遍 git 序列，
- * pin 语义就会有两个事实源。
- *
- * 调用方须已校验 url / ref / id（本函数只做 store 边界的纵深防御断言）。
- *
- * **中途失败必清目录**：clone 成功而后续任一步失败时，`store\<id>` 里留下的是
- * **远端默认分支**的内容且 commit 未落定；凡以「目录存在」判"已就绪"的调用点都会
- * 零网络返回这份未 pin 的内容，且不会自愈。清理是 best-effort（原错误优先）。
- */
-async function clonePinned(
-  ctx: SourceManagerContext,
-  args: { url: string; ref: string; storeDir: string },
-): Promise<string> {
-  assertWithinStore(ctx, args.storeDir);
-  await mkdirp(ctx.host, path.dirname(args.storeDir));
-  // 孤儿缓存（登记已删但目录残留 / 上次 clone 中断）清掉重 clone
-  if (await ctx.host.exists(args.storeDir)) {
-    await ctx.host.rm(args.storeDir);
-  }
-
-  try {
-    await gitMust(ctx, ['clone', '--depth', '1', '--', args.url, args.storeDir], { what: 'clone' });
-    await gitMust(ctx, ['fetch', '--depth', '1', 'origin', args.ref], {
-      cwd: args.storeDir,
-      what: 'fetch',
-    });
-    await gitMust(ctx, ['checkout', '--detach', 'FETCH_HEAD'], {
-      cwd: args.storeDir,
-      what: 'checkout',
-    });
-    return (
-      await gitMust(ctx, ['rev-parse', 'HEAD'], { cwd: args.storeDir, what: 'rev-parse' })
-    ).trim();
-  } catch (err) {
-    try {
-      await ctx.host.rm(args.storeDir);
-    } catch {
-      // best-effort：清理失败最多留下与修复前等同的残骸，原错误优先
-    }
-    throw err;
-  }
 }
 
 // ---------------------------------------------------------------------------
