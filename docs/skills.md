@@ -103,8 +103,9 @@ opencode 这一档是明确的降级：`aforge doctor` 会报 `skills-on-demand/
 ### 缺失与冲突的处理
 
 - **点名却没装**：不像 `always` 那样 fail-fast。`sync` 照常成功，输出里一行 `[on_demand] <name>: not installed in either SoT layer ...`，`doctor` 报 `skills-on-demand/<name>` warn。`on_demand` 的定位就是「备货清单」，允许先写名字再逐个 `aforge skill add <name> --no-register`；
-- **同名同时在 `always` 里**：按 `always` 投影（仍进模型清单），不注入按需标记，`doctor` 报 warn 提示要先从 `always` 里摘掉；
-- **`SKILL.md` 没有 frontmatter**：正文照常投影，但无处注入标记，按需语义不生效（`doctor` warn）。四家客户端本来也要求 `name` / `description` 必填，这种文档本身就该补 frontmatter；
+- **同名同时写进 `always` 与 `on_demand`**：**加载即失败**，退出码 2。两张名单语义互斥（一个进模型自动路由清单、一个不进），同一个技能只能选一张；报错落在 `skills.on_demand` 字段路径上并列出重复的名字。这条校验在 `profile.yaml` 装配阶段生效，因此 `sync` / `status` / `doctor` 一律走不到投影；
+- **`SKILL.md` 没有 frontmatter，或 frontmatter 不是合法 YAML 顶层映射**：正文照常投影，但无处注入标记 → claude / pi 侧按需语义不生效（codex 的 sidecar 与 frontmatter 无关，仍会写），`doctor` 报 warn。四家客户端本来也要求 `name` / `description` 必填，这种文档本身就该补 frontmatter；
+- **SoT 自己写了 `disable-model-invocation: false`**（或其他非 `true` 的取值）：尊重该取值、一个字节都不改，因此**四家一律不启用**按需语义（codex 也不写 sidecar），`doctor` 报 warn 并提示把它改成 `true` 或整行删掉（删掉后由 `sync` 自动注入）。写了 `true` 的则视为已生效，产物逐字节等于原文；
 - **`expose_as_command` 只认 `always`**：命令薄壳是「强制调用」的手段，与「别自动用它」的诉求正交；点名一个只在 `on_demand` 里的技能仍是退出码 2。
 
 ### 两张名单之间迁移

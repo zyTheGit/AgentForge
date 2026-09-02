@@ -12,14 +12,14 @@
  * 一个可选特性去联网（离线环境下会挂在 clone 上，CI 里没有凭证）。
  *
  * 级别一律 ok / warn，**从不 error**：官方源的任何状态都不影响 `sync` 的正确性
- * （禁用 → 不联网、不进 `template list`；启用但没缓存 → 只是它的模板 id 解析不到，
- * 那由 §9 第 5 条 `template/<id>` 那项负责报 error）。让本项抬高退出码，等于让
- * "没启用官方源"这件正常状态把 CI 里的 `aforge doctor` 弄红。
+ * （禁用 → 不联网、不进 `template list`、不参与渲染；启用但没缓存 → 只是它的模板 id
+ * 解析不到，那由 §9 第 5 条 `template/<id>` 那项负责报 error）。让本项抬高退出码，
+ * 等于让"没启用官方源"这件正常状态把 CI 里的 `aforge doctor` 弄红。
  *
- * 注意"禁用"不等于"不参与渲染"：resolveTemplate 的 store 层按目录名扫描、不读
- * `enabled`，所以已拉取过的源在 disable 之后其模板仍可被 sync 渲染（见
- * sources/official.DefaultSourceDecl.enabledByDefault 的「已知限制」）。本模块的
- * 措辞据此如实收窄到"不联网、不进 template list"。
+ * "禁用"的语义是**该源完全不参与**：渲染侧的模板解析第 4 层以 `sources.json` 的
+ * `enabled` 为判据（core/sources/render-scope），缓存留着只是为了重新 enable 时不必
+ * 再联网。若 `profile.templates` 引用了只存在于禁用源的模板 id，会由
+ * `template/<id>` 那项报 error(2)（issue #55）。
  *
  * 登记表本身损坏（坏 JSON / 越界 id）也走 warn 并附原因：那条错误的正主是
  * `aforge source *` 命令（会以退出码 2 失败），这里只负责让用户在体检报告里看见它。
@@ -88,7 +88,7 @@ async function describeDefaultSource(
       section: 'config',
       level: 'ok',
       item,
-      detail: `${decl.description}：已登记、当前禁用（不联网、不进 template list）；pin: ${ref}${pinNote}`,
+      detail: `${decl.description}：已登记、当前禁用（不联网、不进 template list、不参与渲染）；pin: ${ref}${pinNote}`,
       hint: `启用：aforge source enable ${decl.id}`,
     };
   }

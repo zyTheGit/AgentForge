@@ -32,7 +32,7 @@
  * - plan 为纯函数：不做任何 IO，路径按注入 os 选择分隔符（Spec §2.1）。
  */
 import type { McpServer } from '../../../schema';
-import { type OsContext, pathApiFor } from '../../paths';
+import { type OsContext, PI_AGENT_DIR_ENV, pathApiFor, resolveOverridableDir } from '../../paths';
 import { renderCommandShell } from '../commands';
 import {
   type CommandArtifact,
@@ -74,12 +74,19 @@ export const PI_PROMPTS_DIRNAME = 'prompts';
  *
  * 入参是 `(home, override)` 而非 ProjectContext：命令层（`aforge mcp remove` 的提示
  * 文案）也要算这个目录，但它手里只有基准根与 env，造一个假 ctx 不值得。
+ *
+ * 覆盖值过 core/paths 的统一守卫（`~` 展开 + UNC / 无盘符绝对路径拒绝）——与
+ * CODEX_HOME 同一处判据，两个变量不该有两套宽严标准。
  */
 export function piUserAgentDir(home: string, override: string | undefined, os: OsContext): string {
   const api = pathApiFor(os);
-  return override !== undefined && override !== ''
-    ? api.resolve(override)
-    : api.join(home, ...PI_USER_DIR_SEGMENTS);
+  return resolveOverridableDir(
+    override,
+    api.join(home, ...PI_USER_DIR_SEGMENTS),
+    PI_AGENT_DIR_ENV,
+    home,
+    os,
+  );
 }
 
 function piUserDir(ctx: ProjectContext): string {
