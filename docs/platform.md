@@ -12,6 +12,11 @@
   - `--json` 输出不经过呈现层，恒为无色纯 ASCII，逐字节稳定。
 - **交互 UI**：`init` 的交互流程需要真实终端（TTY），非 TTY 下自动退回静默默认值（等价 `init --yes`）。
 - **OneDrive**：`AGF_HOME` 或项目目录落在 OneDrive 下时 `aforge doctor` 会 warn（文件锁 / 占位符状态可能导致投影写入失败）。
+- **会话钩子里的 `aforge`（`learning.auto_capture: hook`）**：钩子文件写的是**裸命令** `aforge learn --print-protocol`，由 codex 起进程时按 `PATH` 解析——刻意不写绝对路径，产物才能跨机器逐字节一致（见 [learning](learning.md#auto_capture-hook会话钩子投递协议)）。因此：
+  - `aforge` 必须在**启动 agent 的那个 shell** 的 `PATH` 里。npm 全局安装在 Windows 上落 `%APPDATA%\npm\aforge.cmd`；如果你用 fnm / nvm 之类的版本管理器，切换 Node 版本会换掉全局 bin 目录，钩子可能突然找不到命令；
+  - 找不到时钩子静默失败（非零退出被 codex 当作"该钩子没产出上下文"），会话照常继续，只是协议没注入。想确认，在同一个 shell 里跑一次 `aforge learn --print-protocol`，能打印出协议正文即为正常；
+  - WSL 与 Windows 是两套 `PATH`：在 WSL 侧 sync 出来的钩子要求 WSL 侧装有 `aforge`，反之亦然。跨边界共享 SoT 时这条会咬人（另见下面的 WSL 互通）。
+
 
 ## macOS / Linux
 
@@ -72,7 +77,7 @@
 
 - **并发安全**：多进程并发执行 `aforge sync` 或 `aforge source add` 等行为未定义。命令内部持 `.sync.lock`（非等待），撞锁直接退出码 3。建议避免并发操作同一 SoT 目录（`.agentforge/`）；如需自动化调度，请确保串行执行。Windows 侧与 WSL 侧同时操作同一份 SoT 是这条限制的一个具体形态，见 [WSL 互通](#wsl-互通)。
 - **Symlink 支持**：`skills/` 目录恒使用实体拷贝，不使用 symlink。`profile.skills.copy_mode` 虽然接受 `symlink`，但该值**恒被忽略且不予实现**（理由见 [Spec §4.2](../AgentForge-Spec.md#42-profileyaml)：与 prune 判据冲突、Windows 默认无创建权限、四家客户端读取行为未实测）——声明 `symlink` 时 `aforge doctor` 会告警提示「当前恒为实体 copy」，投影结果不受影响；`skills/` 下已存在的断开 symlink 也会被 doctor 检出。
-- **`learning.auto_capture: hook`**：MVP 未实现任何 target 侧会话钩子，行为等同 `off`，`doctor` 统一 warn。
+- **`learning.auto_capture: hook`**：只有 **codex** 有可声明式写入的会话钩子落点（`hooks.json`）；claude / opencode / pi 在这一档行为等同 `off`，`sync` 每家打一行降级提示、`doctor` 报一条 `learning-auto-capture-hook` warn。支持矩阵与理由见 [learning](learning.md#支持矩阵)。
 - **`skills.on_demand`**：MVP 只登记不物化——声明的 skill 名不会被 `sync` 物化或投影，仅由 `status` / `doctor` 列出（按需装载属 Phase 2）。
 - **`skills.expose_as_command`（§8.8 Commands 投影）**：已实现，含命名空间（条目写 `ns/name`）与 `$1..$9`（`SKILL.md` frontmatter 的 `command-body`）。限制在落点：pi / codex 的命令目录平铺，带命名空间的命令降级成 `ns-name.md`，`doctor` 报 `commands/namespace-flattened` warn；codex 的 **project scope 不产出**命令薄壳（其 `prompts/` 只读 user 级），`sync` 会打一条 `[codex] commands skipped: ...`，`doctor` 报 `commands/codex-project-unsupported` warn。详见 [技能](skills.md#额外投影成命令expose_as_command)。
 - **探测器边界（`aforge detect`）**：全程零子进程、零网络，只做 PATH 文件名匹配与配置文件存在性判断，因此拿不到任何**运行时**版本号——版本一律来自版本文件（`.node-version` / `.java-version` / `.sdkmanrc` / `global.json` 等），文件没写就没有 `version`。几处具体边界：sdkman 的 `sdk` 是 shell 函数、PATH 上没有本体，只能靠 `.sdkmanrc` 或 `SDKMAN_DIR` 判出；`dotnet` 没有第三方版本管理器生态，manager 只有 `system` / `none`；`monorepo` 多工具共存时只报优先级首位（`nx` > `turbo` > `lerna` > `rush` > `pnpm-workspace`）；`ci` 纯看文件/目录，`.github/workflows/` 需含至少一个 `.yml` / `.yaml` 才算命中。字段清单见 [habits.yaml 字段参考](habits.md#detected-快照结构)。

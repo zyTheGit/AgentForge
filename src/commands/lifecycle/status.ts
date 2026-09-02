@@ -13,8 +13,9 @@
  *   与渲染素材口径一致：project 覆盖 user）；
  * - profile.skills 的 always / on_demand 清单——on_demand 在 MVP 中**只登记不物化**
  *   （Spec §4.2 注记），在此如实标注，避免该字段静默无效；
- * - profile.learning.auto_capture 的声明值与生效值（§7.4）：`hook` 未实现时标出原因，
- *   `prompt` 时说明投影正文含 `## Learning Protocol` 段，CI 下补一句"本次不会写入"；
+ * - profile.learning.auto_capture 的声明值与生效值（§7.4）：`prompt` 时说明投影正文含
+ *   `## Learning Protocol` 段，`hook` 时如实列出钩子装到哪几个 target、哪几个没有
+ *   钩子落点（等同 off），CI 下补一句"本次不会写入"；
  * - --json 输出机器可读 JSON（路径一律绝对路径）。
  *
  * 只读命令：不做渲染（profile.templates 未解析不影响路径展示，环境探测
@@ -31,10 +32,13 @@ import {
   LEARNING_PROTOCOL_HEADING,
   rendersLearningProtocol,
   resolveAutoCapture,
+  writesSessionHooks,
 } from '../../core/learning/auto-capture';
+import { SESSION_HOOK_EVENT } from '../../core/learning/hook-capture';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
 import { projectorRegistry } from '../../core/project/projectors/registry';
 import { readSyncMeta } from '../../core/project/sync-meta';
+import { partitionSessionHookTargets } from '../../core/project/sync-notices';
 import type { ProjectContext, SkillInvokePrefix } from '../../core/project/types';
 import { listDirSafe } from '../../infra/fsutil';
 import type { FileStat, Host } from '../../infra/host';
@@ -98,15 +102,22 @@ export interface StatusResult {
   /**
    * profile.learning.auto_capture 的声明值与生效值（§7.4）。
    *
-   * 同样是"避免字段静默无效"：`hook` 档 MVP 未实现，declared 与 effective 会不同，
-   * `reason` 说明为什么。`ciNote` 另说一件事——CI 下 learnings 恒不落盘，但**生效档位
-   * 与投影正文不变**（否则 contentHash 跨环境不稳定）。
+   * 三档现在都各自生效，declared 与 effective 恒等（保留两个字段：将来若再引入
+   * 需要归并的档位，"声明了但被降级"这件事必须可见）。`hook` 档的降级发生在
+   * **target 粒度**：hookTargets / hookUnsupportedTargets 如实列出钩子装到哪几家、
+   * 哪几家等同 off，避免"声明了 hook 却什么都没发生"变成静默。
+   * `ciNote` 另说一件事——CI 下 learnings 恒不落盘，但**生效档位与投影正文不变**
+   * （否则 contentHash 跨环境不稳定）。
    */
   readonly autoCapture: Readonly<{
     declared: AutoCapture;
     effective: AutoCapture;
     reason: string | null;
     ciNote: string | null;
+    /** hook 档下会被写入会话钩子的已启用 target（非 hook 档为空数组）。 */
+    hookTargets: readonly string[];
+    /** hook 档下没有钩子落点、行为等同 off 的已启用 target（非 hook 档为空数组）。 */
+    hookUnsupportedTargets: readonly string[];
   }>;
 }
 
@@ -274,6 +285,15 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
   };
 
   const autoCapture = resolveAutoCapture(config.profile, env);
+  // §7.4 hook 档的支持度按 target 粒度报（能力声明在各 projector 上，不做环境探测）。
+  // 名单取**注册表命中**的那批（即上面 targets 的 targetId），与 sync 侧
+  // engine 传 planned 的口径一致：profile.targets 里写了注册表没有的名字时（skipped
+  // 那批）根本不会被投影，替它报「没有钩子落点」是错的。
+  const hookSplit = partitionSessionHookTargets(
+    writesSessionHooks(autoCapture.effective),
+    targets.map((t) => t.targetId),
+    projectorRegistry.list(),
+  );
 
   return {
     effectiveScope: config.effectiveScope,
@@ -290,15 +310,29 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     autoCapture: {
       declared: autoCapture.declared,
       effective: autoCapture.effective,
-      reason: describeAutoCaptureReason(autoCapture),
+      reason: describeAutoCaptureReason(autoCapture, hookSplit),
       ciNote: describeAutoCaptureCiNote(autoCapture),
+      hookTargets: hookSplit.capable,
+      hookUnsupportedTargets: hookSplit.incapable,
     },
   };
 }
 
-/** 声明了 MVP 未实现的档位时给出原因（否则 null）。 */
-function describeAutoCaptureReason(state: AutoCaptureState): string | null {
-  return state.unimplemented ? 'hook is not implemented in MVP - behaves as off' : null;
+/**
+ * hook 档下"这次到底会不会装上钩子"的一句话说明（其余档位 → null）。
+ *
+ * 只在**一家都装不上**时才出这句：此时声明了 hook 却整体等同 off，不说等于静默。
+ * 部分支持的情况由 hookTargets / hookUnsupportedTargets 两张名单自己表达
+ * （formatStatus 逐行打印），不再重复一句概括。
+ */
+function describeAutoCaptureReason(
+  state: AutoCaptureState,
+  hookSplit: { readonly capable: readonly string[] },
+): string | null {
+  if (!writesSessionHooks(state.effective) || hookSplit.capable.length > 0) {
+    return null;
+  }
+  return 'no enabled target supports session hooks - behaves as off';
 }
 
 /**
@@ -392,7 +426,7 @@ export function formatStatus(result: StatusResult, ui: Ui = getUi()): string {
 
   lines.push('');
   lines.push(ui.bold('learning (profile.learning):'));
-  // 声明值与生效值分开打：hook 未实现时二者不同，只打一个会骗人
+  // 声明值与生效值分开打：将来若再引入被归并的档位，只打一个会骗人
   const capture = result.autoCapture;
   lines.push(
     `  ${ui.dim('auto_capture')}: ${capture.declared}${capture.declared === capture.effective ? '' : ` -> ${ui.yellow(capture.effective)}`}`,
@@ -403,6 +437,17 @@ export function formatStatus(result: StatusResult, ui: Ui = getUi()): string {
   if (rendersLearningProtocol(capture.effective)) {
     lines.push(
       `                ${ui.dim(`projected rules include a ${LEARNING_PROTOCOL_HEADING} section`)}`,
+    );
+  }
+  // hook 档：钩子装到哪几家、哪几家没有落点（等同 off）——两张名单都要可见
+  if (capture.hookTargets.length > 0) {
+    lines.push(
+      `                ${ui.dim(`session hook (${SESSION_HOOK_EVENT}) written for: ${renderList(capture.hookTargets)}`)}`,
+    );
+  }
+  if (capture.hookUnsupportedTargets.length > 0) {
+    lines.push(
+      `                ${ui.yellow(`no session hook target: ${renderList(capture.hookUnsupportedTargets)} (behaves as off)`)}`,
     );
   }
   if (capture.ciNote !== null) {
