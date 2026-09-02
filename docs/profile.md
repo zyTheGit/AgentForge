@@ -55,6 +55,13 @@ learning:
 
 给 `targets` 默认值会伪造用户选择，所以它是唯一的必填项；`templates` / `mcp.servers` / `skills.*` 都是内容型数组，缺省即「未设置」，好让两层继承能区分「显式空数组」和「没写」。
 
+`targets` 的取值域分两层，各有**一个**事实源，代码里也确实只有这一份：
+
+- **运行时可用集合** = projector 注册表（`src/core/project/projectors/registry.ts`）。`aforge sync --targets` 的合法性校验每次现读注册表内容（不再对照另写一份常量），因此运行时新注册的 projector 会立刻被 `--targets` 认下。
+- **`profile.yaml` 的取值域** = 内置 id 元组（`src/core/project/target-ids.ts`）。`schema/profile.ts` 的 `TargetEnum` 与注册表的装配表都从这个叶子模块取同一份元组（叶子模块零 import，避免 `schema/profile → registry` 成环），所以加内置 projector 时漏改一处即编译失败。
+
+注意 `profile.yaml` 这一侧目前仍**只接受四个内置 id**——第三方 target 能不能写进本文件，取决于外部适配器加载方案（roadmap Phase 3「适配器插件化」第二层）如何落地。
+
 `templates` 里能填哪些 id，取决于 user 层 `sources.json` 中登记且**已启用**的源（`sources.json` 与 `store\` 恒在 user 层）。`aforge init` 默认注册的官方模板源是**禁用**态，启用方式、pin 策略与离线行为见 [命令速查](commands.md#官方模板源默认注册默认禁用)。
 
 ## mcp

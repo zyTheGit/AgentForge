@@ -23,7 +23,8 @@ import { currentOs, type OsContext } from '../paths';
 import type { SkillMaterializeSkip } from '../sources/skill';
 import { readSkillsToMaterialize } from '../sources/skill';
 import { resolveCommandsToExpose } from './commands';
-import { ALL_TARGET_IDS, type SyncItemStatus } from './sync-types';
+import { registeredTargetIds } from './projectors/registry';
+import type { SyncItemStatus } from './sync-types';
 import type { CommandArtifact, ProjectContext, ProjectionPlan, SkillArtifact } from './types';
 import { DEFAULT_PROJECTION_MARKERS, type ProjectionMarkers } from './writer';
 
@@ -53,8 +54,11 @@ export async function assertInitialized(
 /**
  * --targets 过滤（Spec §6 命令表）：
  * - 未给 / 空 → profile.targets 全量；
- * - 含未知 target id（不在四个枚举内）→ ConfigError(2)；
+ * - 含未知 target id（**不在注册表内**）→ ConfigError(2)；
  * - 过滤后与 profile.targets 无交集 → ConfigError(2)（指定的 target 未启用）。
+ *
+ * 校验基准是 `registeredTargetIds()`（每次现取），不是内置四件套的字面量常量：
+ * 常量与注册表是两份事实源，后补注册的 target 会被判为「未知」而永远进不来。
  */
 export function filterTargets(
   profileTargets: readonly string[],
@@ -63,10 +67,11 @@ export function filterTargets(
   if (filter === undefined || filter.length === 0) {
     return [...profileTargets];
   }
+  const known = registeredTargetIds();
   for (const id of filter) {
-    if (!(ALL_TARGET_IDS as readonly string[]).includes(id)) {
+    if (!known.includes(id)) {
       throw new ConfigError(`未知 target: ${id}`, {
-        hint: `有效值: ${ALL_TARGET_IDS.join(', ')}`,
+        hint: `有效值: ${known.join(', ')}`,
         details: { id, filter },
       });
     }

@@ -1,5 +1,6 @@
 /**
- * 泛型 Registry 单测：register / get / has / list、重复注册冲突、惰性工厂、缓存。
+ * 泛型 Registry 单测：register / get / has / ids / list、重复注册冲突、惰性工厂、缓存，
+ * 以及运行时**后补注册**的可见性语义（Phase 3 target 全集动态派生的前提）。
  */
 import { describe, expect, it } from 'vitest';
 import { GenericError } from '../../src/core/errors';
@@ -62,5 +63,56 @@ describe('Registry<T>', () => {
   it('空注册表：list 为空数组', () => {
     const registry = new Registry<unknown>();
     expect(registry.list()).toEqual([]);
+  });
+
+  it('ids：按注册顺序返回 id 且不触发实例化', () => {
+    let factoryCalls = 0;
+    const registry = new Registry<string>();
+    registry.register('second', () => {
+      factoryCalls += 1;
+      return '2';
+    });
+    registry.register('first', () => '1');
+    expect(registry.ids()).toEqual(['second', 'first']);
+    expect(factoryCalls).toBe(0);
+  });
+});
+
+/**
+ * 后补注册（运行时 register）语义：容器内不存在「一次算好」的快照，
+ * register 之后 ids / list / has / get 立刻反映新项——这是 Phase 3
+ * 「target 全集从注册表动态派生」的前提（旧 REGISTERED_PROJECTORS 是模块级快照，
+ * 后补注册永远不可见）。
+ */
+describe('Registry<T> 后补注册语义', () => {
+  it('register 后 ids / list / has / get 立刻反映新项', () => {
+    const registry = new Registry<string>();
+    registry.register('a', () => 'A');
+    // 先消费一次（旧实现在此刻算快照）
+    expect(registry.list()).toEqual(['A']);
+    expect(registry.ids()).toEqual(['a']);
+
+    registry.register('late', () => 'LATE');
+    expect(registry.ids()).toEqual(['a', 'late']);
+    expect(registry.list()).toEqual(['A', 'LATE']);
+    expect(registry.has('late')).toBe(true);
+    expect(registry.get('late')).toBe('LATE');
+  });
+
+  it('后补注册撞已有 id → 仍是 GenericError(1)，原实例不被替换', () => {
+    const registry = new Registry<string>();
+    registry.register('a', () => 'A');
+    expect(registry.get('a')).toBe('A');
+    expect(() => registry.register('a', () => 'A2')).toThrow(GenericError);
+    expect(registry.get('a')).toBe('A');
+    expect(registry.ids()).toEqual(['a']);
+  });
+
+  it('后补注册不影响未知 id 的降级语义（get → undefined / has → false）', () => {
+    const registry = new Registry<string>();
+    registry.register('a', () => 'A');
+    registry.register('late', () => 'LATE');
+    expect(registry.get('missing')).toBeUndefined();
+    expect(registry.has('missing')).toBe(false);
   });
 });

@@ -23,7 +23,7 @@ import { runDetection } from '../../core/detector/engine';
 import type { EnvSnapshot, Scope } from '../../core/env';
 import { readEnv } from '../../core/env';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
-import { ALL_TARGET_IDS, syncOnce } from '../../core/project/engine';
+import { BUILTIN_TARGET_IDS, syncOnce } from '../../core/project/engine';
 import { claudeMainRulePath } from '../../core/project/projectors/claude';
 import { codexMainRulePath } from '../../core/project/projectors/codex';
 import { opencodeMainRulePath } from '../../core/project/projectors/opencode';
@@ -88,7 +88,7 @@ export function targetMainRulePaths(
   ctx: InitContext,
   env: EnvSnapshot,
   scope: Scope,
-): Readonly<Record<(typeof ALL_TARGET_IDS)[number], string>> {
+): Readonly<Record<(typeof BUILTIN_TARGET_IDS)[number], string>> {
   const profile = ProfileSchema.parse(windowsDefaultProfile());
   const habits = HabitsSchema.parse(defaultHabits());
   const planCtx: ProjectContext = {
@@ -259,8 +259,14 @@ async function runInitInteractiveFlow(
   }
 
   // ---- ④ 目标 Agent multiselect（默认全选；hint 显示各 target 主规则绝对路径）----
+  // 选项取**内置** target（BUILTIN_TARGET_IDS）而非注册表全集：结果要写进
+  // profile.yaml 的 targets，而该字段的 schema 枚举只认内置四个（TargetEnum）。
+  // 用注册表全集会让用户选中第三方 target 后在写盘时被 ProfileSchema 拒掉，
+  // 报一条来源不明的 schema 错误。
+  // 耦合点：Phase 3 第二层放开 TargetEnum（允许第三方 target 进 profile.yaml）时，
+  // 此处需同步改为注册表全集（registeredTargetIds()），否则新 target 在交互 init 里选不到。
   const mainRulePaths = targetMainRulePaths(ctx, env, scope);
-  const targetOptions: readonly PromptOption<string>[] = ALL_TARGET_IDS.map((targetId) => ({
+  const targetOptions: readonly PromptOption<string>[] = BUILTIN_TARGET_IDS.map((targetId) => ({
     value: targetId,
     label: targetId,
     hint: mainRulePaths[targetId],
@@ -268,12 +274,12 @@ async function runInitInteractiveFlow(
   const targets = await ctx.prompt.multiselect<string>(
     '目标 Agent（空格切换，回车确认）',
     targetOptions,
-    [...ALL_TARGET_IDS],
+    [...BUILTIN_TARGET_IDS],
     true,
   );
-  // multiselect 选项即由 ALL_TARGET_IDS 构造，结果必为其子集；过滤收窄类型供 profile 使用
-  const selectedTargets = targets.filter((t): t is (typeof ALL_TARGET_IDS)[number] =>
-    (ALL_TARGET_IDS as readonly string[]).includes(t),
+  // multiselect 选项即由 BUILTIN_TARGET_IDS 构造，结果必为其子集；过滤收窄类型供 profile 使用
+  const selectedTargets = targets.filter((t): t is (typeof BUILTIN_TARGET_IDS)[number] =>
+    (BUILTIN_TARGET_IDS as readonly string[]).includes(t),
   );
 
   // ---- ⑤ 写入确认（显示将创建的文件列表；n → cancelled，不写任何文件）----

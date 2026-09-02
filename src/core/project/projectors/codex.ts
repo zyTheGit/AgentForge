@@ -224,8 +224,8 @@ export function codexMainRulePath(ctx: ProjectContext): string {
   return api.join(base, CODEX_MAIN_RULE_FILENAME);
 }
 
-/** 本次 scope 下的 skills 根：project = `<root>\.agents\skills`；user = `CODEX_HOME\skills`。 */
-function codexSkillsRoot(ctx: ProjectContext): string {
+/** skills 根目录（project / user 两个 scope 不同）。 */
+export function codexSkillsDir(ctx: ProjectContext): string {
   const api = pathApiFor(ctx.os);
   // §2.3：project = `<root>\.agents\skills\<name>\SKILL.md`
   // §8.4：user = `CODEX_HOME\skills\` 或 `~\.codex\skills\`
@@ -236,7 +236,7 @@ function codexSkillsRoot(ctx: ProjectContext): string {
 
 /** 单个 skill 的目标 SKILL.md 路径（project / user 两个 scope 的 skills 根不同）。 */
 export function codexSkillPath(ctx: ProjectContext, skillName: string): string {
-  return skillDocPath(pathApiFor(ctx.os), codexSkillsRoot(ctx), skillName);
+  return skillDocPath(pathApiFor(ctx.os), codexSkillsDir(ctx), skillName);
 }
 
 /**
@@ -254,7 +254,7 @@ export function codexSkillPath(ctx: ProjectContext, skillName: string): string {
 export function codexSkillPolicyPath(ctx: ProjectContext, skillName: string): string {
   const api = pathApiFor(ctx.os);
   return api.join(
-    codexSkillsRoot(ctx),
+    codexSkillsDir(ctx),
     skillName,
     CODEX_SKILL_AGENTS_DIRNAME,
     CODEX_SKILL_POLICY_FILENAME,
@@ -322,6 +322,9 @@ export const codexProjector: Projector = {
    * `/<name>` 不展开。status 必须显式提示，否则用户会以为 codex 没生效。
    */
   skillInvokePrefix: '$',
+
+  skillDir: codexSkillsDir,
+  skillPath: codexSkillPath,
 
   /**
    * 四家里唯一支持"独立文件 + 纯配置数据"的会话钩子声明（§7.4 hook 档）。

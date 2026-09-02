@@ -151,7 +151,7 @@ export async function runMcpRemove(
 /**
  * 本次写入层对应的、需要手工清理 MCP 键的投影文件绝对路径（逐条列给用户）。
  *
- * 为什么不像 skill remove 那样直接调 projector（那边用 opencodeSkillPath 等四个函数）：
+ * 为什么不像 skill remove 那样直接调 projector（那边走 `Projector.skillPath` 接口）：
  * MCP 侧的落点判定只有「基准根 + 目录段 + 文件名」三段，projector 的
  * opencodeMcpPath / claudeMcpPath / piMcpPath 里除此之外没有别的逻辑，而它们的入参是
  * 完整 ProjectContext（profile / habits / renderedRulesMd / marker 等）——为三个常量拼接
