@@ -10,6 +10,8 @@
  * 备份），所以产物数量与路径深度必须卡死。
  */
 
+import { CODEX_HOME_ENV, PI_AGENT_DIR_ENV } from '../paths';
+
 /** `adapters/` 目录名（user 层与 project 层同名）。 */
 export const ADAPTERS_DIRNAME = 'adapters';
 
@@ -37,12 +39,19 @@ export const ADAPTER_MAX_PATH_DEPTH = 24;
  * 变量指向的目录与「某个 agent 的配置根」毫无关系，允许自由取值等于把落点交给
  * 环境。名单里的每一项都是**某个上游客户端自己**用来定位配置根的变量。
  *
- * 注意：过了白名单**不等于**过了 containment——变量指向的目录仍要经
- * core/adapters/containment 校验（UNC 一律拒，见那里的 JSDoc）。
+ * 前两项复用 core/paths 的字面量（`CODEX_HOME` / `PI_CODING_AGENT_DIR` 是内置
+ * projector 与统一守卫已经在用的入口名，PR #59）：同一个变量名在两处各写一遍
+ * 迟早对不上。后四项是 XDG / Windows 的通用配置根，不是 AgentForge 的入口，
+ * 所以只在这里出现。
+ *
+ * 注意：过了白名单**不等于**过了 containment。名单只管「变量名能不能写」；
+ * **取值**合法性（`~` 展开 / UNC / win32 无盘符绝对路径）由 core/paths.validatePath
+ * 统一判（调用点在 core/adapters/loader.readWhitelistedEnv），落点是否越界由
+ * core/adapters/containment 判。三件事各有一处判据，不重叠。
  */
 export const ADAPTER_ENV_WHITELIST = [
-  'CODEX_HOME',
-  'PI_CODING_AGENT_DIR',
+  CODEX_HOME_ENV,
+  PI_AGENT_DIR_ENV,
   'XDG_CONFIG_HOME',
   'XDG_DATA_HOME',
   'APPDATA',

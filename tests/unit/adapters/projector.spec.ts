@@ -196,10 +196,16 @@ describe('buildDeclarativeProjector — MCP dialect', () => {
     });
   }
 
-  // transport 显式给出：ctx.mcpServers 在生产上来自 ProfileSchema（transport 有默认
-  // 值 stdio），手搓字面量绕过 schema 会让 transport 能力矩阵查表拿到 undefined
+  // transport / enabled 显式给出：ctx.mcpServers 在生产上来自 ProfileSchema（两者都有
+  // 默认值），手搓字面量绕过 schema 会让 transport 能力矩阵查表拿到 undefined
   const servers = [
-    { name: 'fs', transport: 'stdio' as const, command: 'npx', args: ['-y', 'srv'] },
+    {
+      name: 'fs',
+      enabled: true,
+      transport: 'stdio' as const,
+      command: 'npx',
+      args: ['-y', 'srv'],
+    },
   ];
 
   it('dialect=mcpServers → {"mcpServers":{...}}（Claude 形状）', () => {

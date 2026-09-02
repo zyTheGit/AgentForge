@@ -14,7 +14,14 @@
  */
 import type { Host } from '../../infra/host';
 import type { EnvSnapshot } from '../env';
-import { type OsContext, pathApiFor, resolveProjectSoT, resolveUserSoT } from '../paths';
+import {
+  hasFixedRoot,
+  type OsContext,
+  pathApiFor,
+  resolveProjectSoT,
+  resolveUserSoT,
+  validatePath,
+} from '../paths';
 import { projectorRegistry } from '../project/projectors/registry';
 import { registerDeclarativeTargetId, resetDeclarativeTargetIds } from '../project/target-ids';
 import type { Projector } from '../project/types';
@@ -51,13 +58,41 @@ export interface LoadDeclarativeAdaptersOptions {
   readonly registry?: Registry<Projector>;
 }
 
-/** 读取白名单环境变量的当前取值（plan 是纯函数，环境只在这里读一次）。 */
-function readWhitelistedEnv(host: Host): Readonly<Partial<Record<AdapterEnvName, string>>> {
+/**
+ * 读取白名单环境变量的当前取值（plan 是纯函数，环境只在这里读一次）。
+ *
+ * **取值合法性统一走 core/paths.validatePath（PR #59 的统一守卫）**，不在这里另写一套：
+ * `~` 展开 → 形态校验（UNC / win32 无盘符绝对路径 / `~user`）→ 绝对化，与
+ * `AGF_HOME` / `CODEX_HOME` / `PI_CODING_AGENT_DIR` / 项目目录四个入口同一份判据。
+ * 好处不只是少一份代码：`CODEX_HOME=~/.codex-alt` 以前会被「不是绝对路径」静默丢掉，
+ * 现在与内置 codex projector 看到的是同一个落点。
+ *
+ * 在守卫之上多一条**更严**的策略：取值必须给出确定的落点（`hasFixedRoot`，也是守卫
+ * 自己的判据）。守卫按历史语义放过相对取值、只让 doctor 报 warn，对内置 codex / pi
+ * 是合适的——那只是产物位置随 cwd 漂移。但对适配器，这个取值是**允许根**：根随
+ * `aforge sync` 的启动目录漂移，等于 containment 的边界本身会动。边界不能是浮动的。
+ *
+ * 被拒的取值（守卫拒绝，或不是确定落点）→ **从名单里摘掉**，而不是让整次加载失败：
+ * 环境变量写错不是适配器的错，`CODEX_HOME` / `PI_CODING_AGENT_DIR` 的诊断已由 doctor
+ * 的 `checkTargetDirOverrides` 负责（那里会报 error / warn 并给出取值）。摘掉之后引用
+ * `{env:X}` 的模板自然算不出落点，那个适配器会带着自己的 yaml 路径报 `template`
+ * 失败——比在这里抛一个跟适配器无关的错更好定位。
+ */
+function readWhitelistedEnv(
+  host: Host,
+  env: EnvSnapshot,
+  os: OsContext,
+): Readonly<Partial<Record<AdapterEnvName, string>>> {
   const values: Partial<Record<AdapterEnvName, string>> = {};
   for (const name of ADAPTER_ENV_WHITELIST) {
     const raw = host.env(name)?.trim();
-    if (raw !== undefined && raw !== '') {
-      values[name] = raw;
+    if (raw === undefined || raw === '' || !hasFixedRoot(raw, os)) {
+      continue;
+    }
+    try {
+      values[name] = validatePath(raw, os, { origin: name, home: env.userProfile });
+    } catch {
+      // 守卫拒绝（UNC / 无盘符绝对路径 / `~user` / `~` 但无家目录）：该变量不进允许根
     }
   }
   return values;
@@ -191,7 +226,7 @@ async function loadAll(opts: LoadDeclarativeAdaptersOptions): Promise<AdapterLoa
   const userSoTRoot = tryResolveUserSoT(env, os);
   const projectSoTRoot = resolveProjectSoT(cwd, os);
   const allowProject = host.env(ADAPTER_ALLOW_PROJECT_ENV)?.trim() === '1';
-  const envValues = readWhitelistedEnv(host);
+  const envValues = readWhitelistedEnv(host, env, os);
 
   const discovery = await discoverAdapters({
     host,

@@ -44,6 +44,7 @@ import {
 } from '../project/sync-notices';
 import { renderRulesMd } from '../project/sync-prepare';
 import type { ProjectContext } from '../project/types';
+import { templateSourcesProvider } from '../sources/render-scope';
 import type { DoctorRoots } from './check-config';
 import type { EnabledPlan } from './check-paths';
 import { type DoctorCheckResult, errHint, errMessage, toDoctorCode } from './check-types';
@@ -89,7 +90,15 @@ export async function renderForDoctor(
   }
 }
 
-/** §9 第 5 条：未解析的 template id（sync 将失败，error(2)）。 */
+/**
+ * §9 第 5 条：未解析的 template id（sync 将失败，error(2)）。
+ *
+ * 「templates 引用了**已禁用源**的模板」不另立检查项：解析链路（resolveTemplate 第
+ * 4 层）现在以 `sources.json` 的 `enabled` 为判据，这种 id 本来就解析不到，于是它
+ * 直接落进本项的 `template/<id>` error(2)，detail 点名是哪个禁用源、hint 给出
+ * 「启用该源」与「从 profile.templates 移除」两条动作。再加一条 warn 只会让同一件事
+ * 在体检报告里出现两次，而两处措辞早晚会分叉。
+ */
 export async function checkTemplates(
   host: Host,
   results: DoctorCheckResult[],
@@ -108,13 +117,14 @@ export async function checkTemplates(
     return;
   }
   let unresolved = false;
+  const sources = templateSourcesProvider(host, userRootForLoad);
   for (const id of templateIds) {
     try {
       await resolveTemplate(id, {
         host,
         userSoTRoot: userRootForLoad,
         projectSoTRoot,
-        storeRoot: path.join(userRootForLoad, 'store'),
+        sources,
       });
     } catch (err) {
       unresolved = true;

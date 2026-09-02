@@ -8,7 +8,7 @@
  *    "投影可能过期或被修改"；区间与上次 sync 记录不一致时提示被手动修改）；
  * 4. 坏 YAML（habits / profile 任一层解析失败 → error(2)）；
  * 5. 未解析的 template id（error(2)——sync 将失败）；
- * 6. OneDrive 检测（§2.1.1 → warn）；
+ * 6. OneDrive 检测（§2.1.1 → warn；用户目录 / 用户级 SoT 根 / 项目目录）；
  * 7. 声明值与 detected 不一致（§4.1：声明优先，仅提示 → warn）；
  * 8. 现有 merge_json 投影损坏（硬项 error(3)，soft 项 warn——§8.2/§8.6）；
  * 9. profile.skills.on_demand 名单（Phase 2 按需装载：未装 / 被 always 遮蔽 /
@@ -84,8 +84,8 @@ import {
 import {
   checkDeclaredVsDetected,
   checkOneDrive,
-  checkPiCodingAgentDir,
   checkSkillsSymlinks,
+  checkTargetDirOverrides,
 } from './check-environment';
 import { checkMcpTransport } from './check-mcp-transport';
 import { buildPlanCtx, checkTargetPaths, collectEnabledPlans } from './check-paths';
@@ -93,14 +93,7 @@ import { checkProjectionHashes } from './check-projection-hash';
 import { piLegacyMcpResults, residualResults } from './check-residuals';
 import { checkSkillsCopyMode, checkSkillsOnDemand } from './check-skills';
 import { checkDefaultSources } from './check-sources';
-import {
-  type DoctorCheckResult,
-  type DoctorReport,
-  doctorExitCode,
-  errHint,
-  errMessage,
-  toDoctorCode,
-} from './check-types';
+import { type DoctorCheckResult, type DoctorReport, doctorExitCode } from './check-types';
 import { checkSotWritable, checkTargetDirsWritable } from './check-writable';
 
 export {
@@ -163,34 +156,28 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
     config = await resolveConfigForDoctor(host, results, env, roots);
   }
 
+  // ---- CODEX_HOME / PI_CODING_AGENT_DIR 落点确认（§2.2；相对路径 → warn）----
+  // 必须排在依赖 projector 的检查之前：非法取值会让 projector.plan 抛 ConfigError，
+  // 报完 error 后把该取值摘掉，后续检查按默认落点继续跑（否则整份报告一起丢）
+  const envForPlan = checkTargetDirOverrides(results, env, os);
+
+  // 「报告不被截断」只有两处机制，刻意不加第三层整块 try/catch（PR #59 / #53）：
+  // 1. **消因**：上面这一行把非法的外部路径取值报成 error 后从 env 里摘掉，内置
+  //    projector 于是不会再抛；
+  // 2. **接缝兜底**：声明式适配器无法用同样的办法消因（模板算不出落点就是算不出，
+  //    没有"合法的默认值"可退回），所以 check-paths 在**逐 projector** 的粒度上兜
+  //    （planSafely）。
+  // 再套一层整块 catch 会把「新增检查项真的有 bug」掩盖成一条 warn，而且同一件事
+  // 出现两份判据，下次改动必有一处漏改。
   if (config !== undefined) {
-    // 依赖 EffectiveConfig 的整块检查用 try/catch 兜住：单项检查的失败已在各自内部
-    // 降级，这里防的是「新增检查项忘了兜」——诊断工具在最需要它的时刻整份消失
-    // （PR #59）是最坏的失效模式，宁可少报一块也不能把已收集的结果丢掉。
-    try {
-      await runConfigDependentChecks(host, results, env, os, cwd, roots, config);
-    } catch (err) {
-      results.push({
-        section: 'consistency',
-        level: 'error',
-        code: toDoctorCode(err),
-        item: 'config-dependent-checks',
-        detail: `依赖配置的检查中断，后续同组检查未执行: ${errMessage(err)}`,
-        ...(errHint(err) === undefined
-          ? { hint: '按上面的错误修复后重跑 aforge doctor' }
-          : { hint: errHint(err) as string }),
-      });
-    }
+    await runConfigDependentChecks(host, results, envForPlan, os, cwd, roots, config);
   }
 
   // ---- 默认注册源（官方模板源）：登记 / 启用 / 缓存状态与 pin（只读 fs，零网络）----
   await checkDefaultSources(host, results, env, os, cwd, userSoTRoot);
 
-  // ---- OneDrive 检测（§2.1.1 → warn）----
-  checkOneDrive(results, env, host);
-
-  // ---- PI_CODING_AGENT_DIR 置位确认（§2.2：user scope 落点按它解析 → ok）----
-  checkPiCodingAgentDir(results, env);
+  // ---- OneDrive 检测（§2.1.1 → warn；用户目录 / 用户级 SoT 根 / 项目目录三处）----
+  checkOneDrive(results, env, host, { userSoTRoot, projectRoot: cwd });
 
   // ---- §9 symlink 检查：扫描 SoT skills/，任何 symlink 条目 → warn（含仍有效的）----
   await checkSkillsSymlinks(host, results, userSoTRoot, projectSoTRoot);

@@ -533,6 +533,26 @@ describe('runDoctorChecks — OneDrive（§2.1.1）', () => {
     expect(od.detail).toContain(odHome);
     expect(od.hint).toContain('OneDrive');
   });
+
+  it('AGF_HOME 落在 OneDrive 下、用户目录不在 → 仍然 warn（Issue #51 第 4 条）', async () => {
+    // 修好之前 checkOneDrive 只看 env.userProfile，这条完全沉默——而它的 hint 恰恰叫用户
+    // 「把 AGF_HOME 与项目目录移出 OneDrive」，检查面比承诺的窄一圈
+    const odSotRoot = path.resolve('/od/OneDrive/af-home');
+    const host = createDoctorHost({ AGF_HOME: odSotRoot });
+    await seedProjectSoT(host);
+    const od = resultOf(await runDoctorChecks(doctorOpts(host)), 'onedrive');
+    expect(od.level).toBe('warn');
+    expect(od.detail).toContain('用户级 SoT 根');
+    expect(od.detail).toContain(odSotRoot);
+  });
+
+  it('ok 文案列出实际检查过的三条路径（用户目录 / 用户级 SoT 根 / 项目目录）', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host);
+    const od = resultOf(await runDoctorChecks(doctorOpts(host)), 'onedrive');
+    expect(od.level).toBe('ok');
+    expect(od.detail).toContain('项目目录');
+  });
 });
 
 describe('runDoctorChecks — 投影 hash 三方比对（§8.2-4 基准）', () => {
@@ -855,6 +875,43 @@ describe('runDoctorChecks — skills/ symlink（§9）', () => {
     await seedProjectSoT(without);
     const withoutReport = await runDoctorChecks(doctorOpts(without));
     expect(withoutReport.results.some((x) => x.item === 'pi-coding-agent-dir')).toBe(false);
+  });
+
+  it('CODEX_HOME 置位 → codex-home ok（此前根本没有对应条目，Issue #51 第 2 条）', async () => {
+    const host = createFakeHost({ HOME, CODEX_HOME: path.join(HOME, 'codex-alt') });
+    await seedProjectSoT(host);
+    const r = resultOf(await runDoctorChecks(doctorOpts(host)), 'codex-home');
+    expect(r.level).toBe('ok');
+    expect(r.detail).toContain('codex-alt');
+
+    const without = createFakeHost({ HOME });
+    await seedProjectSoT(without);
+    const report = await runDoctorChecks(doctorOpts(without));
+    expect(report.results.some((x) => x.item === 'codex-home')).toBe(false);
+  });
+
+  it('CODEX_HOME 是相对路径 → warn（落点随 cwd 漂移，但不拦）', async () => {
+    const host = createFakeHost({ HOME, CODEX_HOME: 'codex-alt' });
+    await seedProjectSoT(host);
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'codex-home');
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain('相对路径');
+    expect(report.exitCode).toBe(0); // warn 不抬升退出码
+  });
+
+  it('CODEX_HOME 写成 `~user` → error(2)（sync 会撞同一个守卫）', async () => {
+    const host = createFakeHost({ HOME, CODEX_HOME: '~alice/.codex' });
+    await seedProjectSoT(host);
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'codex-home');
+    expect(r.level).toBe('error');
+    expect(r.code).toBe(ExitCode.Config);
+    expect(report.exitCode).toBe(ExitCode.Config);
+    // 报告不因非法取值被截断：依赖 projector.plan 的检查项照常产出（按默认落点解析）
+    const paths = resultOf(report, 'path/codex');
+    expect(paths.detail).toContain('.codex');
+    expect(paths.detail).not.toContain('~alice');
   });
 });
 

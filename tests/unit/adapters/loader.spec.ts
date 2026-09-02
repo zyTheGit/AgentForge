@@ -299,10 +299,20 @@ describe('loadDeclarativeAdapters — 永不抛异常', () => {
         throw new Error('boom');
       },
     };
-    // readEnv 也会踩到同一个抛错的 env()，所以这里直接构造 env 快照
+    // readEnv 也会踩到同一个抛错的 env()，所以这里直接构造 env 快照（EnvSnapshot 的
+    // 字段全给齐，缺字段是那种「运行时照样过、只有 tsc 能抓」的夹具漂移）
     const report = await loadDeclarativeAdapters({
       host,
-      env: { offline: false, ci: false, userProfile: HOME },
+      env: {
+        agfHome: undefined,
+        agfScope: undefined,
+        offline: false,
+        lineEnding: undefined,
+        ci: false,
+        codexHome: undefined,
+        piCodingAgentDir: undefined,
+        userProfile: HOME,
+      },
       os: currentOs(),
       cwd: CWD,
       registry: new Registry<Projector>(),
@@ -343,5 +353,69 @@ describe('gate.assertNoAdapterAssemblyConflicts — sync 侧 fail-fast', () => {
     }
     expect(caught).toBeInstanceOf(GenericError);
     expect((caught as GenericError).message).toContain('claude');
+  });
+});
+
+/**
+ * `{env:NAME}` 的取值合法性复用 core/paths 的统一守卫（PR #59），不在 adapters 侧
+ * 另写一份判据。这里断言的是**复用的结果**：
+ * - 守卫认的取值（含 `~` 形态）→ 该根可用，适配器加载成功；
+ * - 守卫拒的取值（UNC / win32 无盘符绝对路径）→ 该变量被摘掉；
+ * - 守卫放过但**落点会随 cwd 漂移**的相对取值 → 适配器侧额外拒（用守卫自己的
+ *   `hasFixedRoot` 判据）：允许根是 containment 的边界，边界不能浮动。
+ *
+ * 被摘掉时的表现固定为 `template` 失败——base 只声明了 `{env:CODEX_HOME}` 一个候选，
+ * 变量不可用即该 scope 算不出落点，报错带着适配器自己的 yaml 路径。
+ */
+describe('loadDeclarativeAdapters — {env:NAME} 取值走统一守卫', () => {
+  /** base 只有 `{env:CODEX_HOME}` 一个候选：变量能不能用直接决定加载成败。 */
+  function envBasedYaml(id: string): string {
+    return [
+      'version: 1',
+      `id: ${id}`,
+      'scopes:',
+      '  user:',
+      '    base: "{env:CODEX_HOME}"',
+      '    skills_dir: "{base}/skills"',
+    ].join('\n');
+  }
+
+  async function loadWithCodexHome(value: string): Promise<AdapterLoadReport> {
+    return load(
+      createAdapterHost(
+        { [path.join(USER_ADAPTERS, 'envy.yaml')]: envBasedYaml('envy') },
+        { CODEX_HOME: value },
+      ),
+    );
+  }
+
+  it('绝对取值 → 该根可用，适配器加载成功', async () => {
+    const report = await loadWithCodexHome(abs('codex-home'));
+    expect(report.failures).toEqual([]);
+    expect(report.loaded.map((entry) => entry.id)).toEqual(['envy']);
+  });
+
+  it('`~/` 形态 → 守卫展开家目录后可用（复用前会被「不是绝对路径」静默丢掉）', async () => {
+    const report = await loadWithCodexHome('~/.codex-alt');
+    expect(report.failures).toEqual([]);
+    expect(report.loaded.map((entry) => entry.id)).toEqual(['envy']);
+  });
+
+  it('相对取值 → 该变量被摘掉（允许根不能随 cwd 漂移）', async () => {
+    const report = await loadWithCodexHome('codex-home');
+    expect(report.loaded).toEqual([]);
+    expect(onlyFailure(report).kind).toBe('template');
+  });
+
+  it('UNC 取值 → 该变量被摘掉（守卫拒 UNC，adapters 侧不重判）', async () => {
+    const report = await loadWithCodexHome('\\\\attacker\\share');
+    expect(report.loaded).toEqual([]);
+    expect(onlyFailure(report).kind).toBe('template');
+  });
+
+  it('`~user` 形态 → 该变量被摘掉（守卫不猜另一个用户的家目录）', async () => {
+    const report = await loadWithCodexHome('~someone/.codex');
+    expect(report.loaded).toEqual([]);
+    expect(onlyFailure(report).kind).toBe('template');
   });
 });

@@ -18,7 +18,8 @@
  *  9. 相对路径落点（模板层已拦，这里是第二道）
  * 10. 一个允许根都没有（USERPROFILE / HOME 全缺）→ 不许「无根即通过」
  * 11. 未置位的白名单环境变量不进允许根（`CODEX_HOME` 没设时不能凭空多个根）
- * 12. 白名单环境变量取值是 UNC → 该根被丢弃（不能借 env 把 UNC 变成合法根）
+ * 12. 白名单环境变量取值是 UNC → 落点仍被拒（取值本身归 core/paths.validatePath 摘掉，
+ *     对应断言在 loader.spec.ts；containment 不重判形态，见该文件顶部的分工表）
  * 13. 白名单环境变量取值是相对路径 → 该根被丢弃
  * 14. symlink 落点逃逸：`~/.my` → `C:\Windows`
  * 15. symlink 相对目标逃逸：`~/.my` → `..\..\Windows`
@@ -51,7 +52,7 @@ const HOME = 'C:\\Users\\user';
 
 /** 默认允许根：projectRoot + userHome（无白名单环境变量置位）。 */
 function roots(envValues: Readonly<Record<string, string>> = {}) {
-  return buildAllowedRoots(PROJECT, HOME, envValues, api, WIN);
+  return buildAllowedRoots(PROJECT, HOME, envValues, api);
 }
 
 /** 断言落点被 containment 拦下（错误类型固定为 ConfigError(2) 的子类）。 */
@@ -112,7 +113,7 @@ describe('assertWithinAllowedRoots — 纯路径绕过尝试', () => {
   });
 
   it('10. 一个允许根都没有（无 projectRoot / userHome / env）→ 拒，不许"无根即通过"', () => {
-    const empty = buildAllowedRoots('', undefined, {}, api, WIN);
+    const empty = buildAllowedRoots('', undefined, {}, api);
     expect(empty.roots).toEqual([]);
     expect(() =>
       assertWithinAllowedRoots(
@@ -130,12 +131,20 @@ describe('assertWithinAllowedRoots — 纯路径绕过尝试', () => {
     expectRejected('C:\\codex-home\\skills\\x\\SKILL.md');
   });
 
-  it('12. 白名单环境变量取值是 UNC → 该根被丢弃（不能借 env 把 UNC 变成合法根）', () => {
+  it('12. 白名单环境变量取值是 UNC → 落点仍被拒（取值本身由统一守卫在 loader 处摘掉）', () => {
+    // 这里刻意**不**断言「UNC 取值不进 allowed.roots」：那是 core/paths.validatePath
+    // （PR #59 统一守卫）的职责，调用点在 loader.readWhitelistedEnv，对应断言在
+    // loader.spec.ts。containment 只保证「即使一个 UNC 根混了进来，落点也出不去」——
+    // 同一件事只留一份判据，见 containment.ts 顶部的分工表。
     const allowed = roots({ CODEX_HOME: '\\\\attacker\\share' });
-    expect(allowed.roots).toEqual([PROJECT, HOME]);
-    expectRejected('\\\\attacker\\share\\skills\\x\\SKILL.md', {
+    expect(allowed.roots).toContain(PROJECT);
+    expect(allowed.roots).toContain(HOME);
+    const err = expectRejected('\\\\attacker\\share\\skills\\x\\SKILL.md', {
       CODEX_HOME: '\\\\attacker\\share',
     });
+    expect(err.message).toContain('网络路径');
+    // 反向：UNC 根混进来也不会把一个盘内落点“洗”成合法（relative 判据）
+    expectRejected('C:\\evil.md', { CODEX_HOME: '\\\\attacker\\share' });
   });
 
   it('13. 白名单环境变量取值是相对路径 → 该根被丢弃', () => {

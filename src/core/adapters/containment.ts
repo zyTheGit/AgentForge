@@ -1,15 +1,32 @@
 /**
  * 声明式适配器的 **containment 校验**（issue #53 安全边界 3）——本层最重要的护栏。
  *
+ * ## 与 core/paths.validatePath（PR #59 统一守卫）的分工
+ *
+ * 两者都在问「外部给的路径能不能用」，但管的是**不同的东西**，不能合并、也不许各写
+ * 一份重叠判据：
+ *
+ * | | core/paths.validatePath | 本模块 |
+ * | --- | --- | --- |
+ * | 对象 | 用户从**进程外部**指定的**根目录**（AGF_HOME / CODEX_HOME / PI_CODING_AGENT_DIR / 项目目录） | 适配器**模板渲染出来的落点**（根 + 声明的路径段） |
+ * | 判什么 | 取值形态：`~` 展开、UNC、win32 无盘符绝对路径、`~user` | 落点相对**允许根集合**的位置关系：越界、盘符跳变、兄弟目录、symlink 逃逸 |
+ * | 时机 | 每次解析那几个入口 | 加载（含 symlink）+ 每次 plan（纯路径） |
+ * | 数据来源 | 环境 / 命令行 | `adapters/<id>.yaml` |
+ *
+ * 复用关系是**单向的**：本模块的允许根集合里，白名单环境变量那几项在
+ * `loader.readWhitelistedEnv` 里已经过了 `validatePath`，所以这里不再重判形态
+ * （只留一条 `isAbsolute` 不变量断言，见 isUsableRootValue 的 JSDoc）。反过来
+ * 守卫不知道适配器的存在，也不该知道——它看不到模板，判不了「越界」。
+ *
  * 判据：模板求值后的绝对路径，规范化之后必须落在下列**允许根**之一之下——
- * `projectRoot`、`userHome`，或某个**已置位的白名单环境变量**指向的目录
+ * `projectRoot`、`userHome`，或某个**已置位且过了守卫的**白名单环境变量指向的目录
  * （`CODEX_HOME` 这类变量本身就是「某个 agent 的配置根」，上游客户端也按它找配置，
  * 所以它指向哪里、投影就该落在哪里）。
  *
  * 拦下来的绕过手法（逐条有测试，见 tests/unit/adapters/containment.spec.ts）：
  * - `..` 目录穿越（模板层已拒，这里是第二道：环境变量值里带 `..` 时仍能拦）；
  * - 盘符跳变（`D:\...` 落点 vs `C:\Users\u` 根）；
- * - UNC / 网络路径（`\\server\share`，win32 上一律拒——Spec §2.1.1 同口径）；
+ * - UNC / 网络路径**落点**（`\\server\share`，win32 上一律拒——Spec §2.1.1 同口径）；
  * - 前缀相似的兄弟目录（`C:\Users\user2` 不算落在 `C:\Users\user` 内，靠
  *   `paths.isWithinAnyRoot` 的 relative 判据而非字符串前缀）；
  * - **symlink 逃逸**：落点自身或任一已存在的祖先目录是指向根外的 symlink
@@ -48,20 +65,23 @@ export interface AllowedRoots {
 }
 
 /**
- * 环境变量取值是否可用作允许根：必须是**绝对路径**且（win32 上）不是 UNC。
+ * 允许根候选是否可用：非空且是**绝对路径**。
  *
- * UNC 一律拒：Spec §2.1.1 已把 UNC 列为不支持，而 `{env:X}` 是唯一能把 UNC 带进
- * 落点的入口——`\\attacker\share` 会让 sync 往网络位置写文件。
+ * 这里刻意**不再判 UNC**——「外部给的路径取值形态合不合法」（`~` 展开 / UNC /
+ * win32 无盘符绝对路径 / `~user`）只有一处判据，即 core/paths.validatePath
+ * （PR #59 的统一守卫）；白名单环境变量在 loader.readWhitelistedEnv 已经过它一遍。
+ * 同一件事在这里再判一次，下次守卫改了分级就会剩一个对不上的旧判据。
+ *
+ * 落点侧的 UNC 仍要拦，见 assertWithinAllowedRoots——那是守卫看不到的东西（守卫管
+ * 「用户给的根」，落点是根 + 模板段拼出来的）。就算某个调用点漏了守卫、让 UNC 混进
+ * 允许根，`C:\...` 形态的落点也不会因此落进它内部（relative 判据），而 UNC 形态的
+ * 落点会被落点侧那道直接拒掉。
  */
-function isUsableRootValue(value: string | undefined, api: PathApi, os: OsContext): boolean {
+function isUsableRootValue(value: string | undefined, api: PathApi): boolean {
   if (value === undefined || value.trim() === '') {
     return false;
   }
-  const raw = value.trim();
-  if (os.platform === 'win32' && (raw.startsWith('\\\\') || raw.startsWith('//'))) {
-    return false;
-  }
-  return api.isAbsolute(raw);
+  return api.isAbsolute(value.trim());
 }
 
 /**
@@ -69,19 +89,20 @@ function isUsableRootValue(value: string | undefined, api: PathApi, os: OsContex
  *
  * @param projectRoot 项目根（恒可用）。
  * @param userHome 用户目录（取不到时不进集合）。
- * @param envValues 白名单环境变量的当前取值（未置位 / 非绝对 / UNC 的不进集合）。
+ * @param envValues 白名单环境变量**过完统一守卫之后**的取值：未置位、或取值被守卫
+ *   拒绝（UNC / 无盘符 / `~user`）的变量根本不会出现在这个 map 里，见
+ *   loader.readWhitelistedEnv。
  */
 export function buildAllowedRoots(
   projectRoot: string,
   userHome: string | undefined,
   envValues: Readonly<Partial<Record<AdapterEnvName, string>>>,
   api: PathApi,
-  os: OsContext,
 ): AllowedRoots {
   const roots: string[] = [];
   const labels: string[] = [];
   const push = (label: string, value: string | undefined): void => {
-    if (!isUsableRootValue(value, api, os)) {
+    if (!isUsableRootValue(value, api)) {
       return;
     }
     const resolved = api.resolve((value as string).trim());

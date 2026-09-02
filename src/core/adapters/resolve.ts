@@ -144,7 +144,6 @@ export function resolveAdapterScope(
     bindings.userHome,
     runtime.envValues,
     api,
-    os,
   );
 
   const base = renderBase(parsed.base, bindings, api);
