@@ -12,7 +12,8 @@
  *   的纯函数，assert* 一律导出，见下方 §10 小节的理由）；
  * - 依赖方向单向：manager → store。store 不反向依赖 manager，因此
  *   `SourceManagerContext` 契约随最底层消费者下沉到本文件（manager.ts 再 re-export
- *   保持对外导出面不变），避免类型环。
+ *   保持对外导出面不变），避免类型环。渲染侧（generate/resolver 第 4 层经
+ *   `./render-scope` 注入）只需其中的 host + userSoTRoot，见 SourceRegistryContext。
  */
 import path from 'node:path';
 import { atomicWrite, mkdirp } from '../../infra/fsutil';
@@ -26,12 +27,24 @@ import { isWithinAnyRoot, type OsContext, samePath, toPosixSeparators } from '..
 /** Spec §3.1：git 源缓存目录名（user 层 SoT 下）。 */
 export const STORE_DIR = 'store';
 
-/** 源管理上下文。 */
-export interface SourceManagerContext {
+/**
+ * 登记表读取与路径推导所需的**最小**上下文。
+ *
+ * 为什么单独于 SourceManagerContext 存在：渲染链路（generate/resolver 的第 4 层，
+ * 经 `./render-scope` 注入）要读登记表判 `enabled`，但它既不联网也不删盘，拿不到
+ * 也不该要求 `env` / `cwd`（sync 与 doctor 的渲染入口都没有这两项）。把"读表 + 算
+ * 路径"的依赖面收窄到这两个字段，才能不为了一次只读调用去编一个假的 EnvSnapshot。
+ * SourceManagerContext 是它的结构超集，既有调用方无需改动。
+ */
+export interface SourceRegistryContext {
   readonly host: Host;
-  readonly env: EnvSnapshot;
   /** user 层 SoT 根（sources.json 与 store\ 所在层）。 */
   readonly userSoTRoot: string;
+}
+
+/** 源管理上下文。 */
+export interface SourceManagerContext extends SourceRegistryContext {
+  readonly env: EnvSnapshot;
   /** 相对路径解析基准（addLocal 的相对 path）。 */
   readonly cwd: string;
   /** 宿主平台（store 边界判定的大小写 / 长路径前缀口径，见 assertWithinStore）。 */
@@ -50,12 +63,12 @@ export interface SourceManagerContext {
  * no-op 分支里也回报文件路径。两处都只该拿到同一个口径的路径，不该各自
  * `path.join(userSoTRoot, 'sources.json')`。
  */
-export function sourcesFilePath(ctx: SourceManagerContext): string {
+export function sourcesFilePath(ctx: SourceRegistryContext): string {
   return path.join(ctx.userSoTRoot, SOURCES_FILE);
 }
 
 /** 读 sources.json（不存在 → 空表；损坏 → ConfigError(2)，loadJson 层映射）。 */
-export async function loadSources(ctx: SourceManagerContext): Promise<Source[]> {
+export async function loadSources(ctx: SourceRegistryContext): Promise<Source[]> {
   const sources = (await loadSourcesFile(ctx.host, ctx.userSoTRoot))?.sources ?? [];
   // schema 侧 id 仅 min(1)（不加 pattern 以免破坏既有夹具），越界字符在此拦截：
   // 登记表里的 id 会直接参与 store\<id> 路径拼装与递归删除，必须逐项校验
@@ -78,14 +91,25 @@ export async function saveSources(
 }
 
 /** git 源缓存根目录：`<userSoT>\store`（全部源缓存的边界）。 */
-function storeRootDir(ctx: SourceManagerContext): string {
+function storeRootDir(ctx: SourceRegistryContext): string {
   return path.join(ctx.userSoTRoot, STORE_DIR);
 }
 
 /** git 源缓存目录：`<userSoT>\store\<id>`（id 先过 assertSourceId）。 */
-export function sourceStoreDir(ctx: SourceManagerContext, id: string): string {
+export function sourceStoreDir(ctx: SourceRegistryContext, id: string): string {
   assertSourceId(id);
   return path.join(storeRootDir(ctx), id);
+}
+
+/**
+ * 源根目录：local → 登记的 path；git → `store\<id>`。
+ *
+ * 与 sourceStoreDir 同处一个模块（都是"这个源的内容在磁盘上的哪儿"），供
+ * manifest 解析、`template list` 与渲染侧第 4 层共用同一口径——三处各自拼一遍，
+ * 「列得出的模板 id 解析不到」这类分叉就会长回来。
+ */
+export function sourceRootDir(ctx: SourceRegistryContext, source: Source): string {
+  return source.type === 'local' ? source.path : sourceStoreDir(ctx, source.id);
 }
 
 // ---------------------------------------------------------------------------
