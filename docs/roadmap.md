@@ -33,10 +33,10 @@
 
 ## 已知遗留
 
-不阻塞 Phase 2 / Phase 3 收尾，但会影响特定场景（有 issue 跟踪的注明编号）：
+不阻塞 Phase 2 / Phase 3 收尾，但会影响特定场景，均已开 issue 跟踪：
 
 - **两处仍未实机验证的上游行为**（issue [#54](https://github.com/zyTheGit/AgentForge/issues/54)，已收窄）：codex 侧 on_demand 技能的**显式 `$name` 调用**（`codex debug prompt-input` 只渲染提示词、不展开技能正文，要确认得开一次真会话），以及**在 WSL 侧跑一轮完整 `aforge sync`**。原先同列的两项已实测通过：codex sidecar 的字段路径 `policy.allow_implicit_invocation` 正确（codex 0.147.0）、opencode 对未知 frontmatter 键一律忽略（1.15.13，注入那一行是真空操作），结论见 [技能](skills.md#按需装载on_demand) 与 [平台注意事项](platform.md#wsl-互通)
-- **pi 侧 `httpTransport: "sse"` 的实际连接行为**：能力矩阵把 pi × `sse` 判为无损（`src/core/project/projectors/mcp-transport.ts` 的 `MCP_TRANSPORT_MATRIX`），依据是 pi-mcp-adapter 的文档而非实机连接测试。若与上游不符，症状是「SSE 锁定不生效、回落成 streamable HTTP」而非报错。**目前没有单独的 issue 跟踪**，见 [MCP](mcp.md#transport--target-支持矩阵)
+- **pi 侧 `httpTransport: "sse"` 的实际连接行为**（issue [#66](https://github.com/zyTheGit/AgentForge/issues/66)）：能力矩阵把 pi × `sse` 判为无损（`src/core/project/projectors/mcp-transport.ts` 的 `MCP_TRANSPORT_MATRIX`），依据是 pi-mcp-adapter 的文档而非实机连接测试。若与上游不符，症状是「SSE 锁定不生效、回落成 streamable HTTP」而非报错，且只影响**仅支持 SSE** 的 server，见 [MCP](mcp.md#transport--target-支持矩阵)
 
 ## 不予实现
 
