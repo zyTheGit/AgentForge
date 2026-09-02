@@ -23,11 +23,12 @@ import { runDetection } from '../../core/detector/engine';
 import type { EnvSnapshot, Scope } from '../../core/env';
 import { readEnv } from '../../core/env';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
-import { BUILTIN_TARGET_IDS, syncOnce } from '../../core/project/engine';
+import { BUILTIN_TARGET_IDS, registeredTargetIds, syncOnce } from '../../core/project/engine';
 import { claudeMainRulePath } from '../../core/project/projectors/claude';
 import { codexMainRulePath } from '../../core/project/projectors/codex';
 import { opencodeMainRulePath } from '../../core/project/projectors/opencode';
 import { piMainRulePath } from '../../core/project/projectors/pi';
+import { projectorRegistry } from '../../core/project/projectors/registry';
 import type { ProjectContext } from '../../core/project/types';
 import { isCancelledError, type PromptApi, type PromptOption } from '../../infra/prompt';
 import type { HabitsInput, ProfileInput } from '../../schema';
@@ -83,12 +84,19 @@ export interface InitInteractiveResult {
 /** 探测确认的三种动作（Spec §7.1.1-3）。 */
 export type DetectConfirmAction = 'confirm' | 'redetect' | 'edit';
 
-/** 四 target 的主规则绝对路径（multiselect hint 与结果打印共用）。 */
+/**
+ * 各已注册 target 的主规则绝对路径（multiselect hint 与结果打印共用）。
+ *
+ * 内置四家走各自导出的 `*MainRulePath`（与 sync 的落点同一份函数）；声明式适配器
+ * （Phase 3 第二层）没有这种具名函数，取其 plan 的**首项**路径——各 projector 的
+ * plan 都把主规则排在第一位。plan 抛错（该 scope 未声明落点等）时给出可读占位，
+ * 不让交互 init 因为一个第三方适配器崩掉。
+ */
 export function targetMainRulePaths(
   ctx: InitContext,
   env: EnvSnapshot,
   scope: Scope,
-): Readonly<Record<(typeof BUILTIN_TARGET_IDS)[number], string>> {
+): Readonly<Record<string, string>> {
   const profile = ProfileSchema.parse(windowsDefaultProfile());
   const habits = HabitsSchema.parse(defaultHabits());
   const planCtx: ProjectContext = {
@@ -111,12 +119,24 @@ export function targetMainRulePaths(
     // doctor 三处 plan ctx 均已注入，此处对齐）
     env,
   };
-  return {
+  const paths: Record<string, string> = {
     opencode: opencodeMainRulePath(planCtx),
     codex: codexMainRulePath(planCtx),
     claude: claudeMainRulePath(planCtx),
     pi: piMainRulePath(planCtx),
   };
+  for (const id of registeredTargetIds()) {
+    if (paths[id] !== undefined) {
+      continue;
+    }
+    try {
+      const projector = projectorRegistry.get(id);
+      paths[id] = projector?.plan(planCtx).items[0]?.path ?? '(no artifact in this scope)';
+    } catch {
+      paths[id] = '(unresolved - see aforge doctor)';
+    }
+  }
+  return paths;
 }
 
 /**
@@ -258,18 +278,20 @@ async function runInitInteractiveFlow(
     habitsInput = (await loadHabits(ctx.host, sotRoot)) ?? habitsInput;
   }
 
-  // ---- ④ 目标 Agent multiselect（默认全选；hint 显示各 target 主规则绝对路径）----
-  // 选项取**内置** target（BUILTIN_TARGET_IDS）而非注册表全集：结果要写进
-  // profile.yaml 的 targets，而该字段的 schema 枚举只认内置四个（TargetEnum）。
-  // 用注册表全集会让用户选中第三方 target 后在写盘时被 ProfileSchema 拒掉，
-  // 报一条来源不明的 schema 错误。
-  // 耦合点：Phase 3 第二层放开 TargetEnum（允许第三方 target 进 profile.yaml）时，
-  // 此处需同步改为注册表全集（registeredTargetIds()），否则新 target 在交互 init 里选不到。
+  // ---- ④ 目标 Agent multiselect（默认全选内置四家；hint 显示各 target 主规则绝对路径）----
+  // 选项取**注册表全集**（内置 + 已加载的声明式适配器）：Phase 3 第二层放开了
+  // `TargetEnum`（`schema/profile`），第三方 target 现在能写进 profile.yaml，
+  // 因此这里必须跟着放开——否则用户装了声明式适配器却在交互 init 里选不到它。
+  // 默认勾选仍只有内置四家：声明式适配器是用户显式安装的，但「装了」不等于
+  // 「每个项目都要投影」，替他默认勾上等于替他做决定。
   const mainRulePaths = targetMainRulePaths(ctx, env, scope);
-  const targetOptions: readonly PromptOption<string>[] = BUILTIN_TARGET_IDS.map((targetId) => ({
+  const registeredIds = registeredTargetIds();
+  const targetOptions: readonly PromptOption<string>[] = registeredIds.map((targetId) => ({
     value: targetId,
-    label: targetId,
-    hint: mainRulePaths[targetId],
+    label: (BUILTIN_TARGET_IDS as readonly string[]).includes(targetId)
+      ? targetId
+      : `${targetId} (declarative adapter)`,
+    hint: mainRulePaths[targetId] ?? '',
   }));
   const targets = await ctx.prompt.multiselect<string>(
     '目标 Agent（空格切换，回车确认）',
@@ -277,10 +299,9 @@ async function runInitInteractiveFlow(
     [...BUILTIN_TARGET_IDS],
     true,
   );
-  // multiselect 选项即由 BUILTIN_TARGET_IDS 构造，结果必为其子集；过滤收窄类型供 profile 使用
-  const selectedTargets = targets.filter((t): t is (typeof BUILTIN_TARGET_IDS)[number] =>
-    (BUILTIN_TARGET_IDS as readonly string[]).includes(t),
-  );
+  // multiselect 选项即由注册表全集构造，结果必为其子集；再过滤一遍是防脚本化
+  // prompt（测试）返回表外取值后把非法 id 写进 profile.yaml
+  const selectedTargets = targets.filter((t) => registeredIds.includes(t));
 
   // ---- ⑤ 写入确认（显示将创建的文件列表；n → cancelled，不写任何文件）----
   const habitsFile = path.join(sotRoot, HABITS_FILE);

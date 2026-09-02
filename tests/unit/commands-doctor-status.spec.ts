@@ -146,6 +146,11 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
         { targetId: 'codex', paths: [], skillInvokePrefix: '$' },
       ],
       skippedTargets: ['future-target'],
+      // 声明式适配器（issue #53）：本条只覆盖内置 target，两张适配器名单留空——
+      // 空名单时整节不打，下面 not.toContain 固化这一点
+      unresolvedTargets: [],
+      declarativeAdapters: [],
+      ignoredAdapters: [],
       lastSyncAt: '2026-08-21T00:00:00.000Z',
       counts: { custom: 3, learnings: 5, templates: 2 },
       // Spec §4.2 skills.always / skills.on_demand（新增展示字段）
@@ -182,6 +187,8 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
     expect(text).toContain('learnings : 5');
     expect(text).toContain('templates : 2');
     expect(text).toContain('future-target: (no projector in this version)');
+    // 一个声明式适配器都没有 → 整节不打（绝大多数用户只用内置四家）
+    expect(text).not.toContain('declarative adapters');
     // §4.2：always 由 sync 物化并进模型清单；on_demand 也物化，但不进自动路由清单
     expect(text).toContain('always    : code-review (materialized by sync)');
     expect(text).toContain(
@@ -209,6 +216,9 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       enabledTargets: [],
       targets: [],
       skippedTargets: [],
+      unresolvedTargets: [],
+      declarativeAdapters: [],
+      ignoredAdapters: [],
       lastSyncAt: null,
       counts: { custom: 0, learnings: 0, templates: 0 },
       alwaysSkills: [],
@@ -241,6 +251,9 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       enabledTargets: [],
       targets: [],
       skippedTargets: [],
+      unresolvedTargets: [],
+      declarativeAdapters: [],
+      ignoredAdapters: [],
       lastSyncAt: null,
       counts: { custom: 0, learnings: 0, templates: 0 },
       alwaysSkills: [],
@@ -270,6 +283,9 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       enabledTargets: ['codex', 'claude'],
       targets: [],
       skippedTargets: [],
+      unresolvedTargets: [],
+      declarativeAdapters: [],
+      ignoredAdapters: [],
       lastSyncAt: null,
       counts: { custom: 0, learnings: 0, templates: 0 },
       alwaysSkills: [],
@@ -303,6 +319,9 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       enabledTargets: ['claude'],
       targets: [],
       skippedTargets: [],
+      unresolvedTargets: [],
+      declarativeAdapters: [],
+      ignoredAdapters: [],
       lastSyncAt: null,
       counts: { custom: 0, learnings: 0, templates: 0 },
       alwaysSkills: [],
@@ -331,6 +350,9 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       enabledTargets: [],
       targets: [],
       skippedTargets: [],
+      unresolvedTargets: [],
+      declarativeAdapters: [],
+      ignoredAdapters: [],
       lastSyncAt: null,
       counts: { custom: 0, learnings: 0, templates: 0 },
       alwaysSkills: [],
@@ -359,6 +381,9 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       enabledTargets: [],
       targets: [],
       skippedTargets: [],
+      unresolvedTargets: [],
+      declarativeAdapters: [],
+      ignoredAdapters: [],
       lastSyncAt: null,
       counts: { custom: 0, learnings: 0, templates: 0 },
       alwaysSkills: [],

@@ -1,5 +1,5 @@
 /**
- * emit-schema 单测：内存 fs 上验证六个 Draft 2020-12 工件的生成与结构。
+ * emit-schema 单测：内存 fs 上验证七个 Draft 2020-12 工件的生成与结构。
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -13,15 +13,17 @@ const EXPECTED_FILES = [
   'sources.schema.json',
   'sync-meta.schema.json',
   'manifest.schema.json',
+  // Phase 3 第二层（issue #53）：声明式适配器 adapters/<id>.yaml
+  'adapter.schema.json',
 ];
 
 describe('emitSchemas（Spec §4 JSON Schema 工件）', () => {
-  it('生成六个工件，均为合法 JSON 且声明 Draft 2020-12 与 $id', async () => {
+  it('生成七个工件，均为合法 JSON 且声明 Draft 2020-12 与 $id', async () => {
     const host = createFakeHost();
     const outDir = path.resolve('schemas-test');
     const files = await emitSchemas(host, outDir);
 
-    expect(files).toHaveLength(6);
+    expect(files).toHaveLength(EXPECTED_FILES.length);
     expect(files.map((f) => path.basename(f)).sort()).toEqual([...EXPECTED_FILES].sort());
 
     for (const file of files) {

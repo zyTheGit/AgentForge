@@ -46,6 +46,11 @@ import {
 } from '../_shared/context';
 import { resolveJsonFlag } from '../_shared/flags';
 import {
+  collectStatusAdapters,
+  formatStatusAdapters,
+  type StatusAdapterInfo,
+} from './status-adapters';
+import {
   collectStatusAutoCapture,
   formatStatusLearning,
   type StatusAutoCaptureInfo,
@@ -89,6 +94,14 @@ export interface StatusResult {
   readonly targets: readonly StatusTargetInfo[];
   /** profile.targets 中本版本无 projector 的 target（提示用，非失败）。 */
   readonly skippedTargets: readonly string[];
+  /**
+   * 有 projector 但**算不出落点**的 target（声明式适配器模板不可解析 / 落点越界）。
+   *
+   * 与 skippedTargets 分开：两者的处置完全不同——「本版本没有 projector」是升级
+   * 或改 profile，「落点算不出来」是修 adapters/<id>.yaml。合成一节会把后者
+   * 显示成前者，用户会去等一个永远不会来的版本。详情归 aforge doctor。
+   */
+  readonly unresolvedTargets: readonly string[];
   /** 最近一次成功 sync（effective scope 层 sync-meta.lastSyncAt；无 → null）。 */
   readonly lastSyncAt: string | null;
   readonly counts: StatusCounts;
@@ -125,6 +138,14 @@ export interface StatusResult {
    * 两态同形会把"登记表损坏"显示成"没登记过任何源"。
    */
   readonly sourcesUnreadable: boolean;
+  /**
+   * 已加载的声明式适配器（Phase 3 第二层 / issue #53）：id → 来源文件。
+   *
+   * 进 status 的理由与取数、呈现规则见 ./status-adapters。
+   */
+  readonly declarativeAdapters: readonly StatusAdapterInfo[];
+  /** project 层未授权而被忽略的适配器（同上：默默不加载会被当成文件写错了）。 */
+  readonly ignoredAdapters: readonly StatusAdapterInfo[];
 }
 
 /** stat 失败（不存在 / 不可访问）→ 非文件。 */
@@ -266,15 +287,25 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
 
   const targets: StatusTargetInfo[] = [];
   const skipped: string[] = [];
+  const unresolved: string[] = [];
   for (const targetId of config.profile.targets) {
     const projector = projectorRegistry.get(targetId);
     if (projector === undefined) {
       skipped.push(targetId);
       continue;
     }
+    // 声明式适配器的 plan 会在模板不可解析 / 落点越界时抛 ConfigError(2)。status
+    // 是只读一览，不能因为一个第三方 adapter 写错就整表打不出来（诊断归 doctor）。
+    let paths: readonly string[];
+    try {
+      paths = projector.plan(planCtx).items.map((i) => i.path);
+    } catch {
+      unresolved.push(targetId);
+      continue;
+    }
     targets.push({
       targetId,
-      paths: projector.plan(planCtx).items.map((i) => i.path),
+      paths,
       skillInvokePrefix: projector.skillInvokePrefix,
     });
   }
@@ -299,6 +330,7 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     targets.map((t) => t.targetId),
   );
   const sourcesReport = await collectStatusSources(host, env, os, cwd, userSoTRoot);
+  const adapters = collectStatusAdapters();
 
   return {
     effectiveScope: config.effectiveScope,
@@ -308,6 +340,7 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     enabledTargets: [...config.profile.targets],
     targets,
     skippedTargets: skipped,
+    unresolvedTargets: unresolved,
     lastSyncAt: syncMeta?.lastSyncAt ?? null,
     counts,
     alwaysSkills: config.profile.skills.always ?? [],
@@ -315,6 +348,8 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     autoCapture,
     sources: sourcesReport.sources,
     sourcesUnreadable: sourcesReport.unreadable,
+    declarativeAdapters: adapters.loaded,
+    ignoredAdapters: adapters.ignored,
   };
 }
 
@@ -370,7 +405,17 @@ export function formatStatus(result: StatusResult, ui: Ui = getUi()): string {
   for (const id of result.skippedTargets) {
     lines.push(`  ${id}: ${ui.dim('(no projector in this version)')}`);
   }
+  for (const id of result.unresolvedTargets) {
+    lines.push(`  ${id}: ${ui.yellow('(paths unresolved - run aforge doctor)')}`);
+  }
   lines.push('');
+
+  lines.push(
+    ...formatStatusAdapters(
+      { loaded: result.declarativeAdapters, ignored: result.ignoredAdapters },
+      ui,
+    ),
+  );
 
   lines.push(`last sync: ${result.lastSyncAt ?? ui.yellow('(never - run aforge sync)')}`);
   lines.push('');

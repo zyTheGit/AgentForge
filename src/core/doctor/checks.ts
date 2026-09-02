@@ -26,10 +26,15 @@
  * 14. MCP transport × target 能力落差（Phase 2 MCP 对齐）：某家上游表达不了某种
  *     transport 时报 warn（codex 不支持 sse → 跳过；opencode 的 remote 无法区分 sse
  *     → 按 streamable HTTP 连接）；
- * 15. 默认注册源（官方模板源）：登记 / 启用 / 缓存 / pin 状态（只读 fs、零网络，恒 ok|warn）。
+ * 15. 默认注册源（官方模板源）：登记 / 启用 / 缓存 / pin 状态（只读 fs、零网络，恒 ok|warn）；
+ * 16. 声明式适配器（Phase 3 第二层 / issue #53）：已加载的第三方 target、project 层
+ *     未授权而被忽略的（warn）、加载失败的（error，退出码按成因分 1/2）。
  *
  * 设计原则：
- * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题；
+ * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题。
+ *   **这条对 projector.plan 同样成立**：声明式适配器的 plan 会抛 ConfigError，
+ *   check-paths 因此对每个 projector 单独 try/catch，整块 runConfigDependentChecks
+ *   外还有一层兜底——诊断报告在最需要它的时刻整份消失是最坏的失效模式（PR #59）；
  * - 无持久副作用：除目录可写性探针（mkdirp + 临时文件 + 删除，§7.3-7 语义）
  *   外不写任何文件——探针创建的空目录与 sync 行为一致，无害；
  * - 与 sync 共用 `sync-prepare.renderRulesMd`（不经 engine 门面）；
@@ -46,7 +51,8 @@
  * - `check-mcp-transport`：MCP transport × target 能力落差（降级 / 跳过）；
  * - `check-projection-hash`：marker 区间三方比对（当前渲染 vs 记录 vs 磁盘）；
  * - `check-environment`：declared vs detected / OneDrive / skills/ 下的 symlink。
- * - `check-sources`：源登记表与默认注册的官方模板源（只读 fs、零网络、恒不抬退出码）。
+ * - `check-sources`：源登记表与默认注册的官方模板源（只读 fs、零网络、恒不抬退出码）；
+ * - `check-adapters`：声明式适配器的加载状态（只读进程级报告，零 IO）。
  *
  * 类型与 doctorExitCode 在此 re-export：既有调用方（commands/lifecycle/doctor、测试）继续从
  * `./checks` 单点 import，拆分不改变对外导出面。
@@ -57,6 +63,7 @@ import type { EffectiveConfig } from '../config/defaults';
 import type { EnvSnapshot } from '../env';
 import { ExitCode } from '../errors';
 import type { OsContext } from '../paths';
+import { checkDeclarativeAdapters } from './check-adapters';
 import {
   checkInitialization,
   checkYamlFiles,
@@ -86,7 +93,14 @@ import { checkProjectionHashes } from './check-projection-hash';
 import { piLegacyMcpResults, residualResults } from './check-residuals';
 import { checkSkillsCopyMode, checkSkillsOnDemand } from './check-skills';
 import { checkDefaultSources } from './check-sources';
-import { type DoctorCheckResult, type DoctorReport, doctorExitCode } from './check-types';
+import {
+  type DoctorCheckResult,
+  type DoctorReport,
+  doctorExitCode,
+  errHint,
+  errMessage,
+  toDoctorCode,
+} from './check-types';
 import { checkSotWritable, checkTargetDirsWritable } from './check-writable';
 
 export {
@@ -138,6 +152,11 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
   // ---- 坏 YAML 检查（§9：逐文件报告损坏的 habits / profile）----
   const yamlOk = await checkYamlFiles(host, results, roots);
 
+  // ---- 声明式适配器（Phase 3 第二层）：已加载 / 被忽略 / 加载失败 ----
+  // 放在配置装配**之前**：profile 里写了第三方 target 时，装配会因 TargetEnum 拒收而
+  // 失败，此时用户最需要看到的就是「那个适配器为什么没加载」这一条。
+  checkDeclarativeAdapters(results);
+
   // ---- 三层配置装配（坏 YAML 时跳过——错误已在上面逐文件报告，避免重复）----
   let config: EffectiveConfig | undefined;
   if (yamlOk) {
@@ -145,7 +164,23 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
   }
 
   if (config !== undefined) {
-    await runConfigDependentChecks(host, results, env, os, cwd, roots, config);
+    // 依赖 EffectiveConfig 的整块检查用 try/catch 兜住：单项检查的失败已在各自内部
+    // 降级，这里防的是「新增检查项忘了兜」——诊断工具在最需要它的时刻整份消失
+    // （PR #59）是最坏的失效模式，宁可少报一块也不能把已收集的结果丢掉。
+    try {
+      await runConfigDependentChecks(host, results, env, os, cwd, roots, config);
+    } catch (err) {
+      results.push({
+        section: 'consistency',
+        level: 'error',
+        code: toDoctorCode(err),
+        item: 'config-dependent-checks',
+        detail: `依赖配置的检查中断，后续同组检查未执行: ${errMessage(err)}`,
+        ...(errHint(err) === undefined
+          ? { hint: '按上面的错误修复后重跑 aforge doctor' }
+          : { hint: errHint(err) as string }),
+      });
+    }
   }
 
   // ---- 默认注册源（官方模板源）：登记 / 启用 / 缓存状态与 pin（只读 fs，零网络）----
@@ -228,7 +263,7 @@ async function runConfigDependentChecks(
     await checkCodexInlineHooks(host, results, ctx, config);
 
     // ---- 有效 scope 启用 target 的投影计划（merge_json 检查与目标目录可写性共用）----
-    const enabledPlans = collectEnabledPlans(ctx, config);
+    const enabledPlans = collectEnabledPlans(ctx, config, results);
 
     // ---- 现有 merge_json 投影损坏（硬项 error(3)；soft 项 warn，§8.2/§8.6）----
     await checkMergeJson(host, results, enabledPlans);

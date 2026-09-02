@@ -109,33 +109,38 @@ describe('--targets 校验与注册表同源（后补注册可用）', () => {
   });
 
   it('注册后 --targets 认它（profile.targets 里启用）', () => {
-    // 注意：这条覆盖的是**生产上到不了**的路径——`profile.targets` 一定过
-    // `ProfileSchema.parse`，而 TargetEnum 只认四个内置 id，第三方 target 永远进不了
-    // profile.targets（下面那条用例固化了这个当前真实行为）。这里断言的是
-    // 「Phase 3 第二层放开 TargetEnum 之后」filterTargets 该有的语义：只要 id 在注册表里
-    // 且在 profile.targets 里启用，就该被选中。
+    // filterTargets 的基准是**注册表**（registeredTargetIds），与 profile 的取值域
+    // （knownTargetIds：内置 + 声明式适配器）是两套清单：直接往注册表塞的 projector
+    // 能被 --targets 认出来，却仍进不了 profile.targets（下面那条用例固化这个分层）。
     expect(filterTargets(['claude', 'fake-agent'], ['fake-agent'])).toEqual(['fake-agent']);
     // 未启用仍是「未在 profile.targets 中启用」而不是「未知 target」
     expect(() => filterTargets(['claude'], ['fake-agent'])).toThrow(/未在 profile.targets 中启用/);
   });
 
-  it('当前真实行为：第三方 target 写不进 profile.targets（TargetEnum 只认内置四个）', () => {
-    // 与上一条配对：注册表认了 fake-agent，profile schema 仍不认——这正是
-    // 「运行时集合」与「profile 取值域」当前的分层，第二层放开时这条会需要改。
+  it('裸注册进注册表不等于进 profile 取值域（声明式适配器才登记 knownTargetIds）', () => {
+    // 第二层放开 TargetEnum 后，profile.targets 的取值域 = 内置四个 +
+    // `registerDeclarativeTargetId` 登记过的声明式适配器 id。本文件用的是
+    // `projectorRegistry.register`（只进注册表、不登记取值域），所以 schema 仍拒收——
+    // 这道分层是刻意的：能被投影 ≠ 允许用户在 profile.yaml 里写。
     expect(() => ProfileSchema.parse({ version: 1, targets: ['fake-agent'] })).toThrow();
     expect(() =>
       ProfileSchema.parse({ version: 1, targets: [...BUILTIN_TARGET_IDS] }),
     ).not.toThrow();
   });
 
-  it('注册后仍未知的 id → ConfigError，且 hint 列出注册表内容（含 fake）', () => {
+  it('注册后仍未知的 id → ConfigError，且 hint 区分成因并列出注册表内容（含 fake）', () => {
     let hint: string | undefined;
     try {
       filterTargets(['claude'], ['nope']);
     } catch (err) {
       hint = err instanceof ConfigError ? err.hint : undefined;
     }
-    expect(hint).toBe('有效值: opencode, codex, claude, pi, fake-agent');
+    // 文案走 describeUnknownTargetId（与 TargetEnum 同一份）：既说清成因分类，
+    // 也照旧列出全部可用值——原先只有「有效值: ...」一行，用户无从判断是打错了
+    // 还是 adapters/*.yaml 没被加载。
+    expect(hint).toContain('当前可用: opencode, codex, claude, pi, fake-agent');
+    expect(hint).toContain('既不是内置 target，也没有对应的声明式适配器文件');
+    expect(hint).toContain('adapters/nope.yaml');
   });
 
   it('重复注册同一 id → GenericError(1)（后补注册不放宽冲突检测）', () => {

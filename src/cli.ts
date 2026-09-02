@@ -28,6 +28,10 @@ import {
   registerStatusCommand,
   registerSyncCommand,
 } from './commands/lifecycle';
+import { loadDeclarativeAdapters } from './core/adapters/loader';
+import { readEnv } from './core/env';
+import { currentOs } from './core/paths';
+import { realHost } from './infra/real-host';
 import { createUi, defaultUiProbe, detectUiCapabilities, setUi } from './infra/ui';
 import { VERSION } from './version';
 
@@ -120,6 +124,15 @@ export async function runCli(argv: readonly string[] = process.argv): Promise<vo
   const { argv: parsedArgv, colorOverride } = extractColorFlag(argv);
   // 呈现层能力必须在任何 action 打印之前固化：探测一次，全进程复用（infra/ui）
   setUi(createUi(detectUiCapabilities(defaultUiProbe(colorOverride))));
+  // 声明式适配器（Phase 3 第二层 / issue #53）必须在 parse 之前加载：`--targets` 校验与
+  // `profile.yaml` 的 targets 取值域都要看到第三方 id。加载不抛异常，失败进报告，
+  // 由 doctor 逐条报告、sync 侧闸门 fail-fast（见 core/adapters/loader 与 gate）。
+  await loadDeclarativeAdapters({
+    host: realHost,
+    env: readEnv(realHost),
+    os: currentOs(),
+    cwd: process.cwd(),
+  });
   const program = buildProgram();
   await program.parseAsync(parsedArgv);
 }

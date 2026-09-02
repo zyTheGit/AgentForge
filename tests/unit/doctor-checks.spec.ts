@@ -25,7 +25,8 @@ import { ExitCode } from '../../src/core/errors';
 import { currentOs } from '../../src/core/paths';
 import { syncOnce } from '../../src/core/project/engine';
 import { projectorRegistry } from '../../src/core/project/projectors/registry';
-import { HabitsSchema, type Profile, ProfileSchema, TargetEnum } from '../../src/schema';
+import { BUILTIN_TARGET_IDS } from '../../src/core/project/target-ids';
+import { HabitsSchema, type Profile, ProfileSchema } from '../../src/schema';
 import { createFakeHost, errnoError, type FakeHost } from './test-utils';
 
 const OS = currentOs();
@@ -1051,9 +1052,11 @@ describe('checkLearningAutoCapture — 支持度切分只看注册表命中的 t
     expect(results.some((r) => r.item === 'learning-auto-capture-hook')).toBe(false);
   });
 
-  it('TargetEnum 四个取值当前都在注册表里（因此该过滤对合法配置是恒等的）', () => {
+  it('内置四个 target id 当前都在注册表里（因此该过滤对合法配置是恒等的）', () => {
     const registered = projectorRegistry.list().map((p) => p.id);
-    for (const id of TargetEnum.options) {
+    // 第二层放开 TargetEnum 后取值域不再是闭集（声明式适配器运行时注册），
+    // 因此这里遍历内置元组而不是 enum 的 options——后者已经不存在了。
+    for (const id of BUILTIN_TARGET_IDS) {
       expect(registered).toContain(id);
     }
   });

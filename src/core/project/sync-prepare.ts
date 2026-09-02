@@ -12,6 +12,7 @@
 import path from 'node:path';
 import type { Host } from '../../infra/host';
 import type { Habits, Learning, Profile } from '../../schema';
+import { describeUnknownTargetId } from '../adapters/diagnostics';
 import { HABITS_FILE, PROFILE_FILE } from '../config/load';
 import type { EnvSnapshot } from '../env';
 import { ConfigError } from '../errors';
@@ -59,6 +60,10 @@ export async function assertInitialized(
  *
  * 校验基准是 `registeredTargetIds()`（每次现取），不是内置四件套的字面量常量：
  * 常量与注册表是两份事实源，后补注册的 target 会被判为「未知」而永远进不来。
+ *
+ * 未知 id 的提示走 `describeUnknownTargetId`（与 `schema/profile.TargetEnum` 同一份
+ * 文案）：「打错了」「适配器加载失败」「project 层未授权」三种成因的修法完全不同，
+ * 只列一遍有效值会让用户对着一个没问题的 adapters/*.yaml 反复检查。
  */
 export function filterTargets(
   profileTargets: readonly string[],
@@ -71,7 +76,7 @@ export function filterTargets(
   for (const id of filter) {
     if (!known.includes(id)) {
       throw new ConfigError(`未知 target: ${id}`, {
-        hint: `有效值: ${known.join(', ')}`,
+        hint: describeUnknownTargetId(id, known),
         details: { id, filter },
       });
     }

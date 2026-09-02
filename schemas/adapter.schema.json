@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "default": 1,
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "skill_invoke_prefix": {
+      "default": "/",
+      "type": "string",
+      "enum": ["/", "$"]
+    },
+    "main_rule": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "toggle": {
+          "default": "always",
+          "type": "string",
+          "enum": ["always", "agents_md", "claude_md", "claude_md_optional"]
+        },
+        "action": {
+          "default": "merge_marker",
+          "type": "string",
+          "enum": ["write", "merge_marker"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "commands": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "default": "subdir",
+          "type": "string",
+          "enum": ["subdir", "flatten"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "mcp": {
+      "type": "object",
+      "properties": {
+        "dialect": {
+          "type": "string",
+          "enum": ["mcpServers", "opencode"]
+        },
+        "soft": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": ["dialect"],
+      "additionalProperties": false
+    },
+    "scopes": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "object",
+          "properties": {
+            "base": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 240
+                },
+                {
+                  "minItems": 1,
+                  "maxItems": 4,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 240
+                  }
+                }
+              ]
+            },
+            "skills_dir": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "main_rule": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "commands_dir": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "mcp_file": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            }
+          },
+          "required": ["base", "skills_dir"],
+          "additionalProperties": false
+        },
+        "user": {
+          "type": "object",
+          "properties": {
+            "base": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 240
+                },
+                {
+                  "minItems": 1,
+                  "maxItems": 4,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 240
+                  }
+                }
+              ]
+            },
+            "skills_dir": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "main_rule": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "commands_dir": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "mcp_file": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            }
+          },
+          "required": ["base", "skills_dir"],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["id", "scopes"],
+  "additionalProperties": false,
+  "description": "声明式适配器（第三方 target）。路径只接受模板 + 白名单变量（{projectRoot} / {userHome} / {env:NAME}，NAME 限 CODEX_HOME | PI_CODING_AGENT_DIR | XDG_CONFIG_HOME | XDG_DATA_HOME | APPDATA | LOCALAPPDATA），解析后强制落在 projectRoot / userHome / 白名单 env 指向的目录之下，单产物路径最多 24 段；动作限 write / merge_marker / merge_json（merge_toml 不开放）。",
+  "$id": "https://agentforge.dev/schema/adapter.json",
+  "title": "AgentForge adapters/<id>.yaml"
+}
