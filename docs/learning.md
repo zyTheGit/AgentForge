@@ -63,6 +63,38 @@ age <= 30 天       → effective = base                       # 宽限期
 
 衰减也是纯函数，`now` 由命令层从 host 注入，不读系统时钟——这样测试稳定，投影产物的 `contentHash` 也不会随机器时间漂移。
 
+### 输出里怎么读
+
+`learn` 与 `learnings list` 的那一列是同一口径：未衰减只印一个数与来源，衰减后才展开 base 与天龄。
+
+```
+# aforge learn 的 conf 行 / learnings list 的第四列
+0.72 (auto)                              # 在宽限期内，或已 promote（不衰减）
+0.31 (auto, base 0.72, 214d stale)       # 已衰减；超过 180 天未 promote 才带 stale
+
+# aforge learnings list：id / 层 / 状态 / category / conf / trigger
+  l20260902043900-a1b2c3  [project]  draft     tooling     0.72 (auto)  when adding deps
+```
+
+`aforge learnings show <id>` 先原样打印条目 yaml，再追加一段 `confidence` 明细——`effective` / `base`（含来源）/ `age`（尾注为 `(promoted - no decay)`、`(within grace period)` 或 `(decaying)`）/ `heuristic` 与逐信号得分：
+
+```
+== confidence ==
+  effective : 0.31
+  base      : 0.72 (manual)
+  age       : 214d (decaying)
+  heuristic : 0.55 (signals below)
+    - length      1.00 x 0.20  正文长度落在可读区间
+    - actionable  0.67 x 0.25  含可照抄的执行信息（代码块 / 命令）
+    ...
+```
+
+（上面是 ASCII 档的样子；能显示 unicode 的终端里段头与列表符号换成 `▸` / `•`，字段与数值不变。）
+
+注意 `heuristic` 是**当场重算**的启发式分：`base` 是 `manual` 时它只表示"自动打分本来会给多少"，不是落盘值的来源。`confidence_source` 缺席的旧条目（自动打分上线前记的）显示为 `unknown`。
+
+`--json` 下这些落在 `quality` 对象里：`confidenceBase` / `confidenceEffective`（两位小数）/ `confidenceSource`（`auto` / `manual` / `null`）/ `ageDays`（一位小数）/ `decayed` / `stale` / `heuristic.{value,weighted,signals}`。
+
 ### 相似度判重
 
 算法是**归一化后的字符 trigram Jaccard**（不引新依赖）。归一化 = NFKC + 小写 + 把标点与空白折叠为单空格。为什么不按空白分词做 token Jaccard：learning 正文中英混排，中文不带空格，整句会退化成一个 token，判重直接失效；字符 trigram 对 CJK 天然可用，对词形词序的小改写也更鲁棒。正文短于 3 个字符时退化为整串相等比较。
