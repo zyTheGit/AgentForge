@@ -9,6 +9,7 @@
 | `aforge detect [--json]` | 探测本机工具链（node/python/java/dotnet/包管理器/rust/go/monorepo/CI/shell/已有规则文件），无副作用 |
 | `aforge sync [--targets a,b] [--dry-run] [--force] [--json]` | 渲染 SoT 并投影到目标 Agent（规则 marker 区间 + 技能 / MCP / [命令薄壳](skills.md#额外投影成命令expose_as_command)整文件产物） |
 | `aforge learn [--scope s] [--file f\|'-'] [--id id] [--no-auto-promote]` | 记录一条 learning（不投影；`learning.auto_promote: true` 时顺手 promote，`--no-auto-promote` 单次关掉） |
+| `aforge learn --print-protocol` | 只把 `## Learning Protocol` 正文打到 stdout 就退出。`learning.auto_capture: hook` 的会话钩子调的就是它：只读，不解析配置、不读 SoT、不写盘、不取锁 |
 | `aforge promote <id> [--to user] [--yes]` | 将 learning 升级为 custom 规则或 skill |
 | `aforge learnings list [--json]` / `show <id>` / `edit <id>` / `rm <id>` | 管理两层 SoT 的 learning 条目（`edit` 在交互终端拉起 `$EDITOR` 改条目 yaml，退出后重校验；非交互或 `--json` 时只打印路径与正文） |
 | `aforge source add <path\|git-url> [--ref r] [--id id]` | 登记规则/模板/技能来源（local 或 git） |

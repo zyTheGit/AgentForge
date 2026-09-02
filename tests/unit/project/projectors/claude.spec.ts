@@ -113,3 +113,20 @@ describe('claude 路径常量（§8.5 skills / MCP 契约位）', () => {
     expect(claudeMainRulePath(ctx)).toBe(claudeProjector.plan(ctx).items[0]?.path);
   });
 });
+
+describe('会话钩子能力（§7.4 hook 档支持矩阵）', () => {
+  it('claude 无可声明式写入的钩子落点（钩子只能并入共享的 settings.json 数组）', () => {
+    expect(claudeProjector.writesSessionHooks).toBe(false);
+  });
+
+  it('hook 档不改变 claude 的投影：与 off 档逐字相同（降级由 sync-notices / doctor 明说）', () => {
+    const withHook = buildCtx({
+      profile: ProfileSchema.parse({
+        version: 1,
+        targets: ['claude'],
+        learning: { auto_capture: 'hook' },
+      }),
+    });
+    expect(claudeProjector.plan(withHook)).toEqual(claudeProjector.plan(buildCtx()));
+  });
+});

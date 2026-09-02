@@ -214,7 +214,9 @@ export async function renderRulesMd(
     promotedLearnings, // M8：learn → promote → sync 后注入 ## Learnings 段（§5.2 第 ② 层）
     templateContents,
     os,
-    // §7.4 prompt 档：有效档位（含 hook 未实现的归并）由 learning 层判定，与环境无关
+    // §7.4：有效档位由 learning 层判定，**与环境无关**（CI、本机装了哪个 CLI 都不影响
+    // 渲染），否则同一份 SoT 会渲染出不同 marker 区间 → contentHash 跨环境漂移。
+    // 只有 prompt 档插 `## Learning Protocol` 段；hook 档走会话钩子那条投递通道
     autoCapture: effectiveAutoCapture(profile),
   });
 }

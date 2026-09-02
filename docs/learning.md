@@ -95,6 +95,69 @@ learning:
 - **CI 里不会真的采集**：`CI` 为真时 `aforge learn` 被拒（learnings 恒不落盘），但**这一段照样渲染**——投影产物与环境无关，同一份 SoT 在 CI 与本机的 `contentHash` 一致，`aforge doctor` 的 hash 比对才不会误报漂移。`status` / `doctor` 会补一句"本次不会写入"；
 - **别和 `auto_promote: true` 同开**：agent 照协议敲的 `learn` 会连带 promote，而 promote 取的是与 `sync` 同一把 `.sync.lock`，你手动 `aforge sync` 时并发就报退出码 3。`aforge doctor` 会为这个组合报一条 warn。
 
-`auto_capture: hook`（由 target 侧会话钩子确定性触发）**当前未实现**，行为等同 `off`，`aforge doctor` 会报一条 warn 而不是静默失效。
+`auto_capture: hook` 见下一节。
 
 把值改回 `off` 再 sync，该段随 marker 区间一并消失，marker 外的手写内容不受影响。
+
+## `auto_capture: hook`（会话钩子投递协议）
+
+```yaml
+learning:
+  auto_capture: hook
+```
+
+再 `aforge sync`。这一档**不往规则文件里插正文**（与 `prompt` 互斥，同时插等于同一份协议出现两遍），改由 target 的 `SessionStart` 钩子在每次会话开始时把同一份 `## Learning Protocol` 正文注入上下文——比 `prompt` 的"模型要在一篇长文档里读到它"确定性更高。
+
+### 支持矩阵
+
+| target | 支持 | 理由 |
+| --- | --- | --- |
+| codex | 是 | 支持"独立文件 + 纯配置数据"的钩子声明（`<config 层>\hooks.json`），实测 codex 0.147.0 |
+| claude | 否 | 钩子只能并入共享的 `.claude\settings.json` 的 `hooks.<Event>` **数组**，而 `merge_json` 对数组是整体替换（Spec §8.2），会吞掉你手写的钩子 |
+| opencode | 否 | 会话事件要投放可执行的 plugin **代码**才能用，不是配置数据 |
+| pi | 否 | 同上，要投放可执行的 extension 代码 |
+
+判据是"能不能只靠写配置数据把钩子装上"，不是"上游有没有会话生命周期事件"。AgentForge 不投放可执行代码到你的 agent 配置目录里——那是另一个量级的信任边界。
+
+**不支持的 target 在这一档行为等同 `off`，但不静默**：`aforge sync` 每家打一行降级提示，`aforge doctor` 报一条 `learning-auto-capture-hook` 的 warn。这些提示**不是** `warnings`——`warnings` 里出现某个 target 会让本轮不为它记账，§7.6 的 prune 从此清不掉它的产物。该 target 的其余产物照常投影。
+
+### 钩子实际做什么
+
+写进 codex 的 `hooks.json`（`<项目>\.codex\hooks.json`，user scope 落 `CODEX_HOME` 或 `~\.codex\`）：
+
+```json
+{
+  "description": "Managed by AgentForge (learning.auto_capture: hook). ...",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "aforge learn --print-protocol",
+            "statusMessage": "AgentForge: injecting learning protocol",
+            "additionalContextLimit": 4000
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- **事件取 `SessionStart` 而非 `SessionEnd`**：会话结束时钩子只拿到 transcript 路径，而护栏 4 禁止把会话原文写进 learnings，且此刻模型已经不能再说话、没人能产出结构化的条目正文。"会话结束后自动 capture"在护栏内不成立，因此这一档只做确定性的**协议投递**，条目内容仍由 agent 在会话中经 `aforge learn` 自己写；
+- **matcher 不含 `compact`**：压缩后的续跑属同一会话，协议已经注入过一次；
+- `aforge learn --print-protocol` 是**只读旁路**：只往 stdout 打印那段常量正文，不解析配置、不读 SoT、不写盘、不取锁、不进交互。因此它不触发 `learn` 的 CI 守卫（守卫拦的是 `createLearning`）、无 TTY 也不会挂住、也不与你手动 `aforge sync` 争 `.sync.lock`（取锁的是 `promote`）。
+
+### 安全与清理
+
+- **命令是常量**：不拼接任何路径、profile 字段或用户数据，所以路径里的空格 / 引号 / 中文都进不了命令串，注入面为零；
+- **不写本机路径**：裸 `aforge` 交给 PATH 解析，钩子文件在任何机器上逐字节相同 → 产物不随宿主漂移。代价是没把 `aforge` 放进 PATH 时钩子会静默失败（codex 把非零退出当作"该钩子没产出上下文"，会话照常），这比硬编码一个版本切换后就失效的绝对路径要好；
+- **写入前看得见**：`aforge sync` 会打印这一项，`--dry-run` 同样能看到（且不落盘）；
+- **`hooks.json` 由 AgentForge 独占**：因此用整文件 `write` 动作，直接落进 §7.6 的 artifacts 记账。把 `auto_capture` 改回 `off` / `prompt` 再 sync，这个文件被 prune 整个删掉（你手工改过它则跳过删除并提示，不会静默吞掉改动）；
+- **一层一种表示**：codex 在同一 config 层同时读 `hooks.json` 与 `config.toml` 里的 inline `[hooks]`，两者并存会在启动时告警（上游建议 "prefer one representation per layer"）。如果你已经手写了 inline `[hooks]`，把它挪进 `hooks.json` 之外的层，或不要用这一档。`aforge doctor` 会实际读一遍 `config.toml`，检测到并存时报 `learning-auto-capture-hook-inline` warn（只提示，不阻断 sync）；
+- **不覆盖没记账过的文件**：落点上已经有一个 AgentForge 没记过账的 `hooks.json` 时，首次 sync 以 ConflictError（退出码 3）停下并列出路径，确认可以丢弃后用 `aforge sync --force` 覆盖。手写过 `hooks.json` 的用户不会在开启这一档时被静默清掉。
+
+**声明驱动，不做探测**：写不写钩子只看 `profile.targets` 与各 target 的能力声明，不看本机装没装 codex、装在哪。同一份 SoT 在两台机器上产出同样的投影产物与同一个 `contentHash`。
+

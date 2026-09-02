@@ -130,7 +130,7 @@ skills:
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `default_scope` | `user` \| `project` | `project` | `aforge learn` 默认落哪一层 |
-| `auto_capture` | `off` \| `prompt` \| `hook` | `off` | `off` 只有人工敲命令；`prompt` 在投影正文加一段 `## Learning Protocol` 指示 agent 自行调用 `aforge learn`（概率性）；**`hook` MVP 未实现**，行为等同 `off`，`doctor` 显式告警 |
+| `auto_capture` | `off` \| `prompt` \| `hook` | `off` | `off` 只有人工敲命令；`prompt` 在投影正文加一段 `## Learning Protocol` 指示 agent 自行调用 `aforge learn`（概率性）；`hook` 改由 target 的 `SessionStart` 钩子注入同一段协议（与 `prompt` 互斥，**只有 codex 支持**，其余三家等同 `off` 并显式提示，见 [learning](learning.md#支持矩阵)） |
 | `auto_promote` | boolean | `false` | 条目产生后是否顺手 promote。与 `auto_capture` 正交，两者都开也仍不直接投影 |
 | `include_promoted_in_sync` | boolean | `true` | `false` → `sync` 不把已 promote 的条目注入投影正文 |
 
@@ -139,5 +139,5 @@ skills:
 ## 校验与编辑器提示
 
 - `npm run emit-schema` 生成的 `schemas/profile.schema.json`（JSON Schema Draft 2020-12，`$id: https://agentforge.dev/schema/profile.json`）可挂到编辑器做补全与校验。
-- `aforge doctor` 会检出「声明了却无效」的字段（`copy_mode: symlink`、`auto_capture: hook`、`on_demand` 只登记、命令命名空间被平铺等），这些是 warn，不影响退出码。
+- `aforge doctor` 会检出「声明了却无效」的字段（`copy_mode: symlink`、`on_demand` 只登记、命令命名空间被平铺、`auto_capture: hook` 下没有钩子落点的 target 等），这些是 warn，不影响退出码。
 - 尚未实现或被平台限制的字段汇总见 [平台注意事项与已知限制](platform.md#已知限制)。

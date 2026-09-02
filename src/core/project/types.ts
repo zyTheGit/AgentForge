@@ -5,9 +5,10 @@
  * - M5 中 apply 由引擎统一执行（core/project/writer.applyItem），
  *   Projector 不自带 apply；M6 全事务化时如需 projector 定制再启用该入口。
  *
- * 本模块不是纯类型模块：文件末尾还导出四个**运行时**纯函数
+ * 本模块不是纯类型模块：文件末尾还导出五个**运行时**纯函数
  * （mainRuleAction / shouldWriteAgentsMd / shouldWriteClaudeMd /
- * shouldWriteOptionalClaudeMd），它们把 `profile.projection` 的开关语义收在一处，
+ * shouldWriteOptionalClaudeMd / shouldWriteSessionHook），它们把
+ * `profile.projection` 与 `profile.learning` 的开关语义收在一处，
  * 供四个 projector 共用——放在类型契约旁边是为了让"契约 + 契约的默认判据"同址可见，
  * 避免四个 projector 各写一遍判断而漂移。
  *
@@ -16,6 +17,7 @@
  */
 import type { Habits, MarkerMode, McpServer, Profile } from '../../schema';
 import type { EnvSnapshot, LineEnding, Scope } from '../env';
+import { effectiveAutoCapture, writesSessionHooks } from '../learning/auto-capture';
 import type { OsContext } from '../paths';
 
 /** Spec §8.1 ProjectionPlan 项的动作类型。 */
@@ -155,6 +157,19 @@ export interface Projector {
    * 唯一消费方是 `aforge status`（§6.1 要求打印），不参与 plan / apply。
    */
   readonly skillInvokePrefix: SkillInvokePrefix;
+  /**
+   * 该 target 是否有**可声明式写入**的会话钩子落点（Spec §7.4 `hook` 档 / §12 Phase 3）。
+   *
+   * 与 `skillInvokePrefix` 同一处理口径：能力与"钩子落在哪个文件"是同一份 target
+   * 知识，写在各 projector 里，新增 target 时 TS 会强制补上（漏掉即编译失败）。
+   *
+   * 判据是"能不能只靠写配置数据把钩子装上"，而不是"上游有没有会话生命周期事件"：
+   * opencode / pi 的会话事件要靠投放可执行的 plugin / extension **代码**才能用，
+   * claude 的钩子只能并入共享的 `.claude\settings.json` 数组（merge_json 对数组是
+   * 整体替换，会吞掉用户手写的钩子）。三家因此为 false，由 sync-notices 与 doctor
+   * 显式降级，不静默失效。理由与支持矩阵见 docs/learning.md。
+   */
+  readonly writesSessionHooks: boolean;
   plan(ctx: ProjectContext): ProjectionPlan;
   /**
    * M5 不实现（引擎统一执行）；返回类型 never 表示当前版本调用即视为契约违规。
@@ -202,4 +217,16 @@ export function shouldWriteClaudeMd(ctx: ProjectContext): boolean {
  */
 export function shouldWriteOptionalClaudeMd(ctx: ProjectContext): boolean {
   return ctx.profile.projection.write_claude_md === true;
+}
+
+/**
+ * 是否产出该 target 的会话钩子（Spec §4.2 learning.auto_capture / §7.4 hook 档）。
+ *
+ * 判据只看**声明**（经 effectiveAutoCapture 取有效档位），不看本机装了哪个 CLI：
+ * 钩子写入是声明驱动的，否则同一份 SoT 在两台机器上会产出不同的投影产物。
+ * 有钩子落点的 projector 用它决定要不要 push 钩子项；没有落点的 projector 不调用，
+ * 由 `core/project/sync-notices` 与 doctor 显式降级说明（不静默失效）。
+ */
+export function shouldWriteSessionHook(ctx: ProjectContext): boolean {
+  return writesSessionHooks(effectiveAutoCapture(ctx.profile));
 }

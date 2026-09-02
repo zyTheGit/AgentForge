@@ -7,7 +7,12 @@
  */
 import { Command } from 'commander';
 import { describe, expect, it } from 'vitest';
-import { resolveInitMode, resolveJsonFlag } from '../../src/commands/_shared';
+import {
+  assertPrintProtocolAlone,
+  resolveInitMode,
+  resolveJsonFlag,
+} from '../../src/commands/_shared';
+import { ConfigError } from '../../src/core/errors';
 
 /** 构造 program（带全局 --json）+ 子命令 + 孙命令，返回三层引用。 */
 function buildProgram(): { program: Command; sub: Command; grandchild: Command } {
@@ -79,5 +84,44 @@ describe('resolveInitMode', () => {
     expect(resolveInitMode({ interactive: true, yes: true, isTty: true })).toBe('interactive');
     expect(resolveInitMode({ interactive: true, json: true, isTty: true })).toBe('interactive');
     expect(resolveInitMode({ interactive: true, isTty: false })).toBe('interactive');
+  });
+});
+
+describe('assertPrintProtocolAlone（learn --print-protocol 的互斥校验，§7.4 hook 档）', () => {
+  it('单独给 --print-protocol → 通过', () => {
+    expect(() => assertPrintProtocolAlone({})).not.toThrow();
+  });
+
+  it.each([
+    ['file', '--file'],
+    ['scope', '--scope'],
+    ['id', '--id'],
+    ['confidence', '--confidence'],
+  ] as const)('同时给了 %s → ConfigError(2)，message 点名该 flag', (key, flag) => {
+    const err = (() => {
+      try {
+        assertPrintProtocolAlone({ [key]: 'x' });
+        return undefined;
+      } catch (e: unknown) {
+        return e;
+      }
+    })();
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as ConfigError).code).toBe(2);
+    expect((err as ConfigError).message).toContain(flag);
+    expect((err as ConfigError).hint).toContain('--print-protocol');
+  });
+
+  it('多个冲突项一次全列出（不让用户改一个再撞一次）', () => {
+    const err = (() => {
+      try {
+        assertPrintProtocolAlone({ file: 'notes.md', scope: 'user' });
+        return undefined;
+      } catch (e: unknown) {
+        return e;
+      }
+    })();
+    expect((err as ConfigError).message).toContain('--file');
+    expect((err as ConfigError).message).toContain('--scope');
   });
 });

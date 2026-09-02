@@ -13,10 +13,11 @@
  *   与渲染素材口径一致：project 覆盖 user）；
  * - profile.skills 的 always / on_demand 清单——on_demand 在 MVP 中**只登记不物化**
  *   （Spec §4.2 注记），在此如实标注，避免该字段静默无效；
- * - profile.learning.auto_capture 的声明值与生效值（§7.4）：`hook` 未实现时标出原因，
- *   `prompt` 时说明投影正文含 `## Learning Protocol` 段，CI 下补一句"本次不会写入"；
  * - user 层 sources.json 的登记源（含默认注册的官方模板源：禁用态 / 是否已拉取 / pin），
  *   见 ./status-sources —— 读取零网络；登记表读不出来时打 `(unreadable)` 而不是伪装成空表；
+ * - profile.learning.auto_capture 的声明值与生效值（§7.4）：`prompt` 时说明投影正文含
+ *   `## Learning Protocol` 段，`hook` 时如实列出钩子装到哪几个 target、哪几个没有
+ *   钩子落点（等同 off），CI 下补一句"本次不会写入"，见 ./status-learning；
  * - --json 输出机器可读 JSON（路径一律绝对路径）。
  *
  * 只读命令：不做渲染（profile.templates 未解析不影响路径展示，环境探测
@@ -28,12 +29,6 @@ import { resolveEffectiveConfig } from '../../core/config/defaults';
 import { HABITS_FILE, PROFILE_FILE } from '../../core/config/load';
 import { readEnv, type Scope } from '../../core/env';
 import { ConfigError } from '../../core/errors';
-import {
-  type AutoCaptureState,
-  LEARNING_PROTOCOL_HEADING,
-  rendersLearningProtocol,
-  resolveAutoCapture,
-} from '../../core/learning/auto-capture';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
 import { projectorRegistry } from '../../core/project/projectors/registry';
 import { readSyncMeta } from '../../core/project/sync-meta';
@@ -41,7 +36,6 @@ import type { ProjectContext, SkillInvokePrefix } from '../../core/project/types
 import { listDirSafe } from '../../infra/fsutil';
 import type { FileStat, Host } from '../../infra/host';
 import { getUi, type Ui } from '../../infra/ui';
-import type { AutoCapture } from '../../schema';
 import {
   type CommandContext,
   defaultCommandContext,
@@ -49,6 +43,11 @@ import {
   renderList,
 } from '../_shared/context';
 import { resolveJsonFlag } from '../_shared/flags';
+import {
+  collectStatusAutoCapture,
+  formatStatusLearning,
+  type StatusAutoCaptureInfo,
+} from './status-learning';
 import { collectStatusSources, formatStatusSources, type StatusSourceInfo } from './status-sources';
 
 /** 命令上下文（host/os/cwd 注入；测试可换 fake host 与任意平台）。 */
@@ -101,16 +100,10 @@ export interface StatusResult {
   /**
    * profile.learning.auto_capture 的声明值与生效值（§7.4）。
    *
-   * 同样是"避免字段静默无效"：`hook` 档 MVP 未实现，declared 与 effective 会不同，
-   * `reason` 说明为什么。`ciNote` 另说一件事——CI 下 learnings 恒不落盘，但**生效档位
-   * 与投影正文不变**（否则 contentHash 跨环境不稳定）。
+   * 结构与算法见 ./status-learning——"声明了但不生效"必须可见（hook 档的降级发生在
+   * target 粒度），与 on_demand / sources 两节同一理由。
    */
-  readonly autoCapture: Readonly<{
-    declared: AutoCapture;
-    effective: AutoCapture;
-    reason: string | null;
-    ciNote: string | null;
-  }>;
+  readonly autoCapture: StatusAutoCaptureInfo;
   /**
    * user 层 sources.json 的登记源（含默认注册的官方源）。
    *
@@ -292,7 +285,14 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     templates: await countTemplateFiles(host, userRootForLoad, projectSoTRoot),
   };
 
-  const autoCapture = resolveAutoCapture(config.profile, env);
+  // hook 档的支持度只看**注册表命中**的那批（即 targets 的 targetId），与 sync 侧
+  // engine 传 planned 的口径一致：profile.targets 里写了注册表没有的名字时（skipped
+  // 那批）根本不会被投影，替它报「没有钩子落点」是错的。
+  const autoCapture = collectStatusAutoCapture(
+    config.profile,
+    env,
+    targets.map((t) => t.targetId),
+  );
   const sourcesReport = await collectStatusSources(host, env, os, cwd, userSoTRoot);
 
   return {
@@ -307,32 +307,10 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
     counts,
     alwaysSkills: config.profile.skills.always ?? [],
     onDemandSkills: config.profile.skills.on_demand ?? [],
-    autoCapture: {
-      declared: autoCapture.declared,
-      effective: autoCapture.effective,
-      reason: describeAutoCaptureReason(autoCapture),
-      ciNote: describeAutoCaptureCiNote(autoCapture),
-    },
+    autoCapture,
     sources: sourcesReport.sources,
     sourcesUnreadable: sourcesReport.unreadable,
   };
-}
-
-/** 声明了 MVP 未实现的档位时给出原因（否则 null）。 */
-function describeAutoCaptureReason(state: AutoCaptureState): string | null {
-  return state.unimplemented ? 'hook is not implemented in MVP - behaves as off' : null;
-}
-
-/**
- * 当前环境下会不会真的采集（非 CI → null）。
- *
- * 与 reason 分开：CI 只挡*写入*（§7.4 护栏 3），不改变生效档位与投影正文——
- * 否则同一份 SoT 在 CI 与本地会渲染出不同的 contentHash。
- */
-function describeAutoCaptureCiNote(state: AutoCaptureState): string | null {
-  return state.ciNoCapture
-    ? 'CI detected - no learnings will be written (projected rules are unchanged)'
-    : null;
 }
 
 /** SoT 根描述行：`<绝对路径> (initialized|not initialized)`。 */
@@ -418,23 +396,7 @@ export function formatStatus(result: StatusResult, ui: Ui = getUi()): string {
   );
 
   lines.push('');
-  lines.push(ui.bold('learning (profile.learning):'));
-  // 声明值与生效值分开打：hook 未实现时二者不同，只打一个会骗人
-  const capture = result.autoCapture;
-  lines.push(
-    `  ${ui.dim('auto_capture')}: ${capture.declared}${capture.declared === capture.effective ? '' : ` -> ${ui.yellow(capture.effective)}`}`,
-  );
-  if (capture.reason !== null) {
-    lines.push(`                ${ui.dim(capture.reason)}`);
-  }
-  if (rendersLearningProtocol(capture.effective)) {
-    lines.push(
-      `                ${ui.dim(`projected rules include a ${LEARNING_PROTOCOL_HEADING} section`)}`,
-    );
-  }
-  if (capture.ciNote !== null) {
-    lines.push(`                ${ui.dim(capture.ciNote)}`);
-  }
+  lines.push(...formatStatusLearning(result.autoCapture, ui));
 
   return lines.join('\n');
 }

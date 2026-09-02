@@ -150,7 +150,14 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       // Spec §4.2 skills.always / skills.on_demand（新增展示字段）
       alwaysSkills: ['code-review'],
       onDemandSkills: ['deep-research'],
-      autoCapture: { declared: 'off', effective: 'off', reason: null, ciNote: null },
+      autoCapture: {
+        declared: 'off',
+        effective: 'off',
+        reason: null,
+        ciNote: null,
+        hookTargets: [],
+        hookUnsupportedTargets: [],
+      },
       sources: [
         {
           id: 'official',
@@ -203,7 +210,14 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       counts: { custom: 0, learnings: 0, templates: 0 },
       alwaysSkills: [],
       onDemandSkills: [],
-      autoCapture: { declared: 'off', effective: 'off', reason: null, ciNote: null },
+      autoCapture: {
+        declared: 'off',
+        effective: 'off',
+        reason: null,
+        ciNote: null,
+        hookTargets: [],
+        hookUnsupportedTargets: [],
+      },
       sources: [],
       sourcesUnreadable: false,
     });
@@ -228,7 +242,14 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       counts: { custom: 0, learnings: 0, templates: 0 },
       alwaysSkills: [],
       onDemandSkills: [],
-      autoCapture: { declared: 'off', effective: 'off', reason: null, ciNote: null },
+      autoCapture: {
+        declared: 'off',
+        effective: 'off',
+        reason: null,
+        ciNote: null,
+        hookTargets: [],
+        hookUnsupportedTargets: [],
+      },
       sources: [],
       sourcesUnreadable: true,
     });
@@ -237,13 +258,13 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
     expect(text).not.toContain('(none registered)');
   });
 
-  it('auto_capture 声明值与生效值不同时，打出箭头与原因（§7.4）', () => {
+  it('auto_capture: hook 时列出装钩子的 target 与等同 off 的 target（§7.4）', () => {
     const text = formatStatus({
       effectiveScope: 'project',
       userSoTRoot: USER_SOT,
       projectSoTRoot: PROJECT_SOT,
       initialized: { user: false, project: true },
-      enabledTargets: [],
+      enabledTargets: ['codex', 'claude'],
       targets: [],
       skippedTargets: [],
       lastSyncAt: null,
@@ -252,15 +273,50 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       onDemandSkills: [],
       autoCapture: {
         declared: 'hook',
-        effective: 'off',
-        reason: 'hook is not implemented in MVP - behaves as off',
+        effective: 'hook',
+        reason: null,
         ciNote: null,
+        hookTargets: ['codex'],
+        hookUnsupportedTargets: ['claude'],
       },
       sources: [],
       sourcesUnreadable: false,
     });
-    expect(text).toContain('auto_capture: hook -> off');
-    expect(text).toContain('hook is not implemented in MVP - behaves as off');
+    // 三档恒等 → 不打箭头；两张名单各一行
+    expect(text).toContain('auto_capture: hook');
+    expect(text).not.toContain('->');
+    expect(text).toContain('session hook (SessionStart) written for: codex');
+    expect(text).toContain('no session hook target: claude (behaves as off)');
+    // hook 与 prompt 互斥：不再往规则文件里插协议段
+    expect(text).not.toContain('projected rules include');
+  });
+
+  it('auto_capture: hook 但一家都装不上时给出整体降级原因（§7.4）', () => {
+    const text = formatStatus({
+      effectiveScope: 'project',
+      userSoTRoot: USER_SOT,
+      projectSoTRoot: PROJECT_SOT,
+      initialized: { user: false, project: true },
+      enabledTargets: ['claude'],
+      targets: [],
+      skippedTargets: [],
+      lastSyncAt: null,
+      counts: { custom: 0, learnings: 0, templates: 0 },
+      alwaysSkills: [],
+      onDemandSkills: [],
+      autoCapture: {
+        declared: 'hook',
+        effective: 'hook',
+        reason: 'no enabled target supports session hooks - behaves as off',
+        ciNote: null,
+        hookTargets: [],
+        hookUnsupportedTargets: ['claude'],
+      },
+      sources: [],
+      sourcesUnreadable: false,
+    });
+    expect(text).toContain('no enabled target supports session hooks - behaves as off');
+    expect(text).not.toContain('written for');
   });
 
   it('auto_capture: prompt 时说明投影正文含 Learning Protocol 段（§5.2）', () => {
@@ -276,7 +332,14 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
       counts: { custom: 0, learnings: 0, templates: 0 },
       alwaysSkills: [],
       onDemandSkills: [],
-      autoCapture: { declared: 'prompt', effective: 'prompt', reason: null, ciNote: null },
+      autoCapture: {
+        declared: 'prompt',
+        effective: 'prompt',
+        reason: null,
+        ciNote: null,
+        hookTargets: [],
+        hookUnsupportedTargets: [],
+      },
       sources: [],
       sourcesUnreadable: false,
     });
@@ -302,6 +365,8 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
         effective: 'prompt',
         reason: null,
         ciNote: 'CI detected - no learnings will be written (projected rules are unchanged)',
+        hookTargets: [],
+        hookUnsupportedTargets: [],
       },
       sources: [],
       sourcesUnreadable: false,
