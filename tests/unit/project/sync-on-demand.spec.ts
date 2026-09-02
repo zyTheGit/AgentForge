@@ -110,8 +110,8 @@ function syncOptions(host: FakeHost) {
 }
 
 /** 上一轮 sync 记账下来的 write 产物路径集合（§7.6 prune 的输入）。 */
-async function recordedArtifacts(host: FakeHost): Promise<string[]> {
-  const meta = JSON.parse(await host.readFile(syncMetaPath(PROJECT_SOT))) as {
+async function recordedArtifacts(host: FakeHost, sotRoot: string = PROJECT_SOT): Promise<string[]> {
+  const meta = JSON.parse(await host.readFile(syncMetaPath(sotRoot))) as {
     artifacts?: { path: string }[];
   };
   return (meta.artifacts ?? []).map((item) => item.path).sort();
@@ -235,5 +235,164 @@ describe('sync × skills.on_demand — always ↔ on_demand 迁移的 prune 口�
       expect(prunedArtifacts(result)).toContain(file);
     }
     expect(await recordedArtifacts(host)).toEqual([]);
+  });
+});
+
+describe('sync × skills.on_demand — SoT 显式声明非 true 的取值（三态的第三态）', () => {
+  it('SKILL.md 里写了 disable-model-invocation: false → 四家都不启用按需，codex 无 sidecar', async () => {
+    const host = createSyncHost();
+    await seed(host, 'skills:\n  on_demand: [lazy]', { install: false });
+    const doc = [
+      '---',
+      'name: lazy',
+      'disable-model-invocation: false',
+      '---',
+      '',
+      '# Lazy',
+      '',
+    ].join('\n');
+    await host.writeFile(path.join(PROJECT_SOT, 'skills', 'lazy', 'SKILL.md'), doc);
+
+    const result = await syncOnce(syncOptions(host));
+
+    // 正文逐字节原样（不覆盖用户的显式取值）
+    for (const file of Object.values(skillPaths('lazy'))) {
+      expect(host.files.get(file)).toBe(doc);
+    }
+    // 关键：codex 侧也不能偷偷关掉——否则「claude 仍自动路由 / codex 已关闭」自相矛盾
+    expect(host.files.has(codexPolicyPath('lazy'))).toBe(false);
+    // 且必须有信号，不能静默
+    expect(result.skillSkips).toEqual([
+      {
+        name: 'lazy',
+        reason: 'declared-false',
+        detail: path.join(PROJECT_SOT, 'skills', 'lazy', 'SKILL.md'),
+      },
+    ]);
+  });
+
+  it('frontmatter 非法（正文以 --- 水平线开头）→ 正文原样投影并记一条 skip', async () => {
+    const host = createSyncHost();
+    await seed(host, 'skills:\n  on_demand: [lazy]', { install: false });
+    const doc = ['---', '# 标题', '---', '', '正文 key: value', ''].join('\n');
+    await host.writeFile(path.join(PROJECT_SOT, 'skills', 'lazy', 'SKILL.md'), doc);
+
+    const result = await syncOnce(syncOptions(host));
+
+    for (const file of Object.values(skillPaths('lazy'))) {
+      expect(host.files.get(file)).toBe(doc);
+    }
+    expect(result.skillSkips[0]?.reason).toBe('invalid-frontmatter');
+    // codex 的开关与 frontmatter 无关 → sidecar 照写（按需在 codex 侧仍生效）
+    expect(host.files.get(codexPolicyPath('lazy'))).toBe(CODEX_SKILL_ON_DEMAND_POLICY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// user scope（§2.2 / §8.4-8.6）：落点与 project scope 完全不同，且 codexSkillsRoot
+// 的 user 分支只有 plan 层单测碰过 —— sidecar 落点与 prune 迁移需要端到端守卫
+// ---------------------------------------------------------------------------
+
+/** user 层 SoT 根（AGF_HOME 未设 → `<home>\.agentforge`）。 */
+const USER_SOT = path.join(HOME, '.agentforge');
+
+/** codex 的 user 级根（CODEX_HOME 未设 → `<home>\.codex`）。 */
+const CODEX_USER_DIR = path.join(HOME, '.codex');
+
+/** 四家 target 的 user scope `<name>\SKILL.md` 落点（§8.3-8.6）。 */
+function userSkillPaths(name: string): Record<string, string> {
+  return {
+    claude: path.join(HOME, '.claude', 'skills', name, 'SKILL.md'),
+    codex: path.join(CODEX_USER_DIR, 'skills', name, 'SKILL.md'),
+    opencode: path.join(HOME, '.config', 'opencode', 'skills', name, 'SKILL.md'),
+    pi: path.join(HOME, '.pi', 'agent', 'skills', name, 'SKILL.md'),
+  };
+}
+
+/** user scope 下 codex 的按需 sidecar 落点（`CODEX_HOME\skills\<name>\agents\openai.yaml`）。 */
+function userCodexPolicyPath(name: string): string {
+  return path.join(CODEX_USER_DIR, 'skills', name, 'agents', 'openai.yaml');
+}
+
+/** 只写 user 层（project 层缺席 → effectiveScope 落到 user）。 */
+async function seedUser(
+  host: FakeHost,
+  skills: string,
+  options: { readonly install?: boolean } = {},
+): Promise<void> {
+  await host.writeFile(
+    path.join(USER_SOT, 'profile.yaml'),
+    ['version: 1', 'scope: user', 'targets: [claude, codex, opencode, pi]', skills, ''].join('\n'),
+  );
+  await host.writeFile(path.join(USER_SOT, 'habits.yaml'), 'version: 1\n');
+  if (options.install !== false) {
+    await host.writeFile(path.join(USER_SOT, 'skills', 'lazy', 'SKILL.md'), SKILL_DOC);
+  }
+}
+
+describe('sync × skills.on_demand — user scope 的落点与逐字节守卫', () => {
+  it('effectiveScope=user：四家产物落 user 目录、正文带按需标记、codex sidecar 在 CODEX_HOME 下', async () => {
+    const host = createSyncHost();
+    await seedUser(host, 'skills:\n  on_demand: [lazy]');
+
+    const result = await syncOnce(syncOptions(host));
+    expect(result.scope).toBe('user');
+    expect(result.skillSkips).toEqual([]);
+
+    for (const file of Object.values(userSkillPaths('lazy'))) {
+      expect(host.files.get(file)).toBe(SKILL_DOC_ON_DEMAND);
+    }
+    expect(host.files.get(userCodexPolicyPath('lazy'))).toBe(CODEX_SKILL_ON_DEMAND_POLICY);
+    // project scope 的落点一个都不该出现（不能把 user 配置写进项目目录，反之亦然）
+    for (const file of Object.values(skillPaths('lazy'))) {
+      expect(host.files.has(file)).toBe(false);
+    }
+    expect(await recordedArtifacts(host, USER_SOT)).toEqual(
+      expect.arrayContaining([
+        ...Object.values(userSkillPaths('lazy')),
+        userCodexPolicyPath('lazy'),
+      ]),
+    );
+  });
+
+  it('user scope 的 always 逐字节守卫：四家产物等于 SoT 原文、无 sidecar', async () => {
+    const host = createSyncHost();
+    await seedUser(host, 'skills:\n  always: [lazy]');
+
+    await syncOnce(syncOptions(host));
+
+    for (const file of Object.values(userSkillPaths('lazy'))) {
+      expect(host.files.get(file)).toBe(SKILL_DOC);
+    }
+    expect(host.files.has(userCodexPolicyPath('lazy'))).toBe(false);
+    expect(await recordedArtifacts(host, USER_SOT)).not.toContain(userCodexPolicyPath('lazy'));
+  });
+
+  it('user scope 的 on_demand → always 迁移：sidecar 被 prune 删除，SKILL.md 恢复原文', async () => {
+    const host = createSyncHost();
+    await seedUser(host, 'skills:\n  on_demand: [lazy]');
+    await syncOnce(syncOptions(host));
+    expect(host.files.has(userCodexPolicyPath('lazy'))).toBe(true);
+
+    await seedUser(host, 'skills:\n  always: [lazy]');
+    const result = await syncOnce(syncOptions(host));
+
+    expect(host.files.has(userCodexPolicyPath('lazy'))).toBe(false);
+    expect(prunedArtifacts(result)).toContain(userCodexPolicyPath('lazy'));
+    for (const file of Object.values(userSkillPaths('lazy'))) {
+      expect(host.files.get(file)).toBe(SKILL_DOC);
+    }
+  });
+
+  it('user scope 未安装 → 只记一条 skip，路径口径为 user 层（不失败）', async () => {
+    const host = createSyncHost();
+    await seedUser(host, 'skills:\n  on_demand: [lazy]', { install: false });
+
+    const result = await syncOnce(syncOptions(host));
+    expect(result.skillSkips).toHaveLength(1);
+    expect(result.skillSkips[0]?.reason).toBe('not-installed');
+    expect(result.skillSkips[0]?.detail).toContain(
+      path.join(USER_SOT, 'skills', 'lazy', 'SKILL.md'),
+    );
   });
 });

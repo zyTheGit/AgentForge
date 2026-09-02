@@ -43,8 +43,9 @@
  *   claude / pi 注入 frontmatter `disable-model-invocation: true`，codex 额外写
  *   `<skill>/agents/openai.yaml` 关闭 allow_implicit_invocation，opencode 无对应
  *   开关（由 doctor 的 skills-on-demand/opencode-unsupported 显式降级告警）。
- *   on_demand 不进命令薄壳，缺失/被 always 遮蔽/无 frontmatter 均由 sync 的
- *   skillSkips 与 doctor 告警说明，不静默失效。
+ *   on_demand 不进命令薄壳；缺失 / frontmatter 不合法 / SoT 显式写了非 true 的取值
+ *   均由 sync 的 skillSkips 与 doctor 告警说明，不静默失效。**与 always 同名**则由
+ *   本文件末尾的 superRefine 直接拒掉（两张名单语义互斥，ConfigError(2)）。
  */
 import { z } from 'zod';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../core/markers';
@@ -127,67 +128,84 @@ export const McpServerSchema = z.object({
   headers: z.record(z.string(), z.string()).optional(),
 });
 
-export const ProfileSchema = z.object({
-  version: SchemaVersion,
-  /** 本文件声明的所属层级（缺省由加载上下文判定，合并后无意义——见 effectiveScope）。 */
-  scope: ScopeEnum.optional(),
-  /** 投影目标（至少一项；选择型数组：合并时 project 恒覆盖，Spec §4.2 示例）。 */
-  targets: z.array(TargetEnum).min(1),
-  /** 模板 id 列表（内容型数组：参与 merge.arrays 合并；缺省由渲染层兜底 base/default）。 */
-  templates: z.array(z.string()).optional(),
-  mcp: z
-    .object({
-      servers: z.array(McpServerSchema).optional(),
-    })
-    .default({}),
-  skills: z
-    .object({
-      always: z.array(z.string()).optional(),
-      on_demand: z
-        .array(z.string())
-        .optional()
-        .describe(
-          '按需装载：正文照常物化投影，但不进模型的自动路由清单（claude/pi 注入 frontmatter disable-model-invocation、codex 写 agents/openai.yaml 关闭隐式调用、opencode 无对应开关由 doctor 告警），需显式调用；未安装的名字只告警不阻塞 sync',
-        ),
-      copy_mode: CopyMode.default('copy'),
-      expose_as_command: z
-        .array(z.string())
-        .optional()
-        .describe(
-          '额外投影成命令/prompt 薄壳的 skill 名（Spec §8.8）：必须是 skills.always 的子集，否则 sync 退出码 2；codex 的 project scope 不支持命令文件，按 skip + doctor warn 处理',
-        ),
-    })
-    // prefault：缺省时以 {} 作为输入再解析，内层 default 自然填充（单一事实源）
-    .prefault({}),
-  merge: z
-    .object({
-      strategy: MergeStrategy.default('overlay'),
-      arrays: ArrayMergeMode.default('replace'),
-    })
-    .prefault({}),
-  projection: z
-    .object({
-      write_agents_md: z.boolean().optional(),
-      write_claude_md: z.boolean().optional(),
-      marker_mode: MarkerMode.default('replace_between_markers'),
-      marker_begin: z.string().default(DEFAULT_MARKER_BEGIN),
-      marker_end: z.string().default(DEFAULT_MARKER_END),
-      line_ending: LineEndingEnum.default('lf'),
-      path_style: PathStyle.default('auto'),
-      gitignore_generated: z.boolean().optional(),
-    })
-    .prefault({}),
-  learning: z
-    .object({
-      default_scope: ScopeEnum.default('project'),
-      auto_capture: AutoCaptureEnum.default('off'),
-      auto_promote: z.boolean().default(false),
-      include_promoted_in_sync: z.boolean().default(true),
-    })
-    .prefault({}),
-  /** 用户扩展键（Spec §4.2）：passthrough。 */
-  extensions: z.looseObject({}).default({}),
-});
+export const ProfileSchema = z
+  .object({
+    version: SchemaVersion,
+    /** 本文件声明的所属层级（缺省由加载上下文判定，合并后无意义——见 effectiveScope）。 */
+    scope: ScopeEnum.optional(),
+    /** 投影目标（至少一项；选择型数组：合并时 project 恒覆盖，Spec §4.2 示例）。 */
+    targets: z.array(TargetEnum).min(1),
+    /** 模板 id 列表（内容型数组：参与 merge.arrays 合并；缺省由渲染层兜底 base/default）。 */
+    templates: z.array(z.string()).optional(),
+    mcp: z
+      .object({
+        servers: z.array(McpServerSchema).optional(),
+      })
+      .default({}),
+    skills: z
+      .object({
+        always: z.array(z.string()).optional(),
+        on_demand: z
+          .array(z.string())
+          .optional()
+          .describe(
+            '按需装载：正文照常物化投影，但不进模型的自动路由清单（claude/pi 注入 frontmatter disable-model-invocation、codex 写 agents/openai.yaml 关闭隐式调用、opencode 无对应开关由 doctor 告警），需显式调用；未安装的名字只告警不阻塞 sync；**不得与 skills.always 有交集**（两张名单语义互斥，交集非空时加载即 ConfigError(2)——该约束是自定义校验，无法在 JSON Schema 工件里表达）',
+          ),
+        copy_mode: CopyMode.default('copy'),
+        expose_as_command: z
+          .array(z.string())
+          .optional()
+          .describe(
+            '额外投影成命令/prompt 薄壳的 skill 名（Spec §8.8）：必须是 skills.always 的子集，否则 sync 退出码 2；codex 的 project scope 不支持命令文件，按 skip + doctor warn 处理',
+          ),
+      })
+      // prefault：缺省时以 {} 作为输入再解析，内层 default 自然填充（单一事实源）
+      .prefault({}),
+    merge: z
+      .object({
+        strategy: MergeStrategy.default('overlay'),
+        arrays: ArrayMergeMode.default('replace'),
+      })
+      .prefault({}),
+    projection: z
+      .object({
+        write_agents_md: z.boolean().optional(),
+        write_claude_md: z.boolean().optional(),
+        marker_mode: MarkerMode.default('replace_between_markers'),
+        marker_begin: z.string().default(DEFAULT_MARKER_BEGIN),
+        marker_end: z.string().default(DEFAULT_MARKER_END),
+        line_ending: LineEndingEnum.default('lf'),
+        path_style: PathStyle.default('auto'),
+        gitignore_generated: z.boolean().optional(),
+      })
+      .prefault({}),
+    learning: z
+      .object({
+        default_scope: ScopeEnum.default('project'),
+        auto_capture: AutoCaptureEnum.default('off'),
+        auto_promote: z.boolean().default(false),
+        include_promoted_in_sync: z.boolean().default(true),
+      })
+      .prefault({}),
+    /** 用户扩展键（Spec §4.2）：passthrough。 */
+    extensions: z.looseObject({}).default({}),
+  })
+  .superRefine((profile, ctx) => {
+    // 两张 skills 名单语义互斥（always = 进模型自动路由清单，on_demand = 不进），
+    // 交集非空是**声明层的不变式违反**，在这里拒掉而不是让 sync 每轮 warn 一次：
+    // 后者相当于允许把矛盾配置写进 SoT，再永久提醒。落在 schema 上则 loadProfile /
+    // edit-profile / 合并出口三处一起生效，退出码统一为 ConfigError(2)。
+    const always = new Set(profile.skills.always ?? []);
+    const both = (profile.skills.on_demand ?? []).filter((name) => always.has(name));
+    if (both.length === 0) {
+      return;
+    }
+    ctx.addIssue({
+      code: 'custom',
+      path: ['skills', 'on_demand'],
+      message: `与 skills.always 重复声明: ${[...new Set(both)].join(', ')}——两张名单语义互斥（always 进模型自动路由清单，on_demand 不进），同一个技能只能选一张`,
+    });
+  });
 
 /** profile.yaml 解析后的完整形态（默认值已填充）。 */
 export type Profile = z.output<typeof ProfileSchema>;

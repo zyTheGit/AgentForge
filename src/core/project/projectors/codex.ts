@@ -46,7 +46,14 @@ export const CODEX_DIRNAME = '.codex';
 /** Spec §2.3：codex project 级 skills 目录（`.agents\skills\`）。 */
 export const CODEX_PROJECT_SKILLS_DIRNAME = '.agents';
 
-/** codex 技能 sidecar 的目录名与文件名（官方 Optional metadata：`agents\openai.yaml`）。 */
+/**
+ * codex 技能 sidecar 的目录名与文件名（`agents\openai.yaml`）。
+ *
+ * 字段名与落点取自社区整理的 codex skills 文档（多个独立来源互相印证），**未见
+ * OpenAI 官方 docs 明列，AgentForge 也未实机验证**。若上游改名或本就不认这个
+ * sidecar，则 codex 侧的按需语义退化为「仍进模型清单」——产物本身仍是合法 YAML，
+ * 不会让技能加载失败，由 doctor 的 skills-on-demand 条目呈现这一不确定性。
+ */
 export const CODEX_SKILL_AGENTS_DIRNAME = 'agents';
 export const CODEX_SKILL_POLICY_FILENAME = 'openai.yaml';
 
@@ -212,9 +219,10 @@ export function codexSkillPath(ctx: ProjectContext, skillName: string): string {
  * 按需装载技能的 codex sidecar 路径：`<skills 根>\<name>\agents\openai.yaml`。
  *
  * codex 是四家里唯一**不认** frontmatter 的 `disable-model-invocation` 的：它的
- * 调用策略写在技能目录下的 `agents\openai.yaml`（官方 Optional metadata），
- * `policy.allow_implicit_invocation: false` 表示「不按用户 prompt 隐式触发，显式
- * `$name` 仍可用」——正是 `skills.on_demand` 要的语义。故 on_demand 技能在 codex
+ * 调用策略写在技能目录下的 `agents\openai.yaml`，`policy.allow_implicit_invocation:
+ * false` 表示「不按用户 prompt 隐式触发，显式 `$name` 仍可用」——正是
+ * `skills.on_demand` 要的语义。字段名的来源与不确定性见
+ * `CODEX_SKILL_AGENTS_DIRNAME`（社区文档，未实机验证）。故 on_demand 技能在 codex
  * 侧多一个 write 项（§7.6 记账与 prune 自动覆盖：它就是个整文件产物）。
  *
  * 只在 `skill.onDemand === true` 时产出：`always` 的产物集合因此完全不变。

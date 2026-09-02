@@ -452,8 +452,10 @@ export async function listSkills(ctx: SkillContext): Promise<SkillListItem[]> {
  */
 export {
   injectOnDemandMarker,
+  isOnDemandEffective,
   ON_DEMAND_FRONTMATTER_KEY,
   ON_DEMAND_FRONTMATTER_LINE,
+  type OnDemandInjectionStatus,
   readSkillsToMaterialize,
   type SkillMaterializeSkip,
   type SkillMaterializeSkipReason,

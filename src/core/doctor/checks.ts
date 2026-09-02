@@ -37,7 +37,8 @@
  * - `check-paths`：doctor 侧 plan ctx 构造、§9 第 1 条路径枚举、启用 target 的投影计划；
  * - `check-writable`：SoT 根与目标目录可写性探针（唯一有写副作用的检查）；
  * - `check-residuals`：事务残留（锁 / journal / 回滚失败备份）的级别与提示取舍；
- * - `check-consistency`：渲染基准 / 模板解析 / on_demand / copy_mode / sync-meta / merge_json；
+ * - `check-consistency`：渲染基准 / 模板解析 / 命令暴露 / sync-meta / merge_json；
+ * - `check-skills`：profile.skills.* 的「声明 vs 实际」（on_demand / copy_mode）；
  * - `check-mcp-transport`：MCP transport × target 能力落差（降级 / 跳过）；
  * - `check-projection-hash`：marker 区间三方比对（当前渲染 vs 记录 vs 磁盘）；
  * - `check-environment`：declared vs detected / OneDrive / skills/ 下的 symlink。
@@ -63,8 +64,6 @@ import {
   checkCommandsExposure,
   checkLearningAutoCapture,
   checkMergeJson,
-  checkSkillsCopyMode,
-  checkSkillsOnDemand,
   checkTemplates,
   readSyncMetaForDoctor,
   renderForDoctor,
@@ -79,6 +78,7 @@ import { checkMcpTransport } from './check-mcp-transport';
 import { buildPlanCtx, checkTargetPaths, collectEnabledPlans } from './check-paths';
 import { checkProjectionHashes } from './check-projection-hash';
 import { piLegacyMcpResults, residualResults } from './check-residuals';
+import { checkSkillsCopyMode, checkSkillsOnDemand } from './check-skills';
 import { type DoctorCheckResult, type DoctorReport, doctorExitCode } from './check-types';
 import { checkSotWritable, checkTargetDirsWritable } from './check-writable';
 

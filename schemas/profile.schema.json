@@ -93,7 +93,7 @@
           }
         },
         "on_demand": {
-          "description": "按需装载：正文照常物化投影，但不进模型的自动路由清单（claude/pi 注入 frontmatter disable-model-invocation、codex 写 agents/openai.yaml 关闭隐式调用、opencode 无对应开关由 doctor 告警），需显式调用；未安装的名字只告警不阻塞 sync",
+          "description": "按需装载：正文照常物化投影，但不进模型的自动路由清单（claude/pi 注入 frontmatter disable-model-invocation、codex 写 agents/openai.yaml 关闭隐式调用、opencode 无对应开关由 doctor 告警），需显式调用；未安装的名字只告警不阻塞 sync；**不得与 skills.always 有交集**（两张名单语义互斥，交集非空时加载即 ConfigError(2)——该约束是自定义校验，无法在 JSON Schema 工件里表达）",
           "type": "array",
           "items": {
             "type": "string"

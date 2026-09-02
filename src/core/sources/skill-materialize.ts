@@ -27,10 +27,12 @@
  *   frontmatter 表写明 *"skill is hidden from system prompt. Users must use
  *   `/skill:name`"*。codex 的等价开关不在 frontmatter 而在 sidecar
  *   `agents\openai.yaml` 的 `policy.allow_implicit_invocation: false`，由 codex
- *   projector 额外产出一个 write 项。opencode 只认
- *   `name` / `description` / `license` / `compatibility` / `metadata`，未知键一律
- *   忽略——注入对它是**安全的空操作**（技能仍可用，只是仍进模型清单），该降级由
- *   `aforge doctor` 的 `skills-on-demand/opencode-unsupported` 显式告警，不静默。
+ *   projector 额外产出一个 write 项。opencode 的公开文档只列
+ *   `name` / `description` / `license` / `compatibility` / `metadata`，**未见**它对
+ *   未知 frontmatter 键的处理有明确说明，AgentForge 也未实机验证：若它一律忽略，
+ *   注入就是空操作（技能仍可用，只是仍进模型清单）；若它做严格校验，注入可能让
+ *   该技能在 opencode 侧加载失败。这一不确定性由 `aforge doctor` 的
+ *   `skills-on-demand/opencode-unsupported` 显式告警，不静默。
  *
  * ## 缺失语义（与 `always` 刻意不同）
  *
@@ -39,25 +41,27 @@
  * doctor warn 呈现。这两张名单的定位不同——`on_demand` 就是「备货清单」，允许先
  * 写名字再逐个 `aforge skill add`，用 fail-fast 会让「列了想装的东西」变成
  * 「sync 全线阻塞」。
+ *
+ * 「同名同时出现在两张名单里」不在本模块处理：那是声明层的不变式违反（两张名单
+ * 语义互斥），由 `schema/profile.ts` 的 superRefine 在 `loadProfile` 阶段就拒掉
+ * （ConfigError(2)），不给「允许写入矛盾配置、然后每轮 sync 提醒一次」留空间。
  */
 import path from 'node:path';
 import type { Host } from '../../infra/host';
 import type { Profile } from '../../schema';
 import { ConfigError } from '../errors';
 import { SKILL_DOC_FILENAME, SKILLS_DIRNAME } from '../paths';
-import { frontmatterRange } from '../project/commands';
+import { parseFrontmatterMapping } from '../project/commands';
 import type { SkillArtifact } from '../project/types';
 
 /**
  * 「不进模型自动路由清单」的 frontmatter 键（Agent Skills 规范；claude / pi 实现）。
  *
- * 取值恒为 `true`：本键只在 `on_demand` 的产物里出现，而 `on_demand` 的语义就是
- * 「别自动用它」。`always` 的产物永远不带这一行（回归守卫见 skill-on-demand 单测）。
+ * AgentForge 注入时取值恒为 `true`：本键只在 `on_demand` 的产物里出现，而 `on_demand`
+ * 的语义就是「别自动用它」。`always` 的产物永远不带这一行（回归守卫见 skill-on-demand
+ * 单测）。SoT 自己写了别的取值时不覆盖，见 `injectOnDemandMarker` 的三态返回。
  */
 export const ON_DEMAND_FRONTMATTER_KEY = 'disable-model-invocation';
-
-/** 该键在 frontmatter 顶层的行形态（顶格，不含缩进——缩进的是别的映射的子键）。 */
-const ON_DEMAND_KEY_LINE = new RegExp(`^${ON_DEMAND_FRONTMATTER_KEY}[ \\t]*:`);
 
 /** 注入产物的整行文本（单一事实源：断言与实现取同一个常量）。 */
 export const ON_DEMAND_FRONTMATTER_LINE = `${ON_DEMAND_FRONTMATTER_KEY}: true`;
@@ -71,10 +75,12 @@ function crOf(reference: string | undefined): string {
 export type SkillMaterializeSkipReason =
   /** SoT 两层都没有该技能的 `SKILL.md`：本轮不投影（不像 always 那样 fail-fast）。 */
   | 'not-installed'
-  /** 同名已在 `skills.always` 里：按 always 投影（进模型清单），不注入按需标记。 */
-  | 'shadowed-by-always'
   /** `SKILL.md` 没有 frontmatter，无处注入：正文照常投影，但按需语义不生效。 */
-  | 'no-frontmatter';
+  | 'no-frontmatter'
+  /** frontmatter 区间不是合法 YAML 顶层映射：**拒绝改写**，正文原样投影。 */
+  | 'invalid-frontmatter'
+  /** SoT 显式声明了非 `true` 的取值：尊重它，四家一律不启用按需语义。 */
+  | 'declared-false';
 
 /** 单条跳过记录（命令层与 doctor 原样呈现 detail）。 */
 export interface SkillMaterializeSkip {
@@ -90,38 +96,73 @@ export interface SkillsToMaterialize {
   readonly skips: readonly SkillMaterializeSkip[];
 }
 
+/** `injectOnDemandMarker` 的判定结论（前两态 = 按需语义生效，后三态 = 不生效）。 */
+export type OnDemandInjectionStatus =
+  /** frontmatter 合法且无该键 → 已插入一行。 */
+  | 'injected'
+  /** SoT 自己写了 `true`（任意 YAML 写法）→ 原样返回，语义已生效。 */
+  | 'already-true'
+  /** SoT 显式写了非 `true` 的取值 → 原样返回，按需语义**不**生效。 */
+  | 'declared-false'
+  /** 没有 frontmatter 区间 → 无处注入。 */
+  | 'no-frontmatter'
+  /** 有 fence 区间但不是合法 YAML 顶层映射 → 拒绝改写。 */
+  | 'invalid-frontmatter';
+
+/** 按需语义已在 frontmatter 侧生效的两个状态（codex sidecar 与 doctor ok 的判据）。 */
+export function isOnDemandEffective(status: OnDemandInjectionStatus): boolean {
+  return status === 'injected' || status === 'already-true';
+}
+
 /**
  * 在 frontmatter 里注入 `disable-model-invocation: true`（纯函数，幂等）。
  *
- * 做法是**文本行插入**而不是「解析 YAML → 加键 → 重新序列化」：后者会重排键顺序、
+ * 落盘形态是**文本行插入**而不是「解析 → 加键 → 重新序列化」：后者会重排键顺序、
  * 丢注释、改引号风格，让投影产物与 SoT 原文出现一堆与本功能无关的差异，`§7.6`
  * prune 的 hash 判据也随 yaml 库版本漂移。行插入只多一行，其余逐字不动。
  *
- * 三种输入：
- * - 有 frontmatter 且无该键 → 在结束 fence 之前插入一行，`injected: true`；
- * - 有 frontmatter 且**已有**该键 → 原样返回、`injected: true`：SoT 自己声明过
- *   （可能显式写了 `false`），尊重用户的显式取值，不覆盖也不重复插入；
- * - 无 frontmatter（首行不是 `---`，或没有结束 fence）→ 原样返回、
- *   `injected: false`。此时四家客户端本来就加载不了这个技能（`description` 必填），
- *   调用方据此记一条 `no-frontmatter` 跳过，但仍照常投影正文——不投影只会让技能
- *   彻底消失，比「投影了但按需语义没生效」更难排查。
+ * 但**判定必须先解析**：本函数写的是用户文件，而 `frontmatterRange` 的 fence 判定
+ * 是为只读派生设计的宽松判定（首行 `---` + 线性找下一条 `---`）。只读语境下判错
+ * 只会退化成空对象，写入语境下判错会把一行 YAML 插进正文中间、或插进块标量内部
+ * 把结束 fence 剩在外面——产物变非法 YAML，claude / pi 直接不加载该技能，而 sync
+ * 报成功。故先 `parseFrontmatterMapping`，拿不到顶层映射就一个字节都不改。
+ *
+ * 同名键的判定也走解析结果而不是正则扫行：`"disable-model-invocation": true` 这类
+ * 引号形态扫不到，会追加出第二个同名键 → `yaml` v2 对 duplicate key 抛
+ * `YAMLParseError`，产物同样非法。缩进的同名键不在顶层映射里，天然不算命中。
+ *
+ * 插完还要**再解析一遍产物**：本函数对外承诺的不变式是「返回的正文，其 frontmatter
+ * 恒为合法 YAML 顶层映射且该键恒为 `true`」。输入侧守卫覆盖不到的边界（例如文档里
+ * 存在多条顶格 `---`、首条并非用户意图的结束 fence）由这一步兜住——产不出合法产物
+ * 就退回原文并报 `invalid-frontmatter`，绝不落一个坏 YAML 到用户的投影目录。
+ *
+ * 五种结论见 `OnDemandInjectionStatus`；四种「不生效」都原样返回正文——不投影只会
+ * 让技能彻底消失，比「投影了但按需语义没生效」更难排查。
  */
 export function injectOnDemandMarker(content: string): {
   readonly content: string;
-  readonly injected: boolean;
+  readonly status: OnDemandInjectionStatus;
 } {
-  const range = frontmatterRange(content);
-  if (range === null) {
-    return { content, injected: false };
+  const parsed = parseFrontmatterMapping(content);
+  if (parsed.kind === 'none') {
+    return { content, status: 'no-frontmatter' };
+  }
+  if (parsed.kind === 'invalid') {
+    return { content, status: 'invalid-frontmatter' };
+  }
+  if (Object.hasOwn(parsed.record, ON_DEMAND_FRONTMATTER_KEY)) {
+    const declared = parsed.record[ON_DEMAND_FRONTMATTER_KEY];
+    return { content, status: declared === true ? 'already-true' : 'declared-false' };
   }
   const lines = content.split('\n');
-  for (let i = range.start + 1; i < range.end; i += 1) {
-    if (ON_DEMAND_KEY_LINE.test(lines[i] ?? '')) {
-      return { content, injected: true };
-    }
+  const end = parsed.range.end;
+  lines.splice(end, 0, `${ON_DEMAND_FRONTMATTER_LINE}${crOf(lines[end])}`);
+  const injected = lines.join('\n');
+  const verified = parseFrontmatterMapping(injected);
+  if (verified.kind !== 'mapping' || verified.record[ON_DEMAND_FRONTMATTER_KEY] !== true) {
+    return { content, status: 'invalid-frontmatter' };
   }
-  lines.splice(range.end, 0, `${ON_DEMAND_FRONTMATTER_LINE}${crOf(lines[range.end])}`);
-  return { content: lines.join('\n'), injected: true };
+  return { content: injected, status: 'injected' };
 }
 
 /**
@@ -191,11 +232,8 @@ export async function readSkillsToMaterialize(
   const always = new Set(alwaysNames);
   for (const name of profile.skills.on_demand ?? []) {
     if (always.has(name)) {
-      skips.push({
-        name,
-        reason: 'shadowed-by-always',
-        detail: '同名已在 skills.always 中，按 always 投影（仍进模型的自动路由清单）',
-      });
+      // schema 的 superRefine 已把「两张名单交集非空」拒在 loadProfile（ConfigError(2)），
+      // 走到这里说明 profile 没经过校验；按 always 语义投影一次，不重复产出
       continue;
     }
     const candidates = skillDocCandidates(userSoTRoot, projectSoTRoot, name);
@@ -205,8 +243,16 @@ export async function readSkillsToMaterialize(
       continue;
     }
     const marked = injectOnDemandMarker(found.content);
-    if (!marked.injected) {
-      skips.push({ name, reason: 'no-frontmatter', detail: found.file });
+    if (marked.status === 'declared-false') {
+      // SoT 显式声明了非 true 的取值：四家一律不启用按需语义（codex 也不产 sidecar），
+      // 否则同一个技能会「claude 侧仍自动路由、codex 侧已关闭」地自相矛盾
+      skips.push({ name, reason: 'declared-false', detail: found.file });
+      artifacts.push({ name, content: marked.content });
+      continue;
+    }
+    if (marked.status === 'no-frontmatter' || marked.status === 'invalid-frontmatter') {
+      // frontmatter 侧注入不了，但 codex 的 sidecar 与 frontmatter 无关 → 仍带 onDemand
+      skips.push({ name, reason: marked.status, detail: found.file });
     }
     artifacts.push({ name, content: marked.content, onDemand: true });
   }

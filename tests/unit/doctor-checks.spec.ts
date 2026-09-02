@@ -292,7 +292,7 @@ describe('runDoctorChecks — skills.on_demand 按需装载（Phase 2，§4.2）
     expect(report.exitCode).toBe(0);
   });
 
-  it('同名同时在 always → warn 说明按 always 投影（按需语义不生效）', async () => {
+  it('同名同时在 always 与 on_demand → profile 直接校验失败（error 2），不再是 warn', async () => {
     const host = createDoctorHost();
     await seedProjectSoT(
       host,
@@ -300,10 +300,13 @@ describe('runDoctorChecks — skills.on_demand 按需装载（Phase 2，§4.2）
     );
     await installSkill(host, 'lazy', GOOD_DOC);
 
-    const r = resultOf(await runDoctorChecks(doctorOpts(host)), 'skills-on-demand/lazy');
-    expect(r.level).toBe('warn');
-    expect(r.detail).toContain('skills.always');
-    expect(r.hint).toContain('skills.always');
+    // 两张名单语义互斥，属于声明层的不变式违反 → schema superRefine 在加载阶段就拒掉
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, 'yaml/project/profile.yaml');
+    expect(r.level).toBe('error');
+    expect(r.detail).toContain('skills.on_demand');
+    expect(r.detail).toContain('lazy');
+    expect(report.exitCode).toBe(ExitCode.Config);
   });
 
   it('SKILL.md 无 frontmatter → warn（正文照常投影，但无处注入按需标记）', async () => {

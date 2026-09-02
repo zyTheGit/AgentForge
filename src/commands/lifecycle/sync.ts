@@ -80,14 +80,16 @@ export async function runSync(
 /**
  * `skills.on_demand` 跳过原因的英文一行说明（口径与 doctor 的 skills-on-demand 一致）。
  *
- * 三种原因都不是失败：投影仍然完整，只是这个名字没拿到「按需装载」的待遇。
+ * 四种原因都不是失败：投影仍然完整，只是这个名字没拿到完整的「按需装载」待遇。
  */
 function describeSkillSkip(skip: SyncSkillSkip): string {
   switch (skip.reason) {
     case 'not-installed':
       return 'not installed in either SoT layer - not projected (run `aforge skill add`)';
-    case 'shadowed-by-always':
-      return 'also listed in skills.always - projected as always (still auto-routed)';
+    case 'invalid-frontmatter':
+      return 'frontmatter is not a valid YAML mapping - refused to rewrite it, projected as-is';
+    case 'declared-false':
+      return 'frontmatter declares a non-true disable-model-invocation - honored, on-demand not applied on any target';
     default:
       return 'SKILL.md has no frontmatter - projected as-is, on-demand marker not applied';
   }
