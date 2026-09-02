@@ -1,0 +1,263 @@
+/**
+ * sync 提示类产出的判定单测（§7.4 hook 档降级 / §8.8.4 命令薄壳跳过 /
+ * Phase 2 MCP transport 落差）。
+ *
+ * 覆盖这些纯函数：
+ * - `hookCapableTargetIds`：能力从 projector 读（不是外部映射表）；
+ * - `partitionSessionHookTargets`：本轮 target 按"有没有钩子落点"切两半；
+ * - `collectSessionHookNotices` / `collectSyncAdvisories`：切分结果 → 提示条目，
+ *   以及三类提示（命令跳过 / MCP 落差 / 钩子降级）走同一条通道后互不干扰。
+ *
+ * 全部不碰 IO、不注册任何钩子：这里只断言"该报哪几条"，产物形态见
+ * projectors/codex.spec.ts，MCP 能力矩阵本身见 projectors/mcp-transport.spec.ts，
+ * 端到端见 tests/integration/learning-hook-capture.spec.ts。
+ */
+import { describe, expect, it } from 'vitest';
+import { CODEX_PROJECT_COMMANDS_SKIP_REASON } from '../../../src/core/project/commands';
+import { projectorRegistry } from '../../../src/core/project/projectors/registry';
+import {
+  collectSessionHookNotices,
+  collectSyncAdvisories,
+  hookCapableTargetIds,
+  partitionSessionHookTargets,
+  SESSION_HOOK_NOTICE_ITEM,
+  type SyncAdvisoryInput,
+  sessionHookUnsupportedMessage,
+} from '../../../src/core/project/sync-notices';
+import type { ProjectionPlan, Projector } from '../../../src/core/project/types';
+import {
+  type AutoCapture,
+  type McpServer,
+  McpServerSchema,
+  ProfileSchema,
+} from '../../../src/schema';
+
+/** 只用于查能力的 projector 桩（plan 不会被这些纯函数调用，故返回空计划）。 */
+function fakeProjector(id: string, writesSessionHooks: boolean): Projector {
+  return {
+    id,
+    skillInvokePrefix: '/',
+    writesSessionHooks,
+    plan(): ProjectionPlan {
+      return { targetId: id, items: [] };
+    },
+  };
+}
+
+/** 两支持两不支持的 projector 全集（顺序刻意打乱，用于验证输出是稳定排序的）。 */
+const PROJECTORS: readonly Projector[] = [
+  fakeProjector('zeta', false),
+  fakeProjector('codex', true),
+  fakeProjector('alpha', true),
+  fakeProjector('claude', false),
+];
+
+function profileWith(autoCapture: AutoCapture, targets: readonly string[] = ['codex']) {
+  return ProfileSchema.parse({
+    version: 1,
+    targets,
+    learning: { auto_capture: autoCapture },
+  });
+}
+
+describe('hookCapableTargetIds（能力声明来自 projector）', () => {
+  it('只保留 writesSessionHooks=true 的 id，且升序稳定', () => {
+    expect(hookCapableTargetIds(PROJECTORS)).toEqual(['alpha', 'codex']);
+  });
+
+  it('真实注册表：四家里只有 codex 支持声明式会话钩子（§7.4 支持矩阵）', () => {
+    expect(hookCapableTargetIds(projectorRegistry.list())).toEqual(['codex']);
+  });
+});
+
+describe('partitionSessionHookTargets（本轮 target 的支持度切分）', () => {
+  it('hook 档：按能力切两半，各自保持传入名单的顺序', () => {
+    expect(partitionSessionHookTargets(true, ['claude', 'codex', 'zeta'], PROJECTORS)).toEqual({
+      capable: ['codex'],
+      incapable: ['claude', 'zeta'],
+    });
+  });
+
+  it('非 hook 档：两侧都空（这一档不写钩子，报支持度只是噪音）', () => {
+    expect(partitionSessionHookTargets(false, ['claude', 'codex'], PROJECTORS)).toEqual({
+      capable: [],
+      incapable: [],
+    });
+  });
+
+  it('只覆盖本轮参与的 target（--targets 过滤后的名单之外一律不出现）', () => {
+    const split = partitionSessionHookTargets(true, ['codex'], PROJECTORS);
+    expect(split.capable).toEqual(['codex']);
+    // claude / zeta 这轮没参与投影，不该替它们报降级
+    expect(split.incapable).toEqual([]);
+  });
+
+  it('全都不支持：capable 为空，incapable 为全部（status 据此说"等同 off"）', () => {
+    expect(partitionSessionHookTargets(true, ['claude', 'zeta'], PROJECTORS)).toEqual({
+      capable: [],
+      incapable: ['claude', 'zeta'],
+    });
+  });
+});
+
+describe('collectSessionHookNotices（降级提示条目）', () => {
+  it('每个不支持的 target 一条，item 固定、message 与 doctor 共用同一句', () => {
+    expect(collectSessionHookNotices(true, ['codex', 'claude'], PROJECTORS)).toEqual([
+      {
+        targetId: 'claude',
+        item: SESSION_HOOK_NOTICE_ITEM,
+        message: sessionHookUnsupportedMessage('claude'),
+      },
+    ]);
+  });
+
+  it('提示 item 名与 doctor 的同名条目一致（两处输出能对上）', () => {
+    expect(SESSION_HOOK_NOTICE_ITEM).toBe('learning-auto-capture-hook');
+  });
+
+  it('文案点名 target 并说明"等同 off"，不含任何本机路径', () => {
+    const message = sessionHookUnsupportedMessage('pi');
+    expect(message).toContain('pi');
+    expect(message).toContain('learning.auto_capture: hook');
+    expect(message).toContain('等同 off');
+    // 不含本机路径：无盘符前缀、无路径分隔符（提示文案跨机器一致，可直接比对）
+    expect(message).not.toMatch(/[A-Za-z]:[\\/]/);
+    expect(message).not.toContain('\\');
+  });
+
+  it('非 hook 档 → 空数组', () => {
+    expect(collectSessionHookNotices(false, ['claude', 'zeta'], PROJECTORS)).toEqual([]);
+  });
+
+  it('全部支持 → 空数组（不产生"一切正常"的噪音行）', () => {
+    expect(collectSessionHookNotices(true, ['codex', 'alpha'], PROJECTORS)).toEqual([]);
+  });
+});
+
+describe('collectSyncAdvisories（三类提示汇总，dry-run 与实际写入同一份结论）', () => {
+  /** 只有 codex 表达不了的 transport（矩阵判 unsupported；opencode 判 degraded）。 */
+  const SSE_SERVER: McpServer = McpServerSchema.parse({
+    name: 'remote-sse',
+    transport: 'sse',
+    url: 'https://example.test/sse',
+  });
+
+  /** 入参构造：默认「无命令 / 无 MCP server / off 档」，各用例只覆写关心的那几项。 */
+  function input(overrides: Partial<SyncAdvisoryInput> = {}): SyncAdvisoryInput {
+    return {
+      profile: profileWith('off', ['codex']),
+      scope: 'project',
+      hasCommandsToExpose: false,
+      targetIds: ['codex'],
+      projectors: PROJECTORS,
+      mcpServers: [],
+      ...overrides,
+    };
+  }
+
+  it('hook 档 + 混合 target：只为不支持的 target 产出提示', () => {
+    const advisories = collectSyncAdvisories(
+      input({
+        profile: profileWith('hook', ['codex', 'claude']),
+        targetIds: ['codex', 'claude'],
+      }),
+    );
+    expect(advisories.commandSkips).toEqual([]);
+    expect(advisories.sessionHookNotices.map((n) => n.targetId)).toEqual(['claude']);
+  });
+
+  it.each(['off', 'prompt'] as const)('%s 档：不产出任何钩子提示', (autoCapture) => {
+    const advisories = collectSyncAdvisories(
+      input({
+        profile: profileWith(autoCapture, ['codex', 'claude']),
+        targetIds: ['codex', 'claude'],
+      }),
+    );
+    expect(advisories.sessionHookNotices).toEqual([]);
+  });
+
+  it('§8.8.4：project scope + codex + 有命令 → 命令薄壳整项跳过', () => {
+    const advisories = collectSyncAdvisories(input({ hasCommandsToExpose: true }));
+    expect(advisories.commandSkips).toEqual([
+      { targetId: 'codex', reason: CODEX_PROJECT_COMMANDS_SKIP_REASON },
+    ]);
+  });
+
+  it('user scope 的 codex 命令不跳过；没有命令时也不跳过', () => {
+    expect(
+      collectSyncAdvisories(input({ scope: 'user', hasCommandsToExpose: true })).commandSkips,
+    ).toEqual([]);
+    expect(collectSyncAdvisories(input({ hasCommandsToExpose: false })).commandSkips).toEqual([]);
+  });
+
+  it('codex 未参与本轮（--targets 过滤掉）→ 不报它的命令跳过', () => {
+    expect(
+      collectSyncAdvisories(
+        input({
+          profile: profileWith('off', ['codex', 'claude']),
+          hasCommandsToExpose: true,
+          targetIds: ['claude'],
+        }),
+      ).commandSkips,
+    ).toEqual([]);
+  });
+
+  it('MCP transport 落差与另两类走同一条通道：codex 跳过 / opencode 降级，claude 无落差', () => {
+    const advisories = collectSyncAdvisories(
+      input({
+        profile: profileWith('off', ['codex', 'opencode', 'claude']),
+        targetIds: ['codex', 'opencode', 'claude'],
+        mcpServers: [SSE_SERVER],
+      }),
+    );
+    expect(
+      advisories.mcpTransportNotices.map((n) => `${n.targetId}:${n.serverName}:${n.support}`),
+    ).toEqual(['codex:remote-sse:unsupported', 'opencode:remote-sse:degraded']);
+    // 结构化载荷必须保留（命令层按 support 选标签、把 hint 单独打一行；压成字符串就没了）
+    for (const notice of advisories.mcpTransportNotices) {
+      expect(notice.transport).toBe('sse');
+      expect(notice.detail).toContain('remote-sse');
+      expect(notice.hint).not.toBe('');
+    }
+  });
+
+  it('没有 MCP server → 不产出落差提示（不制造"一切正常"的噪音行）', () => {
+    expect(collectSyncAdvisories(input()).mcpTransportNotices).toEqual([]);
+  });
+
+  it('未参与本轮的 target 不报 MCP 落差（--targets 只留 claude）', () => {
+    expect(
+      collectSyncAdvisories(
+        input({
+          profile: profileWith('off', ['codex', 'claude']),
+          targetIds: ['claude'],
+          mcpServers: [SSE_SERVER],
+        }),
+      ).mcpTransportNotices,
+    ).toEqual([]);
+  });
+
+  it('三类提示可同时出现，互不干扰', () => {
+    const advisories = collectSyncAdvisories(
+      input({
+        profile: profileWith('hook', ['codex', 'claude']),
+        hasCommandsToExpose: true,
+        targetIds: ['codex', 'claude'],
+        mcpServers: [SSE_SERVER],
+      }),
+    );
+    expect(advisories.commandSkips.map((s) => s.targetId)).toEqual(['codex']);
+    expect(advisories.mcpTransportNotices.map((n) => n.targetId)).toEqual(['codex']);
+    expect(advisories.sessionHookNotices.map((n) => n.targetId)).toEqual(['claude']);
+  });
+
+  it('三类都是 plan 派生结论：同一份入参重复调用结果稳定（dry-run 与实写同源）', () => {
+    const shared = input({
+      profile: profileWith('hook', ['codex', 'claude']),
+      hasCommandsToExpose: true,
+      targetIds: ['codex', 'claude'],
+      mcpServers: [SSE_SERVER],
+    });
+    expect(collectSyncAdvisories(shared)).toEqual(collectSyncAdvisories(shared));
+  });
+});

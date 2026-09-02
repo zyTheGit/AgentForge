@@ -122,6 +122,17 @@ export const claudeProjector: Projector = {
   skillDir: claudeSkillsDir,
   skillPath: claudeSkillPath,
 
+  /**
+   * `false`——**不是**因为 Claude Code 没有会话钩子（实测 2.1.220 的二进制里
+   * `SessionEnd` / `SubagentStop` / `PreCompact` / `hook_event_name` 都在，
+   * 落点是 `settings.json` / `.claude\settings.json` / `settings.local.json`），
+   * 而是因为它的钩子只能并入 `hooks.<Event>` 这个**数组**，而 §8.2 的 merge_json
+   * 对数组是整体替换（writer.deepMergeValue）——投影会吞掉用户手写的同事件钩子。
+   * 让 AgentForge 安全落地 claude 钩子需要给 merge_json 加"数组按标识合并"语义，
+   * 属独立议题；在那之前如实降级（sync notice + doctor warn），不静默覆盖。
+   */
+  writesSessionHooks: false,
+
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];
 

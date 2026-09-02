@@ -155,6 +155,16 @@ export const piProjector: Projector = {
   skillDir: piSkillsDir,
   skillPath: piSkillPath,
 
+  /**
+   * `false`——pi 的会话生命周期事件（`session_start` / `session_shutdown`，实测见
+   * 上游 `docs/extensions.md`）只对 **extension** 开放，extension 是放在
+   * `.pi\extensions\*.ts` / `~\.pi\agent\extensions\` 里的 TypeScript 模块
+   * （上游文档自己标注 "Extensions run with your full system permissions"）。
+   * 同 opencode 的理由：那是投放可执行代码而非写配置数据，超出投影层的边界。
+   * hook 档对 pi 等同 off，由 sync notice 与 doctor warn 说明。
+   */
+  writesSessionHooks: false,
+
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];
 

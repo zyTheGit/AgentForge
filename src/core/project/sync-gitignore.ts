@@ -6,6 +6,8 @@
  * 基准，.gitignore 没有对应的正文区间可比。
  */
 import path from 'node:path';
+import type { Profile } from '../../schema';
+import type { Scope } from '../env';
 import { longPathAware, type OsContext, pathApiFor, toPosixSeparators } from '../paths';
 import {
   SYNC_BACKUP_DIRNAME,
@@ -122,4 +124,26 @@ export function buildGitignoreItem(
     action: 'merge_marker',
     content: [...patterns].sort().join('\n'),
   };
+}
+
+/**
+ * 本轮该不该产出 .gitignore 项 + 产出内容（把"要不要写"的判定收在本模块）。
+ *
+ * 两个前提缺一不可：`projection.gitignore_generated=true`，且 **project scope**——
+ * user scope 的投影落在用户目录，没有"项目仓库"概念，写 .gitignore 无意义。
+ *
+ * @returns 不满足前提或无项目内产物时 undefined（engine 据此整项跳过）。
+ */
+export function planGitignoreItem(
+  profile: Profile,
+  scope: Scope,
+  planned: readonly { readonly plan: ProjectionPlan }[],
+  projectRoot: string,
+  sotRoot: string,
+  os: OsContext,
+): ProjectionPlanItem | undefined {
+  if (profile.projection.gitignore_generated !== true || scope !== 'project') {
+    return undefined;
+  }
+  return buildGitignoreItem(planned, projectRoot, sotRoot, os);
 }

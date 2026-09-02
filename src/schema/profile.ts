@@ -33,8 +33,9 @@
  * - learning.auto_capture → core/learning/auto-capture（effectiveAutoCapture 供渲染，
  *   resolveAutoCapture 供 status / doctor 展示）
  *   → `prompt` 档由 core/generate/composer 插入 `## Learning Protocol` 段
- *   （§5.2 / §7.4）；`hook` 档 MVP 未实现，由 doctor 的 learning-auto-capture
- *   条目显式告警，不静默失效；
+ *   （§5.2 / §7.4）；`hook` 档由 core/learning/hook-capture 造钩子产物、各 projector
+ *   决定落点（当前只有 codex 有落点，其余 target 由 sync notice 与 doctor 的
+ *   learning-auto-capture-hook 条目显式降级，不静默失效）；
  * - skills.always → core/sources/skill.readSkillsToMaterialize（物化并投影）；
  * - skills.on_demand → **MVP 决定：只登记不物化**，由 aforge status 展示清单
  *   （Spec §4.2 注记）。按需装载属 Phase 2，MVP 不投影、不生成占位文件——
@@ -89,8 +90,11 @@ export const LineEndingEnum = z.enum(['lf', 'crlf']);
  * - `off`（缺省）：只有人工敲命令；
  * - `prompt`：渲染正文里多一段 `## Learning Protocol`，指示 agent 自行调用
  *   `aforge learn --file -`（概率性，模型可能不执行）；
- * - `hook`：由 target 侧会话钩子触发（确定性，需每个 target 一套钩子适配）——
- *   **MVP 未实现**，行为等同 `off`，由 doctor 显式告警（同 copy_mode: symlink 的口径）。
+ * - `hook`：由 target 侧会话钩子在每次会话开始时注入同一份协议正文（投递是确定的，
+ *   写不写条目仍由 agent 决定）。与 `prompt` **互斥**——hook 档不再往规则文件里插
+ *   那一段。要求 target 支持"只靠写配置数据把钩子装上"，目前只有 codex 满足；其余
+ *   target 在该档等同 `off`，由 sync notice 与 doctor 显式告警（支持矩阵与理由见
+ *   docs/learning.md）。
  */
 export const AutoCaptureEnum = z.enum(['off', 'prompt', 'hook']);
 
