@@ -3,19 +3,23 @@
  * 对齐」/「skills 按需装载」）：不是失败、也不是 soft 失败，只是"这次投影里有件事
  * 用户必须知道"。
  *
- * 四类结论放在同一个模块，因为它们是**同一种东西**——与写入成败无关的本轮结论：
+ * 五类结论放在同一个模块，因为它们是**同一种东西**——与写入成败无关的本轮结论：
  * - 只由「SoT 声明」×「本轮投影哪些 target」决定 → dry-run 也照样给（用户在真写
  *   之前就该看到 codex 会跳掉哪条、哪几家的钩子等同 off、哪个技能没备上货）；
  * - **刻意不并进 `SyncResult.warnings`**：`writeSyncMetaOnSuccess` 按
  *   `warnings[].targetId` 判定「该 target 投影不完整 → 本轮不记账」（见 sync-verify
- *   的 JSDoc）。这四类都是**设计如此**的边界、投影仍然完整，混进 warnings 会让那个
+ *   的 JSDoc）。这五类都是**设计如此**的边界、投影仍然完整，混进 warnings 会让那个
  *   target 的 `artifacts` 记账整轮丢失 → §7.6 的 prune 从此永远清不掉它的产物。
  *
- * 四个来源：
+ * 五个来源：
  * - **命令薄壳整项跳过**（§8.8.4）：codex 的 project scope 不支持命令文件；
  * - **MCP transport 能力落差**（Phase 2）：某个 target 表达不了某个 server 的
  *   transport 时的降级 / 跳过（判据与文案的单一事实源在 `projectors/mcp-transport`
  *   的能力矩阵，这里只负责"本轮投影哪些 target"这一层过滤）；
+ * - **MCP 落点不可安全写入**（issue #52）：claude 的 user 级 MCP 只认
+ *   `~\.claude.json`，而那是 claude 的运行时状态转储 → 整项不投影（判据的单一事实源
+ *   是 `projectors/claude.claudeMcpPath`，文案是同文件的
+ *   `CLAUDE_USER_MCP_SKIP_REASON`）；
  * - **`learning.auto_capture: hook` 的 target 支持度**（§7.4）：声明了 hook，但启用的
  *   target 里有几家没有可声明式写入的会话钩子（opencode / pi 需要投放可执行的
  *   plugin / extension 代码，claude 的钩子只能并入共享的 `.claude\settings.json`
@@ -38,8 +42,10 @@ import type { McpServer, Profile } from '../../schema';
 import type { Scope } from '../env';
 import { effectiveAutoCapture, writesSessionHooks } from '../learning/auto-capture';
 import { CODEX_PROJECT_COMMANDS_SKIP_REASON } from './commands';
+import { CLAUDE_USER_MCP_SKIP_REASON } from './projectors/claude';
 import {
   collectMcpTransportNoticesForTargets,
+  enabledMcpServerNames,
   type McpTransportNotice,
 } from './projectors/mcp-transport';
 import type { SyncCommandSkip, SyncNotice, SyncSkillSkip } from './sync-types';
@@ -47,6 +53,11 @@ import type { Projector } from './types';
 
 /** `learning.auto_capture: hook` 下不支持钩子写入的 target 的提示 item。 */
 export const SESSION_HOOK_NOTICE_ITEM = 'learning-auto-capture-hook';
+
+/**
+ * user scope 下 claude 的 MCP 整项不投影的提示 item（doctor 侧同名，issue #52）。
+ */
+export const CLAUDE_USER_MCP_NOTICE_ITEM = 'mcp-scope/claude-user';
 
 /**
  * 声明了 hook 但该 target 没有钩子落点时的提示文案（doctor 与 sync 共用一句，
@@ -164,9 +175,38 @@ export function collectCommandSkips(input: SyncAdvisoryInput): SyncCommandSkip[]
 }
 
 /**
+ * user scope 下 claude 的 MCP 整项不投影 → 记一条提示（issue #52）。
+ *
+ * 判据三条同时成立才记：effective scope 是 user、claude 在本轮投影列表里、SoT 里
+ * 确有 **enabled** 的 server。第三条不能省——一条 server 都没声明时，「这项没投影」
+ * 是废话，报出来只是噪音（口径与 accountMcpServers / merge_json 载荷同源：
+ * `enabled: false` 不算）。
+ *
+ * 为什么在这里判而不在 projector 里：projector.plan 是纯函数、只产出"写什么"，
+ * 它没有"该向用户说什么"的出口；而这里已经拿到 scope / targetIds / mcpServers 三个
+ * 本轮事实，与 collectCommandSkips 的形状完全一致。跳过与否的**唯一判据**仍在
+ * `claudeMcpPath`（user scope → null），本函数只负责把同一件事说出来。
+ */
+export function collectMcpScopeNotices(input: SyncAdvisoryInput): SyncNotice[] {
+  const hit =
+    input.scope === 'user' &&
+    input.targetIds.includes('claude') &&
+    enabledMcpServerNames(input.mcpServers).length > 0;
+  return hit
+    ? [
+        {
+          targetId: 'claude',
+          item: CLAUDE_USER_MCP_NOTICE_ITEM,
+          message: CLAUDE_USER_MCP_SKIP_REASON,
+        },
+      ]
+    : [];
+}
+
+/**
  * 本轮的全部提示类产出。
  *
- * **四类分开保存而不是压成一个数组**：四者的载荷不同构——`SyncCommandSkip` 是
+ * **五类分开保存而不是压成一个数组**：五者的载荷不同构——`SyncCommandSkip` 是
  * targetId + reason，`SyncNotice` 是 targetId + item + message，
  * `McpTransportNotice` 还带 serverName / transport / support / hint，而
  * `SyncSkillSkip` 是 name + reason 且**根本没有 targetId**（说的是 SoT 侧名单，
@@ -179,15 +219,18 @@ export function collectCommandSkips(input: SyncAdvisoryInput): SyncCommandSkip[]
 export interface SyncAdvisories {
   readonly commandSkips: readonly SyncCommandSkip[];
   readonly mcpTransportNotices: readonly McpTransportNotice[];
+  /** user scope 下 claude 的 MCP 整项不投影（issue #52；见 collectMcpScopeNotices）。 */
+  readonly mcpScopeNotices: readonly SyncNotice[];
   readonly sessionHookNotices: readonly SyncNotice[];
   readonly skillSkips: readonly SyncSkillSkip[];
 }
 
 /**
  * 汇总本轮提示（纯函数）：命令薄壳跳过（§8.8.4）+ MCP transport 落差（Phase 2）+
- * hook 档 target 降级（§7.4）+ `skills.on_demand` 物化跳过（Phase 2）。
+ * MCP 落点不可写（issue #52 claude user scope）+ hook 档 target 降级（§7.4）+
+ * `skills.on_demand` 物化跳过（Phase 2）。
  *
- * 四类走同一个出口而不是散在 engine 各处：它们的共同点是"投影是完整的，但有件事
+ * 五类走同一个出口而不是散在 engine 各处：它们的共同点是"投影是完整的，但有件事
  * 必须告诉用户"，且都必须在 dry-run 下也成立。engine 只管把结论塞进 SyncResult。
  */
 export function collectSyncAdvisories(input: SyncAdvisoryInput): SyncAdvisories {
@@ -195,6 +238,7 @@ export function collectSyncAdvisories(input: SyncAdvisoryInput): SyncAdvisories 
     commandSkips: collectCommandSkips(input),
     // targetIds 已被 filterTargets 限定在四个注册 target 内（能力矩阵按 id 查表）
     mcpTransportNotices: collectMcpTransportNoticesForTargets(input.targetIds, input.mcpServers),
+    mcpScopeNotices: collectMcpScopeNotices(input),
     sessionHookNotices: collectSessionHookNotices(
       writesSessionHooks(effectiveAutoCapture(input.profile)),
       input.targetIds,

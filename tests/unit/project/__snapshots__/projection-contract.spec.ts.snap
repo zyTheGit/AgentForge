@@ -34,7 +34,6 @@ exports[`投影产物字节级不变（四内置 target × project/user） > use
     "merge_marker C:\\Users\\u\\.claude\\CLAUDE.md sha256:047e812b294fc882",
     "write C:\\Users\\u\\.claude\\skills\\demo\\SKILL.md sha256:aab47e994e7773d5",
     "write C:\\Users\\u\\.claude\\commands\\demo.md sha256:753211be67d527b8",
-    "merge_json C:\\Users\\u\\.mcp.json sha256:8cb81b5439bd19e9",
   ],
   "codex": [
     "merge_marker C:\\Users\\u\\.codex\\AGENTS.md sha256:047e812b294fc882",

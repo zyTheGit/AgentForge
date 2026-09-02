@@ -515,6 +515,10 @@ describe('真 git 仓库 fixture：add git（file:// pin）→ skill add → upd
         id: 'fixture',
       });
       expect(added.source.type).toBe('git');
+      // Source 按 type 判别；不收窄则 ref / commit 在 local 分支上并不存在
+      if (added.source.type !== 'git') {
+        throw new Error(`source add <git-url> 应登记为 git 源，实得 ${added.source.type}`);
+      }
       expect(added.source.ref).toBe('main');
       expect(added.source.commit).toBe(fixture.commit);
 

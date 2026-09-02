@@ -173,6 +173,11 @@ export function createDirAwareHost(
       }
       return Promise.resolve({ stdout: '', stderr: '', code: 0 });
     },
+    spawnInteractive(cmd, args, opts) {
+      // sources 系列不拉起交互式子进程（只有 learnings edit 会）；留一个不起进程的
+      // 桩把 Host 契约填满，被意外调用时以"编辑器正常退出"收场而不是静默 undefined
+      return base.spawnInteractive(cmd, args, opts);
+    },
     now() {
       return new Date(0);
     },

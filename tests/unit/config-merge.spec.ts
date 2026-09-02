@@ -137,12 +137,12 @@ describe('mergeProfiles 行为细节', () => {
       mcp: { servers: [{ name: 'remote', transport: 'http' }] },
     };
     expect(
-      mergeProfiles(user, project, { strategy: 'overlay', arrays: 'append' }).mcp.servers?.map(
+      mergeProfiles(user, project, { strategy: 'overlay', arrays: 'append' }).mcp?.servers?.map(
         (s) => s.name,
       ),
     ).toEqual(['fs', 'remote']);
     expect(
-      mergeProfiles(user, project, { strategy: 'overlay', arrays: 'replace' }).mcp.servers?.map(
+      mergeProfiles(user, project, { strategy: 'overlay', arrays: 'replace' }).mcp?.servers?.map(
         (s) => s.name,
       ),
     ).toEqual(['remote']);

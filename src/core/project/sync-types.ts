@@ -122,6 +122,16 @@ export interface SyncResult {
    * 从此清不掉它的产物）。构造见 `sync-notices.collectSessionHookNotices`。
    */
   readonly sessionHookNotices: readonly SyncNotice[];
+  /**
+   * MCP 落点不可安全写入而整项跳过的提示（issue #52）：目前唯一来源是 claude 的
+   * user scope——上游只认 `~\.claude.json`，那是 claude 的运行时状态转储，整文件
+   * 读改写会吞掉它并发写入的内容（依据见 `projectors/claude.claudeMcpPath`）。
+   *
+   * 与 `warnings` 分开的理由同 `sessionHookNotices`：这是**设计如此**的跳过、该
+   * target 其余产物投影完整，混进 warnings 会让 claude 的 artifacts 记账整轮丢失。
+   * 构造见 `sync-notices.collectMcpScopeNotices`。
+   */
+  readonly mcpScopeNotices: readonly SyncNotice[];
   /** soft 项（§8.6）apply 失败收集的 warning（不阻塞 sync）。 */
   readonly warnings: readonly SyncWarning[];
   /**

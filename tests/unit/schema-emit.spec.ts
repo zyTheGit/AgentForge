@@ -17,6 +17,16 @@ const EXPECTED_FILES = [
   'adapter.schema.json',
 ];
 
+/**
+ * 断言用的 JSON Schema 节点：只声明本文件读到的两个关键字，且 properties 递归。
+ * 原先写成 `Record<string, { default?: unknown }>`（只一层），下面的
+ * `properties.merge.properties.strategy` 是三层——tests 进 tsc 后立刻暴露。
+ */
+interface SchemaNode {
+  readonly default?: unknown;
+  readonly properties?: Record<string, SchemaNode>;
+}
+
 describe('emitSchemas（Spec §4 JSON Schema 工件）', () => {
   it('生成七个工件，均为合法 JSON 且声明 Draft 2020-12 与 $id', async () => {
     const host = createFakeHost();
@@ -43,7 +53,7 @@ describe('emitSchemas（Spec §4 JSON Schema 工件）', () => {
     const profileFile = [...host.files.keys()].find((f) => f.endsWith('profile.schema.json'));
     const json = JSON.parse(host.files.get(profileFile as string) as string) as {
       required?: string[];
-      properties?: Record<string, { default?: unknown }>;
+      properties?: Record<string, SchemaNode>;
     };
     // 唯一 required 字段：targets（其余均可省略，由默认值兜底）
     expect(json.required).toEqual(['targets']);

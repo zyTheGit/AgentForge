@@ -238,9 +238,12 @@ describe('init → sync 端到端（进程内，真实 fs）', () => {
     expect(meta.lastSyncAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
     expect(meta.os).toBe(process.platform);
     expect(meta.agentforgeVersion).toBe(VERSION);
-    expect(meta.targets.claude.contentHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(meta.targets.claude.contentHash).toBe(result.contentHash);
-    expect(meta.targets.claude.writtenAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    // targets 是 Record，noUncheckedIndexedAccess 下按键取值可能为 undefined
+    const claudeMeta = meta.targets.claude;
+    expect(claudeMeta).toBeDefined();
+    expect(claudeMeta?.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(claudeMeta?.contentHash).toBe(result.contentHash);
+    expect(claudeMeta?.writtenAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   }, 30_000);
 
   it('未初始化 → sync 抛 ConfigError(2)，hint 引导 aforge init（§7.3-1）', async () => {

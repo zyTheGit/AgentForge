@@ -23,7 +23,12 @@ import { runDetection } from '../../core/detector/engine';
 import type { EnvSnapshot, Scope } from '../../core/env';
 import { readEnv } from '../../core/env';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
-import { BUILTIN_TARGET_IDS, registeredTargetIds, syncOnce } from '../../core/project/engine';
+import {
+  BUILTIN_TARGET_IDS,
+  type BuiltinTargetId,
+  registeredTargetIds,
+  syncOnce,
+} from '../../core/project/engine';
 import { claudeMainRulePath } from '../../core/project/projectors/claude';
 import { codexMainRulePath } from '../../core/project/projectors/codex';
 import { opencodeMainRulePath } from '../../core/project/projectors/opencode';
@@ -85,6 +90,17 @@ export interface InitInteractiveResult {
 export type DetectConfirmAction = 'confirm' | 'redetect' | 'edit';
 
 /**
+ * 各已注册 target 的主规则绝对路径。
+ *
+ * 内置四家是**必然存在**的键（下方字面量无条件赋值），声明式适配器是运行时才知道的
+ * 键——类型如实分成两半：`Record<BuiltinTargetId, string>` 保证 `.codex` 这类直接
+ * 取用不必判空，索引签名部分则按 `noUncheckedIndexedAccess` 给出 `| undefined`。
+ * 写成单一的 `Record<string, string>` 会把「内置四家一定有」这条不变式丢掉。
+ */
+export type TargetMainRulePaths = Readonly<Record<BuiltinTargetId, string>> &
+  Readonly<Record<string, string>>;
+
+/**
  * 各已注册 target 的主规则绝对路径（multiselect hint 与结果打印共用）。
  *
  * 内置四家走各自导出的 `*MainRulePath`（与 sync 的落点同一份函数）；声明式适配器
@@ -96,7 +112,7 @@ export function targetMainRulePaths(
   ctx: InitContext,
   env: EnvSnapshot,
   scope: Scope,
-): Readonly<Record<string, string>> {
+): TargetMainRulePaths {
   const profile = ProfileSchema.parse(windowsDefaultProfile());
   const habits = HabitsSchema.parse(defaultHabits());
   const planCtx: ProjectContext = {
@@ -119,24 +135,27 @@ export function targetMainRulePaths(
     // doctor 三处 plan ctx 均已注入，此处对齐）
     env,
   };
-  const paths: Record<string, string> = {
+  const builtinPaths = {
     opencode: opencodeMainRulePath(planCtx),
     codex: codexMainRulePath(planCtx),
     claude: claudeMainRulePath(planCtx),
     pi: piMainRulePath(planCtx),
-  };
+  } satisfies Record<BuiltinTargetId, string>;
+  const declarativePaths: Record<string, string> = {};
   for (const id of registeredTargetIds()) {
-    if (paths[id] !== undefined) {
+    if (id in builtinPaths) {
       continue;
     }
     try {
       const projector = projectorRegistry.get(id);
-      paths[id] = projector?.plan(planCtx).items[0]?.path ?? '(no artifact in this scope)';
+      declarativePaths[id] =
+        projector?.plan(planCtx).items[0]?.path ?? '(no artifact in this scope)';
     } catch {
-      paths[id] = '(unresolved - see aforge doctor)';
+      declarativePaths[id] = '(unresolved - see aforge doctor)';
     }
   }
-  return paths;
+  // 内置四家放在后面：同名 id 撞车时以内置为准（与 gate.ts 的 builtin-id 闸门一致）
+  return { ...declarativePaths, ...builtinPaths };
 }
 
 /**

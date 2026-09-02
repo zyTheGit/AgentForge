@@ -32,9 +32,10 @@
  *
  * 设计原则：
  * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题。
- *   **这条对 projector.plan 同样成立**：声明式适配器的 plan 会抛 ConfigError，
- *   check-paths 因此对每个 projector 单独 try/catch，整块 runConfigDependentChecks
- *   外还有一层兜底——诊断报告在最需要它的时刻整份消失是最坏的失效模式（PR #59）；
+ *   **这条对 projector.plan 同样成立**，且只靠两处机制（不设整块兜底，见下方
+ *   runDoctorChecks 里 envForPlan 处的注释）：#59 的「消因」把非法外部路径取值摘出
+ *   env，check-paths 的「接缝兜底」对每个 projector 单独 try/catch——诊断报告在最
+ *   需要它的时刻整份消失是最坏的失效模式；
  * - 无持久副作用：除目录可写性探针（mkdirp + 临时文件 + 删除，§7.3-7 语义）
  *   外不写任何文件——探针创建的空目录与 sync 行为一致，无害；
  * - 与 sync 共用 `sync-prepare.renderRulesMd`（不经 engine 门面）；
@@ -48,7 +49,8 @@
  * - `check-residuals`：事务残留（锁 / journal / 回滚失败备份）的级别与提示取舍；
  * - `check-consistency`：渲染基准 / 模板解析 / 命令暴露 / sync-meta / merge_json；
  * - `check-skills`：profile.skills.* 的「声明 vs 实际」（on_demand / copy_mode）；
- * - `check-mcp-transport`：MCP transport × target 能力落差（降级 / 跳过）；
+ * - `check-mcp-transport`：MCP transport × target 能力落差（降级 / 跳过）+
+ *   MCP scope × target 落点不可安全写入（claude user scope 整项跳过）；
  * - `check-projection-hash`：marker 区间三方比对（当前渲染 vs 记录 vs 磁盘）；
  * - `check-environment`：declared vs detected / OneDrive / skills/ 下的 symlink。
  * - `check-sources`：源登记表与默认注册的官方模板源（只读 fs、零网络、恒不抬退出码）；
@@ -87,10 +89,10 @@ import {
   checkSkillsSymlinks,
   checkTargetDirOverrides,
 } from './check-environment';
-import { checkMcpTransport } from './check-mcp-transport';
+import { checkClaudeUserScopeMcp, checkMcpTransport } from './check-mcp-transport';
 import { buildPlanCtx, checkTargetPaths, collectEnabledPlans } from './check-paths';
 import { checkProjectionHashes } from './check-projection-hash';
-import { piLegacyMcpResults, residualResults } from './check-residuals';
+import { claudeLegacyUserMcpResults, piLegacyMcpResults, residualResults } from './check-residuals';
 import { checkSkillsCopyMode, checkSkillsOnDemand } from './check-skills';
 import { checkDefaultSources } from './check-sources';
 import { type DoctorCheckResult, type DoctorReport, doctorExitCode } from './check-types';
@@ -141,6 +143,9 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
 
   // ---- 投影侧历史落点残留：pi 的 MCP 曾写在 .pi/settings.json（只诊断，不删）----
   results.push(...(await piLegacyMcpResults(host, cwd, env.userProfile, os)));
+
+  // ---- 投影侧历史落点残留：claude 的 user MCP 曾写在 ~/.mcp.json（只诊断，不删）----
+  results.push(...(await claudeLegacyUserMcpResults(host, cwd, env.userProfile, os)));
 
   // ---- 坏 YAML 检查（§9：逐文件报告损坏的 habits / profile）----
   const yamlOk = await checkYamlFiles(host, results, roots);
@@ -225,6 +230,9 @@ async function runConfigDependentChecks(
 
   // ---- MCP transport × target 能力落差（Phase 2 MCP 对齐：降级 / 跳过 → warn）----
   checkMcpTransport(results, config);
+
+  // ---- MCP scope × target 落点不可写（issue #52：claude user scope 整项跳过 → warn）----
+  checkClaudeUserScopeMcp(results, config);
 
   // ---- sync-meta 读取（损坏 → error(2)；不存在 → 信息性 ok）----
   const syncMeta = await readSyncMetaForDoctor(host, results, roots, config);

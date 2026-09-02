@@ -1,13 +1,15 @@
 /**
  * sync 提示类产出的判定单测（§7.4 hook 档降级 / §8.8.4 命令薄壳跳过 /
- * Phase 2 MCP transport 落差 / Phase 2 `skills.on_demand` 物化跳过）。
+ * Phase 2 MCP transport 落差 / issue #52 MCP 落点不可写 /
+ * Phase 2 `skills.on_demand` 物化跳过）。
  *
  * 覆盖这些纯函数：
  * - `hookCapableTargetIds`：能力从 projector 读（不是外部映射表）；
  * - `partitionSessionHookTargets`：本轮 target 按"有没有钩子落点"切两半；
+ * - `collectMcpScopeNotices`：user scope 的 claude MCP 整项跳过的三条判据；
  * - `collectSessionHookNotices` / `collectSyncAdvisories`：切分结果 → 提示条目，
- *   以及四类提示（命令跳过 / MCP 落差 / 钩子降级 / on_demand 跳过）走同一条通道后
- *   互不干扰。`skillSkips` 是唯一**不在本模块判定**的一类（判定在 sync-prepare），
+ *   以及五类提示（命令跳过 / MCP 落差 / MCP 落点 / 钩子降级 / on_demand 跳过）走同一条
+ *   通道后互不干扰。`skillSkips` 是唯一**不在本模块判定**的一类（判定在 sync-prepare），
  *   这里只断言它被原样透传、不被改写也不被丢弃。
  *
  * 全部不碰 IO、不注册任何钩子：这里只断言"该报哪几条"，产物形态见
@@ -17,8 +19,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import { CODEX_PROJECT_COMMANDS_SKIP_REASON } from '../../../src/core/project/commands';
+import { CLAUDE_USER_MCP_SKIP_REASON } from '../../../src/core/project/projectors/claude';
 import { projectorRegistry } from '../../../src/core/project/projectors/registry';
 import {
+  CLAUDE_USER_MCP_NOTICE_ITEM,
+  collectMcpScopeNotices,
   collectSessionHookNotices,
   collectSyncAdvisories,
   hookCapableTargetIds,
@@ -42,6 +47,8 @@ function fakeProjector(id: string, writesSessionHooks: boolean): Projector {
     id,
     skillInvokePrefix: '/',
     writesSessionHooks,
+    skillDir: (ctx) => `${ctx.rootDir}\\.${id}\\skills`,
+    skillPath: (ctx, name) => `${ctx.rootDir}\\.${id}\\skills\\${name}\\SKILL.md`,
     plan(): ProjectionPlan {
       return { targetId: id, items: [] };
     },
@@ -138,7 +145,7 @@ describe('collectSessionHookNotices（降级提示条目）', () => {
   });
 });
 
-describe('collectSyncAdvisories（四类提示汇总，dry-run 与实际写入同一份结论）', () => {
+describe('collectSyncAdvisories（五类提示汇总，dry-run 与实际写入同一份结论）', () => {
   /** 只有 codex 表达不了的 transport（矩阵判 unsupported；opencode 判 degraded）。 */
   const SSE_SERVER: McpServer = McpServerSchema.parse({
     name: 'remote-sse',
@@ -293,5 +300,95 @@ describe('collectSyncAdvisories（四类提示汇总，dry-run 与实际写入�
       skillSkips: [SKILL_SKIP],
     });
     expect(collectSyncAdvisories(shared)).toEqual(collectSyncAdvisories(shared));
+  });
+
+  it('user scope + claude：MCP 落点提示与另四类并存，互不干扰（issue #52）', () => {
+    const advisories = collectSyncAdvisories(
+      input({
+        profile: profileWith('hook', ['codex', 'claude']),
+        scope: 'user',
+        hasCommandsToExpose: true,
+        targetIds: ['codex', 'claude'],
+        mcpServers: [SSE_SERVER],
+        skillSkips: [SKILL_SKIP],
+      }),
+    );
+    expect(advisories.mcpScopeNotices.map((n) => n.targetId)).toEqual(['claude']);
+    // 另四类不受影响（user scope 的 codex 命令不跳过，故 commandSkips 为空）
+    expect(advisories.commandSkips).toEqual([]);
+    expect(advisories.mcpTransportNotices.map((n) => n.targetId)).toEqual(['codex']);
+    expect(advisories.sessionHookNotices.map((n) => n.targetId)).toEqual(['claude']);
+    expect(advisories.skillSkips.map((s) => s.name)).toEqual(['ghost']);
+  });
+
+  it('project scope 不产出 MCP 落点提示（.mcp.json 与上游一致，照常投影）', () => {
+    expect(
+      collectSyncAdvisories(
+        input({
+          profile: profileWith('off', ['claude']),
+          targetIds: ['claude'],
+          mcpServers: [SSE_SERVER],
+        }),
+      ).mcpScopeNotices,
+    ).toEqual([]);
+  });
+});
+
+describe('collectMcpScopeNotices（issue #52：claude 的 user 级 MCP 整项不投影）', () => {
+  const STDIO_SERVER: McpServer = McpServerSchema.parse({
+    name: 'fs',
+    transport: 'stdio',
+    command: 'npx',
+  });
+  const DISABLED_SERVER: McpServer = McpServerSchema.parse({
+    name: 'off-one',
+    transport: 'stdio',
+    command: 'npx',
+    enabled: false,
+  });
+
+  function input(overrides: Partial<SyncAdvisoryInput> = {}): SyncAdvisoryInput {
+    return {
+      profile: profileWith('off', ['claude']),
+      scope: 'user',
+      hasCommandsToExpose: false,
+      targetIds: ['claude'],
+      projectors: PROJECTORS,
+      mcpServers: [STDIO_SERVER],
+      skillSkips: [],
+      ...overrides,
+    };
+  }
+
+  it('三条判据齐备 → 一条提示，item 与 doctor 同名、文案取自 projector 的单一事实源', () => {
+    expect(collectMcpScopeNotices(input())).toEqual([
+      {
+        targetId: 'claude',
+        item: CLAUDE_USER_MCP_NOTICE_ITEM,
+        message: CLAUDE_USER_MCP_SKIP_REASON,
+      },
+    ]);
+    expect(CLAUDE_USER_MCP_NOTICE_ITEM).toBe('mcp-scope/claude-user');
+  });
+
+  it('文案给出上游落点、拒写理由与可复制的手工命令', () => {
+    expect(CLAUDE_USER_MCP_SKIP_REASON).toContain('.claude.json');
+    expect(CLAUDE_USER_MCP_SKIP_REASON).toContain('claude mcp add --scope user');
+  });
+
+  it('project scope → 不报（该 scope 的 .mcp.json 照常投影）', () => {
+    expect(collectMcpScopeNotices(input({ scope: 'project' }))).toEqual([]);
+  });
+
+  it('claude 未参与本轮（--targets 过滤掉）→ 不报', () => {
+    expect(collectMcpScopeNotices(input({ targetIds: ['codex'] }))).toEqual([]);
+  });
+
+  it('一条 server 都没声明 → 不报（"这项没投影"是废话）', () => {
+    expect(collectMcpScopeNotices(input({ mcpServers: [] }))).toEqual([]);
+  });
+
+  it('只有 enabled=false 的 server → 不报（口径与 merge_json 载荷同源）', () => {
+    expect(collectMcpScopeNotices(input({ mcpServers: [DISABLED_SERVER] }))).toEqual([]);
   });
 });
