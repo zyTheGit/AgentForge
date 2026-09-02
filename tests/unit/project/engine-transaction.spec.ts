@@ -930,7 +930,10 @@ describe('中断回滚句柄（SIGINT 路径直测）', () => {
     await realHost.writeFile(path.join(sotRoot, 'habits.yaml'), HABITS_YAML);
     await realHost.writeFile(claudeMd, original);
 
-    let snapshot: ReturnType<typeof getActiveSyncTransaction> = null;
+    // 初值取自 getActiveSyncTransaction()（此刻无事务，恒为 null）而非字面量 `null`：
+    // 字面量会让 tsc 把变量收窄成 null 类型，回调里的赋值不参与外层控制流分析，
+    // 后面 `snapshot?.sotRoot` 就成了对 never 取属性。下同。
+    let snapshot = getActiveSyncTransaction();
     let syncRollback: ReturnType<typeof rollbackActiveSyncTransactionSync> = [];
     const interrupting = {
       ...realHost,
@@ -954,6 +957,7 @@ describe('中断回滚句柄（SIGINT 路径直测）', () => {
         lineEnding: undefined,
         ci: false,
         codexHome: undefined,
+        piCodingAgentDir: undefined,
         userProfile: path.join(tmpRoot, 'home'),
       },
       os: OS,
@@ -1026,6 +1030,7 @@ describe('中断回滚句柄（SIGINT 路径直测）', () => {
         lineEnding: undefined,
         ci: false,
         codexHome: undefined,
+        piCodingAgentDir: undefined,
         userProfile: path.join(tmpRoot, 'home'),
       },
       os: OS,
@@ -1118,7 +1123,7 @@ describe('recordWrite — 无 await 空窗', () => {
     const base = createSyncHost();
     await seed(base, PROFILE_ALL);
 
-    let snapshot: ReturnType<typeof getActiveSyncTransaction> = null;
+    let snapshot = getActiveSyncTransaction();
     let journalInWindow: string | undefined;
     const host: FakeHost = {
       ...base,

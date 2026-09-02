@@ -8,6 +8,7 @@
 
 - `src/` 下单个 `.ts` 文件不得超过 **500 行**，由 `npm run lint:size` 卡口（详见 Spec §11.3）。
 - 写新代码前先想清楚它属于哪个模块；文件接近上限就按职责拆，不要靠压缩注释腾空间。
+- 判断"离上限还有多远"只认卡口自己的口径：`npm run lint` 会把 >= 450 行的文件打成 warn，`node scripts/check-file-size.mjs --report 10` 打印行数 Top 10。不要用 `Get-Content | Measure-Object -Line` 等**不计空行**的口径估算。
 
 ## 协作流程
 

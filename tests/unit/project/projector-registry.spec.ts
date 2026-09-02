@@ -59,6 +59,8 @@ function buildCtx(overrides: Partial<ProjectContext> = {}): ProjectContext {
 const fakeProjector: Projector = {
   id: 'fake-agent',
   skillInvokePrefix: '/',
+  // 第三方 target 没有可声明式写入的会话钩子落点（§7.4）
+  writesSessionHooks: false,
   skillDir: (ctx) => `${ctx.rootDir}\\.fake\\skills`,
   skillPath: (ctx, name) => `${ctx.rootDir}\\.fake\\skills\\${name}\\SKILL.md`,
   plan: (ctx): ProjectionPlan => ({

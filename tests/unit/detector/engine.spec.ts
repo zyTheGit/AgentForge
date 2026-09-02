@@ -33,6 +33,7 @@ const ENV_SNAPSHOT: EnvSnapshot = {
   lineEnding: undefined,
   ci: false,
   codexHome: undefined,
+  piCodingAgentDir: undefined,
   userProfile: 'C:/Users/tester',
 };
 

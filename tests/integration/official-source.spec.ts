@@ -33,8 +33,14 @@ interface Workspace {
   readonly sotRoot: string;
   readonly userSoTRoot: string;
   readonly sourcesFile: string;
-  /** 本次工作区内发生过的 git 调用（参数序列）。 */
-  readonly gitCalls: readonly string[][];
+  /**
+   * 本次工作区内发生过的 git 调用（参数序列）。
+   *
+   * 元素数组本身可变：用例之间靠 `ws.gitCalls.length = 0` 清零「init 阶段的调用」，
+   * 只断言被测命令自己有没有联网。原先声明成 `readonly string[][]`，与这个用法
+   * 冲突（tests 进 tsc 后报 TS2540：length 只读）。
+   */
+  readonly gitCalls: string[][];
 }
 
 /** mkdtemp 前缀含中文与空格：§11.2.10 全流程覆盖（同其余集成用例）。 */
