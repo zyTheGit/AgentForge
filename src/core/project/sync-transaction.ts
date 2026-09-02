@@ -19,7 +19,8 @@ import {
   SYNC_BACKUP_FAILED_PREFIX,
   SYNC_BACKUP_JOURNAL_FILE,
 } from './sync-artifacts';
-import { machineIdOf, type SyncLockHandle, userIdOf } from './sync-lock';
+import { machineIdOf, userIdOf } from './sync-identity';
+import type { SyncLockHandle } from './sync-lock';
 import type { SyncRollbackEntry, SyncWarning } from './sync-types';
 import { readExistingForBackup } from './writer';
 
