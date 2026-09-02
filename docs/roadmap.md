@@ -27,7 +27,7 @@
 ## Phase 3（已完成）
 
 - **已实现** — Learning 质量启发式：省略 `--confidence` 时按六个信号加权自动打分（落在 `[0.2, 0.9]`），读时做时间衰减（宽限 30 天 / 半衰期 90 天 / 地板 `base x 0.25` / 180 天标 stale），判重换成字符 trigram Jaccard 两档阈值（`>= 0.92` 重复、`0.65-0.92` 建议合并）。**边界**：只给提示，不做自动静默合并（属「非目标」）。见 [learning](learning.md#confidence自动打分时间衰减相似度判重)
-- **已实现** — `learning.auto_capture: hook`：codex 侧产出 `hooks.json`（`SessionStart` 钩子调只读的 `aforge learn --print-protocol`）。**边界**：判据是"能不能只靠写配置数据把钩子装上"，claude（钩子并入共享 `settings.json` 数组）/ opencode（需 plugin 代码）/ pi（需 extension 代码）三家**仍无落点**，该档等同 `off` 并由 `sync` + `doctor` 显式降级——这三家收在 issue [#56](https://github.com/zyTheGit/AgentForge/issues/56)。见 [learning](learning.md#auto_capture-hook会话钩子投递协议)
+- **已实现** — `learning.auto_capture: hook`：codex 侧产出 `hooks.json`（`SessionStart` 钩子调只读的 `aforge learn --print-protocol`）。**边界**：判据是"能不能只靠写配置数据把钩子装上"，claude（钩子并入共享 `settings.json` 数组）/ opencode（需 plugin 代码）/ pi（需 extension 代码）三家**仍无落点**，该档等同 `off` 并由 `sync` + `doctor` 显式降级。三家的取舍、用户看到什么、以及将来要支持的前置条件（claude 需 `merge_json` 数组级合并语义；opencode / pi 需先回答与声明式适配器同一批安全问题）已记入 [learning](learning.md#另外三家将来要支持的前置条件)，issue [#56](https://github.com/zyTheGit/AgentForge/issues/56) 据此关闭
 - **已实现（第一层）** — 适配器插件化：`Projector` 契约补齐 `skillDir` / `skillPath` / `writesSessionHooks`（新 target 漏实现即编译失败），target 全集收口成两个事实源（编译期 `src/core/project/target-ids.ts`、运行时 `projectorRegistry`），命令层不再直连具体 projector 模块。**边界**：**第二层未做**——外部/声明式适配器的加载方案未定，`profile.yaml` 的 `targets` 目前仍只接受四个内置 id，运行时后补注册的第三方 target 写不进该文件。收在 issue [#53](https://github.com/zyTheGit/AgentForge/issues/53)，取值域说明见 [profile.yaml](profile.md#顶层字段)
 - **已实现** — WSL 互通说明：见 [平台注意事项](platform.md#wsl-互通)。**边界**：AgentForge 不检测 WSL，该章节中「跨 `/mnt/c` 共享 SoT」「锁的跨边界判活」「大小写敏感」三条均标注为**未实测**
 
