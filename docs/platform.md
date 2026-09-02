@@ -26,6 +26,9 @@
 
 **推荐用法：SoT 与项目留在同一侧，不要跨 Windows / WSL 边界共享。** 两侧各跑一次 `aforge init`，各自管自己那一侧的项目；跨边界共享的收益（少维护一份 SoT）远小于下面几条的代价。
 
+> **本节的实测环境**：Windows 11（build 26200，`LongPathsEnabled=0`）+ WSL2 Ubuntu（内核 `6.6.114.1-microsoft-standard-WSL2`）。`/proc/mounts` 里 `/mnt/c` 的形态是
+> `C:\ /mnt/c 9p rw,noatime,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/,cache=5,access=client,msize=65536,trans=fd`——**没有 `metadata` 选项**（这是 WSL2 的默认）。Windows 侧 `COMPUTERNAME=AJIU`、`USERNAME=hpee2`；WSL 侧 `hostname` 为 `ajiu`、`USER=hpee2`（`COMPUTERNAME` / `USERNAME` / `HOSTNAME` 都没有导出给子进程）。带 `metadata` 挂载、或计算机名本身是大写的机器，结论可能不同——下面每条都写了判据，可自行复测。
+
 ### AgentForge 几乎不检测 WSL
 
 - 环境快照只读这几个变量：`AGF_HOME` / `AGF_SCOPE` / `AGF_OFFLINE` / `AGF_LINE_ENDING` / `CI` / `CODEX_HOME` / `PI_CODING_AGENT_DIR`，加上家目录解析用的 `USERPROFILE` / `HOME`（`src/core/env.ts:93`）。平台上下文只有 `win32` / `darwin` / `linux` 三值（`src/core/paths.ts` 的 `OsContext`）。**渲染与投影里没有任何 WSL 专属分支**——WSL 内的 aforge 就是一个普通 Linux 进程。
@@ -36,7 +39,7 @@
 
 - **Windows 侧不能把 SoT 放进 WSL 文件系统。** `\\wsl$\<distro>\...` 与 `\\wsl.localhost\<distro>\...` 都是 UNC 形态；win32 上以 `\\` 或 `//` 开头的**外部路径入口**（`AGF_HOME` / `CODEX_HOME` / `PI_CODING_AGENT_DIR` / 项目目录）一律 `GenericError` 退出码 1（判据在 `src/core/paths.ts` 的 `validatePath`，四个入口共用它）。这条属于「不予实现」，见 [路线图](roadmap.md#不予实现)。
 - 同一个守卫还拒绝**Windows 上的无盘符绝对路径**（`CODEX_HOME=/home/x/.codex` 这类照抄 WSL 侧配置的写法）：`path.win32.resolve` 会把它静默补成 `C:\home\x\.codex`，落点与用户写的完全不是一回事，所以报 `ConfigError` 退出码 2 而不是猜一个盘符。`~` 会先展开成家目录再校验，写 `~/.codex` 不会造出字面名为 `~` 的目录。
-- 反方向（WSL 侧把 SoT 放在 `/mnt/c/...`）不会被拒：UNC 判据只在 win32 分支生效，posix 上 `//foo` 是合法绝对路径（`validatePath` 里的注释说明了为什么不能在 posix 上拦）。技术上可行，但要一并接受下面「锁与原子写」「大小写」两节的代价。**未实测**。
+- 反方向（WSL 侧把 SoT 放在 `/mnt/c/...`）不会被拒：UNC 判据只在 win32 分支生效，posix 上 `//foo` 是合法绝对路径（`validatePath` 里的注释说明了为什么不能在 posix 上拦）。技术上可行，但要一并接受下面「锁与原子写」「大小写」两节的代价。AgentForge 依赖的**文件系统原语**已在 `/mnt/c` 上逐条实测通过（非递归 `mkdir` 的 `EEXIST`、同目录 rename、深路径读写，见下面两节），但**「WSL 侧跑一轮完整 `aforge sync`」这件事本身仍未实测**——本次验证用的发行版里没有 node / bun 运行时，装一个属于改动机器环境，没做。所以这条只能说「前提条件都成立」，不能说「整体可用」。
 - `aforge doctor` 的 `user-sot-root` 条目会把 UNC `AGF_HOME` 报成 error（`src/core/doctor/check-config.ts:27` 调 `resolveUserSoT`）；`CODEX_HOME` / `PI_CODING_AGENT_DIR` 的同类问题由 `codex-home` / `pi-coding-agent-dir` 两条报出——看到这些就是撞上了上面那两条拒绝。
 
 ### user scope 是两份，不会自动合并
@@ -44,7 +47,7 @@
 - 四个 target 的 user scope 落点全部从 `env.userProfile` 拼出：opencode `<home>/.config/opencode`、codex `<home>/.codex`、claude `<home>/.claude`、pi `<home>/.pi/agent`（`src/core/paths.ts:98`；projector 侧同构，见 `src/core/project/projectors/opencode.ts:67`、`codex.ts:58`、`claude.ts:54`、`pi.ts:76`）。Windows 上 `<home>` 是 `C:\Users\x`，WSL 上是 `/home/x`——**这是两套完全独立的 user scope**，一侧 `aforge sync` 不会影响另一侧的客户端配置。想两边都生效就两边都 sync。
 - **没有 `~` 展开。** `CODEX_HOME` / `PI_CODING_AGENT_DIR` 的取值直接进 `path.resolve()`（`src/core/paths.ts:103` / `106`，projector 侧 `codex.ts:61`、`pi.ts:79`），全仓无任何 tilde 展开逻辑。写成 `~/.codex` 会得到一个字面名为 `~` 的目录，而不是家目录下的 `.codex`。
 - 更隐蔽的一种：Windows 侧的 shell 若继承了 WSL 风格的 `CODEX_HOME=/home/x/.codex`，`path.win32.resolve` 会按当前盘符把它绝对化成 `C:\home\x\.codex`——**不报错、静默落错位置**。跨环境切换后先跑 `aforge doctor` 看 `path/<target>` 条目（恒为 ok 的信息项，直接打印两个 scope 的实际落点，`src/core/doctor/check-paths.ts:61`）核对落点。
-- 这两个变量**不过** UNC 校验：`validatePath` 只在 `resolveUserSoT` 里被调用一次（`src/core/paths.ts:78`），`CODEX_HOME` / `PI_CODING_AGENT_DIR` 走的是裸 `api.resolve()`。也就是说 `AGF_HOME` 指向 `\\wsl.localhost\...` 被拒，但 `CODEX_HOME` 指向同一位置不会被拒。这是实现上的不对称，别依赖它——UNC 落点的实际写入行为**未实测**。
+- 这两个变量**不过** UNC 校验：`validatePath` 只在 `resolveUserSoT` 里被调用一次（`src/core/paths.ts:78`），`CODEX_HOME` / `PI_CODING_AGENT_DIR` 走的是裸 `api.resolve()`。也就是说 `AGF_HOME` 指向 `\\wsl.localhost\...` 被拒，但 `CODEX_HOME` 指向同一位置不会被拒。这是实现上的不对称，别依赖它。**实测**（Windows 侧 node 对 `\\wsl.localhost\Ubuntu\tmp\...`）：`mkdir -p`、非递归 `mkdir`（第二次如期 `EEXIST`）、`writeFile` / `readFile`、**同目录 rename**（`atomicWrite` 的落地方式）全部成功；`path.win32.resolve` 保留 `\\` 前缀不变形；长路径的 `\\?\UNC\wsl.localhost\...` 形式可写（`longPathAware` 的 UNC 分支产出的正是这个形式，`src/core/paths.ts:151`），而把 `\\?\` 直接拼在 `\\` 前的朴素写法则 `ENOENT`。唯一不成立的是权限位：`chmod 0o600` 后回读仍是 `666`（同下面 `/mnt/c` 那条，SMB/9p 层不承载 Unix mode）。所以「UNC 落点写不进去」这个担心不成立，真正的代价是不可靠的权限语义 + 网络重定向器的延迟。
 
 ### 换行符与 marker hash
 
@@ -55,16 +58,19 @@
 
 ### 锁与原子写
 
-- `.sync.lock` 是**目录锁**，互斥原语是非递归 `mkdir` 的 `EEXIST`（`src/infra/real-host.ts:97`、`src/core/project/sync-lock.ts:231`）。锁目录落在 `/mnt/c` 上时最终由 NTFS 承接，两侧的 `mkdir` 都经过它，因此互斥**预期**成立——但**未实测**，不要据此放心地两侧并发跑 sync。
-- 抢占陈旧锁的判据是「心跳停摆 > 5 分钟 **且** 持有者进程已不存活」，其中 pid 判活只在「同机器 + 同用户」时才采信（`src/core/project/sync-lock.ts:239`；`machineIdOf` / `userIdOf` 见同文件 `104` / `109`，`isProcessAlive` 见 `119`）。WSL 的 hostname 默认与 Windows 计算机名相同、用户名也常常相同，于是 `sameHost` 有可能跨边界被判成 true，而两侧的 pid 空间互不相关——此时 pid 探针的结论不可信。心跳（30 秒刷新 / 5 分钟阈值，`sync-lock.ts:57` 与 `31`）仍是主要保护。**未实测**。
-- **「跨文件系统边界 rename 会失败」在这里不成立**：`atomicWrite` 的临时文件与目标**同目录**（`src/infra/fsutil.ts:100`），rename 永远发生在同一文件系统内。`/mnt/c` 场景下真实的风险是另一侧进程占用目标文件，rename 拿到 `EPERM` / `EACCES` → `PermissionError` 退出码 4（`src/infra/fsutil.ts:131`）。
-- `copyMode` 在 posix 上把目标原有权限位复制到临时文件（`src/infra/real-host.ts:71`，win32 上是 no-op）。DrvFs / 9p 挂载默认不带 `metadata` 选项时 `chmod` 是否真正生效**未实测**；即便失败也是 best-effort 被吞掉（`src/infra/fsutil.ts:122`），只会让目标退回默认 mode，不阻断写入。
-- 结论：不要两侧同时对同一份 SoT 跑 `sync`，理由与单侧并发相同，见下方 [已知限制](#已知限制) 的并发安全条目。
+- `.sync.lock` 是**目录锁**，互斥原语是非递归 `mkdir` 的 `EEXIST`（`src/infra/real-host.ts:97`、`src/core/project/sync-lock.ts:184`）。**实测成立**：在 `/mnt/c` 的同一目录下，Windows 侧（node `fs.mkdirSync`，与 `Host.mkdirExclusive` 同一 syscall）与 WSL 侧（coreutils `mkdir`）按同一墙钟时刻起跑、各自以不同随机顺序抢同一批 20000 个目录名，结果是 Windows 赢 19079、WSL 赢 921，**合计正好 20000、双方赢下的名字集合交集为空**，磁盘上也正好 20000 个目录。真并发是确认过的（单侧独跑 20000 次约 0.2s，本轮 Windows 侧耗时 9.5s，被对侧压满）。单侧重复 `mkdir` 同一目录同样如期报 `File exists`。
+- 抢占陈旧锁的判据是「心跳停摆 > 5 分钟 **且** 持有者进程已不存活」，其中 pid 判活只在 `sameProcessSpace` 为真时才采信（`src/core/project/sync-lock.ts:193`；判据本体在 `src/core/project/sync-identity.ts` 的 `sameProcessSpace` / `machineIdOf` / `userIdOf` / `pidSpaceIdOf` / `isProcessAlive`）。三项都是**严格字符串相等且都不为空**：机器（`COMPUTERNAME → HOSTNAME → os.hostname()`）、用户（`USERNAME → USER → os.userInfo().username`）、**pid 空间**（`WSL_DISTRO_NAME` 置位 → `wsl:<发行版>`；检出 `WSL_INTEROP` 但读不到发行版名 → 空串"未知"；其余 → `native:<platform>`）。
+  - 前两项在本机的实测取值：Windows `AJIU` / `hpee2`，WSL `ajiu` / `hpee2`（WSL 里 `COMPUTERNAME`、`USERNAME`、`HOSTNAME` 都不在子进程环境里，机器名落到 `os.hostname()`，保留原始小写；Windows 恒把 `COMPUTERNAME` 报成全大写）。
+  - **跨 Windows / WSL 边界的结论不再取决于计算机名的大小写**：即使计算机名本身全大写、前两项字符串相等，pid 空间这一项也一定不等——Windows 侧恒为 `native:win32`，WSL 侧要么是 `wsl:<发行版>`、要么是空串（空串按"取不到"处理，同样判不等）。所以跨边界 `sameProcessSpace` 恒为 **false**，pid 探针不被采信，只能落回心跳判据（30 秒刷新 / 5 分钟阈值，`sync-lock.ts:69` 与 `43`）。这正是 PR #59 加 `pidSpace` 字段要解决的问题：旧的「同机器 + 同用户」判据在全大写计算机名的机器上会跨边界为真，于是 `kill(pid, 0)` 拿本侧 pid 空间去判对侧进程——极端情况下把对侧仍在写的锁判成「进程已消失」而抢占（前提是心跳同时已停摆超 5 分钟）。
+  - 代价在**老锁文件**上：`pidSpace` 是后加字段，旧版本写下的 `meta.json` 没有它 → 读成空串 → `sameProcessSpace` 为 false → 不做 pid 探针。于是一把真·本机活锁若心跳停摆超 5 分钟仍可能被抢占；这个方向是实现里刻意选的（反方向会让跨边界的陈旧锁被永久判成活锁，只能人工删目录）。
+- **「跨文件系统边界 rename 会失败」在这里不成立**：`atomicWrite` 的临时文件与目标**同目录**（`src/infra/fsutil.ts:100`），rename 永远发生在同一文件系统内。实测 WSL 侧在 `/mnt/c` 上做同目录 `mv` 成功。`/mnt/c` 场景下真实的风险是另一侧进程占用目标文件，rename 拿到 `EPERM` / `EACCES` → `PermissionError` 退出码 4（`src/infra/fsutil.ts:131`）。
+- `copyMode` 在 posix 上把目标原有权限位复制到临时文件（`src/infra/real-host.ts:71`，win32 上是 no-op）。**实测：默认（不带 `metadata`）挂载下 `chmod` 是无效操作**——`/mnt/c` 上新建文件恒为 `777`，`chmod 600` 退出码 0 但回读仍是 `777`（同一发行版 ext4 `/tmp` 上的对照组正确变成 `600`）。即 posix 分支的 `copyMode` 在 `/mnt/c` 上等价于 no-op：不报错、不阻断写入（失败本来也是 best-effort 吞掉，`src/infra/fsutil.ts:122`），只是「保留原权限」这件事不会发生。带 `metadata` 挂载选项时行为不同（本次未测）。
+- 结论：互斥原语本身跨边界成立（上面那轮 20000 次对抗实测），`sameProcessSpace` 也已经把「跨边界误信 pid 探针」这个坑堵掉了，但仍**不建议**两侧同时对同一份 SoT 跑 `sync`——剩下的理由是：大小写不敏感带来的「同一项目两个根 → 两把锁」（互斥直接失效，见下节），以及跨边界的陈旧锁只能走「心跳停摆 5 分钟」这条慢路径恢复（pid 探针恒不采信）。另见下方 [已知限制](#已知限制) 的并发安全条目。
 
 ### 大小写与路径长度
 
-- posix 分支的路径比较是**大小写敏感**的：`samePath` 只在 win32 折叠大小写（`src/core/paths.ts:130`），`isWithinAnyRoot` 的 fold 同理（`src/core/paths.ts:236`）。而 `/mnt/c` 默认大小写不敏感——WSL 侧分别用 `/mnt/c/Zy/proj` 和 `/mnt/c/zy/proj` 访问同一个项目时，AgentForge 会当成两个不同的根。影响面是锁根推导（`resolveLockRoots`，`src/core/project/sync-lock.ts:427`）与落盘 journal 的归属判定。**未实测**；规避办法是固定路径的大小写写法。
-- Windows 长路径 `\\?\` 前缀只在 win32 上添加（`src/core/paths.ts:142`）。WSL 侧写 `/mnt/c` 下的深路径不会带这个前缀，NTFS 侧的长度上限如何表现**未实测**。
+- posix 分支的路径比较是**大小写敏感**的：`samePath` 只在 win32 折叠大小写（`src/core/paths.ts:130`），`isWithinAnyRoot` 的 fold 同理（`src/core/paths.ts:236`）。而 `/mnt/c` **实测确认大小写不敏感**：WSL 侧建出 `.../CaseProbe` 后，`[ -d .../caseprobe ]` 与 `[ -d .../CASEPROBE ]` 都命中，再 `mkdir .../caseprobe` 报 `File exists`（即文件系统只认一个目录，但任意大小写写法都能访问到它）。于是 WSL 侧分别用 `/mnt/c/Zy/proj` 和 `/mnt/c/zy/proj` 访问同一个项目时，AgentForge 会当成两个不同的根：影响面是锁根推导（`resolveLockRoots`，`src/core/project/sync-lock.ts:379`）与落盘 journal 的归属判定——两个「根」各自建自己的 `.sync.lock`，互斥就失效了。规避办法是固定路径的大小写写法（例如始终用 `cd -P` 后的形态，或在脚本里写死一种）。
+- Windows 长路径 `\\?\` 前缀只在 win32 上添加（`src/core/paths.ts:142`）。**实测：WSL 侧不受 260 字符限制**——在 `/mnt/c` 下逐级建到 40 层、目录路径 905 字符仍成功，在 914 字符处写文件并读回正常。反向读也没问题：Windows 侧 node 走普通路径（无 `\\?\`）就能 `readdir` / `stat` / 读到那个 910 字符的文件，加 `\\?\` 前缀同样可以——注意这台机器的 `LongPathsEnabled=0`，能成的原因是 libuv 自己会把超长绝对路径转成 `\\?\` 形式，**不能**据此推断「Win32 API 裸长路径可用」。`longPathAware` 因此是一层显式冗余保护，而不是唯一屏障。
 
 ### doctor 在跨环境下的读法
 

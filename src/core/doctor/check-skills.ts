@@ -119,8 +119,9 @@ async function checkOneOnDemandSkill(
  * - 无 frontmatter / frontmatter 不是合法 YAML 顶层映射 → warn：注入被拒绝，正文
  *   照常投影（注入永远不在「没解析成功」的前提下改写用户文件）；
  * - SoT 显式写了非 `true` 的取值 → warn：尊重该取值，四家一律不启用按需语义；
- * - 启用了 opencode 且确有生效的 on_demand 技能 → warn：opencode 对未知
- *   frontmatter 键的处理未实机验证（降级提示，不静默）；
+ * - 启用了 opencode 且确有生效的 on_demand 技能 → warn：opencode 没有对应开关
+ *   （实测 1.15.13：未知 frontmatter 键既不校验也不读取，注入是空操作 → 技能仍进
+ *   模型清单，降级提示，不静默）；
  * - 其余情况 → ok（列出生效的名字）。
  *
  * 「同名同时出现在 always 与 on_demand」不在此处判：schema 的 superRefine 已让这种
@@ -166,7 +167,7 @@ export async function checkSkillsOnDemand(
       section: 'config',
       level: 'warn',
       item: 'skills-on-demand/opencode-unsupported',
-      detail: `opencode 的公开文档只列 name / description / license / compatibility / metadata，它对 ${ON_DEMAND_FRONTMATTER_KEY} 的处理**未实机验证**：若忽略未知键，则 ${effective.join(', ')} 在 opencode 里仍会进模型的技能清单；若它做严格校验，注入可能让该技能在 opencode 侧加载失败`,
+      detail: `opencode 没有对应开关（实测 opencode 1.15.13：技能加载器只校验 name 与可选 description，未知 frontmatter 键既不校验也不读取，${ON_DEMAND_FRONTMATTER_KEY} 在其实现里零引用）——注入那一行不会让技能加载失败，但 ${effective.join(', ')} 在 opencode 侧仍会进模型的技能清单`,
       hint: '在 opencode 侧确认技能仍可用；需要挡住自动调用，在 opencode.json 里配 permission.skill.<name>: "ask" 或 "deny"',
     });
   }
