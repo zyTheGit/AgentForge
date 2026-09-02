@@ -60,7 +60,7 @@ learning:
 - **运行时可用集合** = projector 注册表（`src/core/project/projectors/registry.ts`）。`aforge sync --targets` 的合法性校验每次现读注册表内容（不再对照另写一份常量），因此运行时新注册的 projector 会立刻被 `--targets` 认下。
 - **`profile.yaml` 的取值域** = 内置 id 元组（`src/core/project/target-ids.ts`）。`schema/profile.ts` 的 `TargetEnum` 与注册表的装配表都从这个叶子模块取同一份元组（叶子模块零 import，避免 `schema/profile → registry` 成环），所以加内置 projector 时漏改一处即编译失败。
 
-注意 `profile.yaml` 这一侧目前仍**只接受四个内置 id**——第三方 target 能不能写进本文件，取决于外部适配器加载方案（roadmap Phase 3「适配器插件化」第二层）如何落地。
+注意 `profile.yaml` 这一侧目前仍**只接受四个内置 id**：运行时后补注册的第三方 target 能被 `aforge sync --targets` 认下，却**写不进本文件**（schema 的枚举只认内置元组）。放开这一层取决于外部/声明式适配器的加载方案，收在 issue [#53](https://github.com/zyTheGit/AgentForge/issues/53)（[路线图](roadmap.md#phase-3已完成)「适配器插件化」的第二层）。
 
 `templates` 里能填哪些 id，取决于 user 层 `sources.json` 中登记且**已启用**的源（`sources.json` 与 `store\` 恒在 user 层）。`aforge init` 默认注册的官方模板源是**禁用**态，启用方式、pin 策略与离线行为见 [命令速查](commands.md#官方模板源默认注册默认禁用)。
 
@@ -98,7 +98,7 @@ skills:
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `always` | string[] | 无 | 每次 `sync` 都物化并投影的技能名。`aforge skill add` 会自动幂等登记（`--no-register` 关闭），`skill remove` 只把名字摘掉 |
-| `on_demand` | string[] | 无 | **MVP 只登记不物化**：不会被 `sync` 物化或投影，仅由 `status` / `doctor` 列出 |
+| `on_demand` | string[] | 无 | **按需装载**：正文照常物化投影，但不进模型的自动路由清单（claude / pi 注入 frontmatter `disable-model-invocation: true`，codex 额外写 sidecar `agents\openai.yaml`，opencode 无对应开关）。点名却没装**不阻塞** `sync`（只 warn）；**与 `always` 有交集则加载即失败**（退出码 2，两张名单语义互斥）。见 [技能](skills.md#按需装载on_demand) |
 | `copy_mode` | `copy` \| `symlink` | `copy` | **`symlink` 恒被忽略且不予实现**；enum 保留取值只为不让既有 profile 加载失败，声明它会让 `doctor` 报 `skills-copy-mode` warn |
 | `expose_as_command` | string[] | 无 | 额外投影成命令/prompt 薄壳的技能名，可带 `ns/` 前缀。**必须是 `always` 的子集**（最后一段是技能名），点名却没登记 → `sync` 退出码 2 |
 
@@ -146,5 +146,5 @@ skills:
 ## 校验与编辑器提示
 
 - `npm run emit-schema` 生成的 `schemas/profile.schema.json`（JSON Schema Draft 2020-12，`$id: https://agentforge.dev/schema/profile.json`）可挂到编辑器做补全与校验。
-- `aforge doctor` 会检出「声明了却无效」的字段（`copy_mode: symlink`、`on_demand` 只登记、命令命名空间被平铺、`auto_capture: hook` 下没有钩子落点的 target 等），这些是 warn，不影响退出码。
+- `aforge doctor` 会检出「声明了却无效」的字段（`copy_mode: symlink`、`on_demand` 的名字没装 / frontmatter 无处注入、命令命名空间被平铺、`auto_capture: hook` 下没有钩子落点的 target 等），这些是 warn，不影响退出码。
 - 尚未实现或被平台限制的字段汇总见 [平台注意事项与已知限制](platform.md#已知限制)。

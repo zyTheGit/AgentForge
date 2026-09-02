@@ -15,21 +15,29 @@
 - `import` 基础版、`bundle export/import`
 - Windows 门禁验收（[Spec §11.2](../AgentForge-Spec.md#112-mvp-验收必须在-windows-上执行)，16 条）
 
-## Phase 2
+## Phase 2（已完成）
 
-- **已提前落地**：Commands 命名空间 + `$1..$9` 归一化；Interactive `init` 体验
-- **部分实现** — MCP 字段与上游对齐：`http` / `sse` 目前只按 `url` 形态投递，未按 transport 细分；claude 的 user scope 全局 MCP 策略沿用现有契约位
-- **部分实现** — 更丰富探测器：现有能力封顶在 node/python 版本管理器、包管理器、rust/go、shell；无 java / dotnet / monorepo / CI 探测
-- **未实现** — 可选官方模板仓库：内置模板只有 `base/default`，没有默认注册的官方源，需自行 `aforge source add`
-- **未实现** — `import` 增强：只认 `AGENTS.md` / `CLAUDE.md` 两种文件名，工具链关键词表硬编码
-- **未实现** — `skills.on_demand` 按需装载：只登记不物化，声明的 skill 名不进投影，仅由 `status` / `doctor` 列出
+- **已实现** — Commands 命名空间 + `$1..$9` 归一化；Interactive `init` 体验（提前落地）
+- **已实现** — MCP 字段与上游对齐：`stdio` / `http` / `sse` 三态按 target 逐格归一化，能力矩阵是 `src/core/project/projectors/mcp-transport.ts` 的 `MCP_TRANSPORT_MATRIX`（单一事实源）。上游表达不了的两格显式降级而非静默：opencode × `sse` 降级为 streamable HTTP、codex × `sse` 整条跳过，`sync` 与 `doctor` 各报一条。用法与矩阵见 [MCP](mcp.md#transport--target-支持矩阵)
+- **已实现** — 更丰富探测器：在 node/python/包管理器/rust/go/shell 之外新增 java（`sdkman` > `jenv` > `jabba` > `mise` > `asdf`）、dotnet（只有 `system` / `none`）、monorepo（`nx` > `turbo` > `lerna` > `rush` > `pnpm-workspace`）、CI（`github-actions` > `gitlab-ci` > `circleci` > `jenkins` > `azure-pipelines`）。**边界**：这四类只写进 `habits.detected`，声明侧字段（`runtime.java` 等）尚未定义、不参与渲染，判据见 [habits.yaml](habits.md#detected-快照结构)
+- **已实现** — 可选官方模板仓库：`init` 往 user 层 `sources.json` 播种一条 `official`（pin 到 tag，**默认禁用**、零网络），`aforge source enable official` 才启用。**边界**：官方仓库当前没有 `manifest.yaml`（走目录扫描回落），且 `disable` 挡不住已拉取缓存被 `resolveTemplate` 渲染——这两项收在 issue [#55](https://github.com/zyTheGit/AgentForge/issues/55)，行为与规避方式见 [命令速查](commands.md#官方模板源默认注册默认禁用)
+- **已实现** — `import` 增强：文件识别改为声明式规则表（8 种，含 `.cursor/rules/*.mdc` 与 `.github/copilot-instructions.md` 的目录判据），工具链关键词扩到 9 类且词边界安全，见 [命令速查](commands.md#import-可识别的文件与关键词覆盖)
+- **已实现** — `skills.on_demand` 按需装载：正文照常物化投影，区别是**不进模型的自动路由清单**（claude / pi 注入 frontmatter `disable-model-invocation: true`，codex 写 sidecar `agents\openai.yaml`）。**边界**：opencode 无对应开关（`doctor` 显式告警）；codex sidecar 的字段名取自社区文档、**未实机验证**（见下「已知遗留」）。用法见 [技能](skills.md#按需装载on_demand)
 
-## Phase 3
+## Phase 3（已完成）
 
-- **未实现** — Learning 质量启发式：`confidence` 字段存在但无自动打分、衰减或去重合并，缺省固定 `0.5`
-- **未实现** — `learning.auto_capture: hook`：无任何 target 侧会话钩子，行为等同 `off`，`doctor` 统一 warn。落点调研（claude 用 `settings.json` 的 `SessionEnd` / `Stop`，codex 用 `config.toml` 钩子段，opencode 需 plugin，pi 需 extension）见 [Spec §7.4](../AgentForge-Spec.md#74-learn)
-- **未实现** — 适配器插件化：注册容器已就位，`Projector` 的扩展点尚未开放
-- **未实现** — WSL 互通说明
+- **已实现** — Learning 质量启发式：省略 `--confidence` 时按六个信号加权自动打分（落在 `[0.2, 0.9]`），读时做时间衰减（宽限 30 天 / 半衰期 90 天 / 地板 `base x 0.25` / 180 天标 stale），判重换成字符 trigram Jaccard 两档阈值（`>= 0.92` 重复、`0.65-0.92` 建议合并）。**边界**：只给提示，不做自动静默合并（属「非目标」）。见 [learning](learning.md#confidence自动打分时间衰减相似度判重)
+- **已实现** — `learning.auto_capture: hook`：codex 侧产出 `hooks.json`（`SessionStart` 钩子调只读的 `aforge learn --print-protocol`）。**边界**：判据是"能不能只靠写配置数据把钩子装上"，claude（钩子并入共享 `settings.json` 数组）/ opencode（需 plugin 代码）/ pi（需 extension 代码）三家**仍无落点**，该档等同 `off` 并由 `sync` + `doctor` 显式降级——这三家收在 issue [#56](https://github.com/zyTheGit/AgentForge/issues/56)。见 [learning](learning.md#auto_capture-hook会话钩子投递协议)
+- **已实现（第一层）** — 适配器插件化：`Projector` 契约补齐 `skillDir` / `skillPath` / `writesSessionHooks`（新 target 漏实现即编译失败），target 全集收口成两个事实源（编译期 `src/core/project/target-ids.ts`、运行时 `projectorRegistry`），命令层不再直连具体 projector 模块。**边界**：**第二层未做**——外部/声明式适配器的加载方案未定，`profile.yaml` 的 `targets` 目前仍只接受四个内置 id，运行时后补注册的第三方 target 写不进该文件。收在 issue [#53](https://github.com/zyTheGit/AgentForge/issues/53)，取值域说明见 [profile.yaml](profile.md#顶层字段)
+- **已实现** — WSL 互通说明：见 [平台注意事项](platform.md#wsl-互通)。**边界**：AgentForge 不检测 WSL，该章节中「跨 `/mnt/c` 共享 SoT」「锁的跨边界判活」「大小写敏感」三条均标注为**未实测**
+
+## 已知遗留
+
+这些不阻塞 Phase 2 / Phase 3 收尾，但会影响特定场景，均已开 issue 跟踪：
+
+- **三处未实机验证的上游字段 / 行为**（issue [#54](https://github.com/zyTheGit/AgentForge/issues/54)）：codex 技能 sidecar `agents\openai.yaml` 的 `policy.allow_implicit_invocation`（来源为社区文档，未见官方 docs 明列）、opencode 对未知 frontmatter 键的处理、pi 侧 `httpTransport: "sse"` 的实际连接行为。若上游与假设不符，症状是「按需语义/SSE 锁定不生效」而非报错，`doctor` 的对应条目已把不确定性写出来
+- **路径与并发缺陷**（issue [#51](https://github.com/zyTheGit/AgentForge/issues/51)）
+- **工具链毛刺**（issue [#57](https://github.com/zyTheGit/AgentForge/issues/57)）
 
 ## 不予实现
 
