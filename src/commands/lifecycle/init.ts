@@ -131,6 +131,31 @@ function initSummaryLines(
   ];
 }
 
+/**
+ * 官方模板源的播种回报行（两条路径共用）。
+ *
+ * 必须打出来的理由：`project` scope 的 init 也会写 **user 层** 的
+ * `sources.json`（§3.1：登记表恒在 user 层）。不报一句，用户会以为这次 init 只动了
+ * 项目目录。播种为 disabled 且零网络，所以这里同时给出启用命令。
+ */
+function sourcesTail(
+  result: { readonly registeredSources: readonly string[]; readonly sourcesWarning: string | null },
+  ui: Ui,
+): string[] {
+  if (result.sourcesWarning !== null) {
+    return [ui.yellow(`note: ${result.sourcesWarning}`)];
+  }
+  if (result.registeredSources.length === 0) {
+    return [];
+  }
+  return [
+    ui.dim(
+      `registered official source(s) in the user-level sources.json (disabled by default): ${result.registeredSources.join(', ')}`,
+    ),
+    ui.dim(`  enable with ${ui.code(`aforge source enable ${result.registeredSources[0]}`)}`),
+  ];
+}
+
 export function registerInitCommand(program: Command): void {
   program
     .command('init')
@@ -212,6 +237,8 @@ export function registerInitCommand(program: Command): void {
               detection: result.detection,
               cancelled: false,
               synced: result.synced,
+              registeredSources: result.registeredSources,
+              sourcesWarning: result.sourcesWarning,
             });
             return;
           }
@@ -220,6 +247,7 @@ export function registerInitCommand(program: Command): void {
           const lines = initSummaryLines(
             result,
             [
+              ...sourcesTail(result, ui),
               result.synced
                 ? ui.green('init complete (sync already executed above)')
                 : ui.next(`run ${ui.code('aforge sync')} to project rules to agent targets`),
@@ -240,6 +268,8 @@ export function registerInitCommand(program: Command): void {
             createdFiles: result.createdFiles,
             createdDirs: result.createdDirs,
             detection: result.detection,
+            registeredSources: result.registeredSources,
+            sourcesWarning: result.sourcesWarning,
           });
           return;
         }
@@ -248,6 +278,7 @@ export function registerInitCommand(program: Command): void {
         const lines = initSummaryLines(
           result,
           [
+            ...sourcesTail(result, ui),
             // 静默路径未经询问就把 targets 定成全部四个并写进 profile.yaml，而 init
             // 拒绝在非空 SoT 上重跑——必须告诉用户改法。只说 targets 不说 scope：
             // scope 可能来自 --scope 或 AGF_SCOPE，声称它「取了默认」会是假话；

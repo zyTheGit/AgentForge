@@ -159,6 +159,18 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
         hookTargets: [],
         hookUnsupportedTargets: [],
       },
+      sources: [
+        {
+          id: 'official',
+          type: 'git',
+          enabled: false,
+          ref: 'v0.2.2',
+          commit: null,
+          materialized: false,
+          official: true,
+        },
+      ],
+      sourcesUnreadable: false,
     });
     expect(text).toContain('aforge status');
     expect(text).toContain(USER_SOT);
@@ -175,6 +187,9 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
     expect(text).toContain(
       'on_demand : deep-research (projected, hidden from model auto-routing - invoke explicitly)',
     );
+    // §12 Phase 2：默认注册的官方源以 disabled 落盘，status 必须让"登记了但不生效"可见
+    expect(text).toContain('sources (user-level sources.json):');
+    expect(text).toContain('official [official]  git  disabled pin v0.2.2');
     // §6.1 / §8.8：技能调用前缀必须打印——codex 是 `$<name>`，其余三家 `/<name>`
     expect(text).toContain('claude (invoke skills as /<name>):');
     expect(text).toContain('codex (invoke skills as $<name>):');
@@ -206,12 +221,44 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
         hookTargets: [],
         hookUnsupportedTargets: [],
       },
+      sources: [],
+      sourcesUnreadable: false,
     });
     expect(text).toContain('(unresolvable - see aforge doctor)');
     expect(text).toContain('last sync: (never - run aforge sync)');
     // 空清单 → (none)，不产生裸行
     expect(text).toContain('always    : (none)');
     expect(text).toContain('on_demand : (none)');
+    expect(text).toContain('(none registered)');
+  });
+
+  it('登记表读不出来 → (unreadable)，不冒充"没有登记"', () => {
+    const text = formatStatus({
+      effectiveScope: 'project',
+      userSoTRoot: USER_SOT,
+      projectSoTRoot: PROJECT_SOT,
+      initialized: { user: true, project: true },
+      enabledTargets: [],
+      targets: [],
+      skippedTargets: [],
+      lastSyncAt: null,
+      counts: { custom: 0, learnings: 0, templates: 0 },
+      alwaysSkills: [],
+      onDemandSkills: [],
+      autoCapture: {
+        declared: 'off',
+        effective: 'off',
+        reason: null,
+        ciNote: null,
+        hookTargets: [],
+        hookUnsupportedTargets: [],
+      },
+      sources: [],
+      sourcesUnreadable: true,
+    });
+    expect(text).toContain('sources (user-level sources.json):');
+    expect(text).toContain('(unreadable - see aforge doctor)');
+    expect(text).not.toContain('(none registered)');
   });
 
   it('auto_capture: hook 时列出装钩子的 target 与等同 off 的 target（§7.4）', () => {
@@ -235,6 +282,8 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
         hookTargets: ['codex'],
         hookUnsupportedTargets: ['claude'],
       },
+      sources: [],
+      sourcesUnreadable: false,
     });
     // 三档恒等 → 不打箭头；两张名单各一行
     expect(text).toContain('auto_capture: hook');
@@ -266,6 +315,8 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
         hookTargets: [],
         hookUnsupportedTargets: ['claude'],
       },
+      sources: [],
+      sourcesUnreadable: false,
     });
     expect(text).toContain('no enabled target supports session hooks - behaves as off');
     expect(text).not.toContain('written for');
@@ -292,6 +343,8 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
         hookTargets: [],
         hookUnsupportedTargets: [],
       },
+      sources: [],
+      sourcesUnreadable: false,
     });
     expect(text).toContain('auto_capture: prompt');
     expect(text).toContain('projected rules include a ## Learning Protocol section');
@@ -318,6 +371,8 @@ describe('formatStatus — 人类可读输出（纯 ASCII）', () => {
         hookTargets: [],
         hookUnsupportedTargets: [],
       },
+      sources: [],
+      sourcesUnreadable: false,
     });
     // 生效档位不变 → 不打箭头；只多一行环境说明
     expect(text).toContain('auto_capture: prompt');

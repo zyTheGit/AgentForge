@@ -64,13 +64,14 @@ function projectLayer(): TargetLayer {
 describe('listTemplates', () => {
   it('内置 base/default 恒在（§3.4），enabled 随 effectiveTemplates', async () => {
     const host = createDirAwareHost();
-    const items = await listTemplates(tplCtx(host, ['base/default']));
-    expect(items).toEqual([{ id: 'base/default', origin: 'builtin', enabled: true }]);
+    const result = await listTemplates(tplCtx(host, ['base/default']));
+    expect(result.items).toEqual([{ id: 'base/default', origin: 'builtin', enabled: true }]);
+    expect(result.warnings).toEqual([]);
   });
 
   it('builtin 未启用 → enabled false', async () => {
     const host = createDirAwareHost();
-    const items = await listTemplates(tplCtx(host, []));
+    const { items } = await listTemplates(tplCtx(host, []));
     expect(items[0]).toMatchObject({ id: 'base/default', enabled: false });
   });
 
@@ -80,7 +81,7 @@ describe('listTemplates', () => {
     host.files.set(path.join(PROJECT_SOT, 'templates', 'team', 'style.md'), 'b');
     host.files.set(path.join(USER_SOT, 'templates', 'global.md'), 'c');
 
-    const items = await listTemplates(tplCtx(host, ['review']));
+    const { items } = await listTemplates(tplCtx(host, ['review']));
     expect(items.find((i) => i.id === 'review')).toMatchObject({
       origin: 'project',
       enabled: true,
@@ -109,7 +110,7 @@ describe('listTemplates', () => {
     );
     await addLocalSource(mgrCtx(host), { path: VENDOR });
 
-    const items = await listTemplates(tplCtx(host, []));
+    const { items } = await listTemplates(tplCtx(host, []));
     expect(items.find((i) => i.id === 'team/review')).toMatchObject({
       origin: 'source',
       sourceId: 'vendor-src',

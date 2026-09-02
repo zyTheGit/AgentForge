@@ -68,6 +68,18 @@ describe('resolveTemplate 查找优先级', () => {
     expect(resolved).toEqual({ id: 'base/default', content: BASE_DEFAULT_TEMPLATE });
   });
 
+  it('base/default → 内置常量优先于官方源 store 里的同名模板（§12 Phase 2 官方模板源）', async () => {
+    const host = createDirAwareHost();
+    // 官方源就是本仓库，其 templates/base/default.md 与内置模板同 id：启用官方源
+    // 只应**新增**它独有的模板，不该改变现有投影
+    host.files.set(
+      path.join(STORE, 'official', 'templates', 'base', 'default.md'),
+      '# official override',
+    );
+    const resolved = await resolveTemplate('base/default', ctxFor(host));
+    expect(resolved.content).toBe(BASE_DEFAULT_TEMPLATE);
+  });
+
   it('项目 SoT 优先于用户 SoT 与源 store', async () => {
     const host = createDirAwareHost();
     host.files.set(path.join(PROJECT_SOT, 'templates', 'extra', 'one.md'), '# project');

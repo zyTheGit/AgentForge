@@ -25,7 +25,8 @@
  *     project scope 且启用 codex → warn（codex 只读 `$CODEX_HOME\prompts\`，该项跳过，§8.8）；
  * 14. MCP transport × target 能力落差（Phase 2 MCP 对齐）：某家上游表达不了某种
  *     transport 时报 warn（codex 不支持 sse → 跳过；opencode 的 remote 无法区分 sse
- *     → 按 streamable HTTP 连接）。
+ *     → 按 streamable HTTP 连接）；
+ * 15. 默认注册源（官方模板源）：登记 / 启用 / 缓存 / pin 状态（只读 fs、零网络，恒 ok|warn）。
  *
  * 设计原则：
  * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题；
@@ -45,6 +46,7 @@
  * - `check-mcp-transport`：MCP transport × target 能力落差（降级 / 跳过）；
  * - `check-projection-hash`：marker 区间三方比对（当前渲染 vs 记录 vs 磁盘）；
  * - `check-environment`：declared vs detected / OneDrive / skills/ 下的 symlink。
+ * - `check-sources`：源登记表与默认注册的官方模板源（只读 fs、零网络、恒不抬退出码）。
  *
  * 类型与 doctorExitCode 在此 re-export：既有调用方（commands/lifecycle/doctor、测试）继续从
  * `./checks` 单点 import，拆分不改变对外导出面。
@@ -83,6 +85,7 @@ import { buildPlanCtx, checkTargetPaths, collectEnabledPlans } from './check-pat
 import { checkProjectionHashes } from './check-projection-hash';
 import { piLegacyMcpResults, residualResults } from './check-residuals';
 import { checkSkillsCopyMode, checkSkillsOnDemand } from './check-skills';
+import { checkDefaultSources } from './check-sources';
 import { type DoctorCheckResult, type DoctorReport, doctorExitCode } from './check-types';
 import { checkSotWritable, checkTargetDirsWritable } from './check-writable';
 
@@ -144,6 +147,9 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
   if (config !== undefined) {
     await runConfigDependentChecks(host, results, env, os, cwd, roots, config);
   }
+
+  // ---- 默认注册源（官方模板源）：登记 / 启用 / 缓存状态与 pin（只读 fs，零网络）----
+  await checkDefaultSources(host, results, env, os, cwd, userSoTRoot);
 
   // ---- OneDrive 检测（§2.1.1 → warn）----
   checkOneDrive(results, env, host);
