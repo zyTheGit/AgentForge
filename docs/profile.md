@@ -55,6 +55,8 @@ learning:
 
 给 `targets` 默认值会伪造用户选择，所以它是唯一的必填项；`templates` / `mcp.servers` / `skills.*` 都是内容型数组，缺省即「未设置」，好让两层继承能区分「显式空数组」和「没写」。
 
+`templates` 里能填哪些 id，取决于 user 层 `sources.json` 中登记且**已启用**的源（`sources.json` 与 `store\` 恒在 user 层）。`aforge init` 默认注册的官方模板源是**禁用**态，启用方式、pin 策略与离线行为见 [命令速查](commands.md#官方模板源默认注册默认禁用)。
+
 ## mcp
 
 ```yaml

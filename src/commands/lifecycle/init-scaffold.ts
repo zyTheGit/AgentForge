@@ -13,7 +13,7 @@
  */
 import path from 'node:path';
 import { defaultHabits, windowsDefaultProfile } from '../../core/config/defaults';
-import { HABITS_FILE, PROFILE_FILE } from '../../core/config/load';
+import { HABITS_FILE, PROFILE_FILE, SOURCES_FILE } from '../../core/config/load';
 import { serializeYamlDoc } from '../../core/config/serialize';
 import type { DetectedSnapshot } from '../../core/detector/engine';
 import { runDetection } from '../../core/detector/engine';
@@ -22,6 +22,8 @@ import { readEnv } from '../../core/env';
 import { ConfigError } from '../../core/errors';
 import { resolveProjectSoT, resolveUserSoT, SKILLS_DIRNAME } from '../../core/paths';
 import { SYNC_LOCK_DIRNAME, withSotLock } from '../../core/project/sync-lock';
+import { seedDefaultSources } from '../../core/sources/official';
+import { STORE_DIR } from '../../core/sources/store';
 import { atomicWrite, listDirSafe, mkdirp } from '../../infra/fsutil';
 import type { HabitsInput } from '../../schema';
 import type { CommandContext } from '../_shared/context';
@@ -79,6 +81,58 @@ export interface InitResult {
   readonly createdFiles: readonly string[];
   readonly createdDirs: readonly string[];
   readonly detection: DetectedSnapshot;
+  /**
+   * 本次播种进 user 层 sources.json 的默认注册源 id（§12 Phase 2 官方模板源）。
+   *
+   * 空数组的两种含义：该登记表已存在（此前 init 过 / 用户管过源），或播种失败
+   * （原因在 `sourcesWarning`）。播种语义与"为什么写 user 层"见
+   * core/sources/official.seedDefaultSources。
+   */
+  readonly registeredSources: readonly string[];
+  /** 播种失败的原因（成功或跳过 → null）；init 本身不因此失败。 */
+  readonly sourcesWarning: string | null;
+}
+
+/** seedDefaultSourcesForInit 结果（并入 InitResult 的两个字段）。 */
+export interface InitSeededSources {
+  readonly registeredSources: readonly string[];
+  readonly sourcesWarning: string | null;
+}
+
+/**
+ * init 顺带把默认注册源（官方模板源）播种进 **user 层** sources.json。
+ *
+ * 三条设计约束在这里交汇：
+ * - **零网络**：只写一个 JSON，不 clone（条目以 disabled + 无 commit 落盘，内容首次
+ *   用到时才拉，见 core/sources/template.listTemplates）。所以离线安装的第一条
+ *   `aforge init` 不会因此变慢或失败；
+ * - **写 user 层而非本次 init 的层**：`sources.json` 按 §3.1 恒在 user 层，项目层的
+ *   登记表没有读取方。`project` scope 的 init 因此会额外创建
+ *   `<AGF_HOME>\sources.json`——它出现在 `registeredSources` 的回报里，不是静默副作用；
+ * - **best-effort**：user 目录不可解析（无 HOME / UNC AGF_HOME）或不可写时只回报
+ *   warning。init 的主职责是建 SoT 骨架，不该被一个可选特性拖挂；用户随后可用
+ *   `aforge source enable official` 补上（那条路径会自己建登记表）。
+ */
+export async function seedDefaultSourcesForInit(
+  ctx: InitContext,
+  env: EnvSnapshot,
+): Promise<InitSeededSources> {
+  try {
+    const result = await seedDefaultSources({
+      host: ctx.host,
+      env,
+      userSoTRoot: resolveUserSoT(env, ctx.os),
+      cwd: ctx.cwd,
+      os: ctx.os,
+    });
+    return { registeredSources: result.registered, sourcesWarning: null };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return {
+      registeredSources: [],
+      sourcesWarning: `未能登记官方模板源（可稍后运行 aforge source enable official）: ${reason}`,
+    };
+  }
 }
 
 /** 待落盘文件（materializeSoT 的输入；调用方负责 YAML 序列化）。 */
@@ -172,6 +226,20 @@ export function sotRootForScope(ctx: InitContext, env: EnvSnapshot, scope: Scope
 }
 
 /**
+ * SoT 根下**不算用户内容**的直接子项：计入「目录非空」判据会让 init 自己把自己挡死。
+ *
+ * - `.sync.lock`：事务锁目录。runInit 把「判空 → 写入」整段包在 withSotLock 里
+ *   （并发 init 串行化），锁目录就建在这个还没内容的根下，它是运行时产物（§3.2）；
+ * - `sources.json` / `store\`：源登记表与 git 源缓存**恒在 user 层**（§3.1）。任意
+ *   项目里跑过一次 `aforge init`（project scope）都会顺带播种出 user 层的
+ *   `sources.json`（见 seedDefaultSourcesForInit），此后 `aforge init --scope user`
+ *   会撞上 ConfigError(2)「SoT 目录非空」——而那条 hint 让用户"清空该目录"，
+ *   照做就删掉了自己的源登记表与全部源缓存。它们与 `.sync.lock` 同属登记 / 运行时
+ *   产物，不是用户放进去的内容。
+ */
+const NON_CONTENT_ENTRIES: readonly string[] = [SYNC_LOCK_DIRNAME, SOURCES_FILE, STORE_DIR];
+
+/**
  * 解析 scope 对应的 SoT 根；**已存在且非空** → ConfigError(2)（Spec §6.1
  * 「init 目录非空」）。
  *
@@ -181,9 +249,7 @@ export function sotRootForScope(ctx: InitContext, env: EnvSnapshot, scope: Scope
  * 内容纳入一个用户没打算创建的 SoT。init -i 的交互流程不受影响：本函数在任何
  * 写入之前只调用一次（edit 分支落盘 habits.yaml 骨架发生在此之后）。
  *
- * 唯一的例外是事务锁目录 `.sync.lock`：runInit 把「判空 → 写入」整段包在
- * withSotLock 里（并发 init 串行化），锁目录就建在这个还没内容的根下。它是**运行时
- * 产物**而非用户内容（Spec §3.2），若计入非空判据，init 会自己把自己挡死。
+ * 例外见 NON_CONTENT_ENTRIES：运行时 / 登记产物不算"用户内容"。
  */
 export async function resolveFreshSoTRoot(
   ctx: InitContext,
@@ -194,7 +260,7 @@ export async function resolveFreshSoTRoot(
 
   // 目录不存在 / 不可读 → []（等同"空目录"，init 可继续）
   const entries = (await listDirSafe(ctx.host, sotRoot)).filter(
-    (entry) => entry !== SYNC_LOCK_DIRNAME,
+    (entry) => !NON_CONTENT_ENTRIES.includes(entry),
   );
   if (entries.length > 0) {
     const hasProfile = await ctx.host.exists(path.join(sotRoot, PROFILE_FILE));
@@ -265,6 +331,11 @@ export async function runInit(ctx: InitContext, options: InitOptions = {}): Prom
       },
     ]);
 
+    // 官方模板源播种：写 user 层 sources.json，零网络、best-effort（见函数注释）。
+    // 放在锁内是刻意的——它与 SoT 骨架同属"这次 init 的产物"，不该让并发 init
+    // 各写一次；写的又是另一个根，与本锁保护的目录不冲突。
+    const seeded = await seedDefaultSourcesForInit(ctx, env);
+
     return {
       scope,
       sotRoot,
@@ -272,6 +343,8 @@ export async function runInit(ctx: InitContext, options: InitOptions = {}): Prom
       createdFiles,
       createdDirs,
       detection,
+      registeredSources: seeded.registeredSources,
+      sourcesWarning: seeded.sourcesWarning,
     };
   });
 }

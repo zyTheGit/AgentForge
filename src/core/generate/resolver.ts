@@ -56,6 +56,14 @@ function sotTemplateFile(soTRoot: string, id: string): string {
 /**
  * 源 store 查找：storeRoot 下各源目录（§4.5 布局）内的 `templates\<id>.md`，
  * 按源目录名字典序取首个命中。store 目录不存在（真实 host readdir 抛错）→ 无结果。
+ *
+ * **已知限制**：本层按**目录名**扫描，不读 `sources.json` 的 `enabled`。因此
+ * "enable → 拉取 → disable" 之后，缓存里的模板仍可能被 sync 渲染（前提是该模板 id
+ * 显式写在 profile.templates 里）。`disable` 的准确语义是"不联网、不进
+ * `template list`"，而不是"不参与渲染"；要彻底回收用 `aforge source remove`。
+ * 不在此处读登记表是刻意的：渲染链路一旦依赖 sources.json，登记表损坏就会让 `sync`
+ * 以 ConfigError(2) 失败；而把已在 profile.templates 里的 id 判成"未解析"，等于让
+ * 一次 `source disable` 把 `sync` 打挂——两者都比现状更糟。
  */
 async function lookupStore(id: string, ctx: ResolveContext): Promise<string | undefined> {
   let entries: readonly string[];
