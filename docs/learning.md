@@ -149,9 +149,28 @@ learning:
 | opencode | 否 | 会话事件要投放可执行的 plugin **代码**才能用，不是配置数据 |
 | pi | 否 | 同上，要投放可执行的 extension 代码 |
 
-判据是"能不能只靠写配置数据把钩子装上"，不是"上游有没有会话生命周期事件"。AgentForge 不投放可执行代码到你的 agent 配置目录里——那是另一个量级的信任边界。
+判据是"能不能只靠写配置数据把钩子装上"，不是"上游有没有会话生命周期事件"。背后是两条原则各管一半：
 
-**不支持的 target 在这一档行为等同 `off`，但不静默**：`aforge sync` 每家打一行降级提示，`aforge doctor` 报一条 `learning-auto-capture-hook` 的 warn。这些提示**不是** `warnings`——`warnings` 里出现某个 target 会让本轮不为它记账，§7.6 的 prune 从此清不掉它的产物。该 target 的其余产物照常投影。
+- **不静默覆盖用户写的东西**：claude 有钩子，卡的是写法——`hooks.<Event>` 那个数组你自己也在写，整体替换一次就把你的 `hooks.SessionStart` 吞了。宁可如实降级；
+- **不往 agent 配置目录投放可执行代码**：opencode / pi 的会话事件只对 plugin / extension 开放（pi 上游自己写着 "Extensions run with your full system permissions"），那是另一个量级的信任边界，也让 §7.6「改过的不删」形同虚设——你改一行 `.ts`，AgentForge 就再也清不掉它。
+
+[声明式适配器](profile.md#声明式适配器第三方-target)注册的第三方 target 同样恒为"不支持"，理由同上。
+
+**不支持的 target 在这一档行为等同 `off`，但不静默**——三个出口说同一件事，措辞共用一份常量：
+
+```
+# aforge sync（--dry-run 同样打印，且不落盘）
+[claude] claude 没有可声明式写入的会话钩子落点，learning.auto_capture: hook 对该 target 等同 off（其余产物照常投影）
+
+# aforge status 的 learning 一节
+  auto_capture: hook
+                session hook (SessionStart) written for: codex
+                no session hook target: claude, opencode, pi (behaves as off)
+```
+
+`aforge doctor` 报一条 `learning-auto-capture-hook` 的 warn（`auto_capture: hook 对以下已启用 target 等同 off……：claude / opencode / pi`）；一家都装不上时 hint 直接建议改用 `auto_capture: prompt`，`status` 也会补一句 `no enabled target supports session hooks - behaves as off`。
+
+这些提示**不是** `warnings`——`warnings` 里出现某个 target 会让本轮不为它记账，§7.6 的 prune 从此清不掉它的产物。该 target 的其余产物照常投影，退出码也不受影响。
 
 ### 钩子实际做什么
 
@@ -192,4 +211,14 @@ learning:
 - **不覆盖没记账过的文件**：落点上已经有一个 AgentForge 没记过账的 `hooks.json` 时，首次 sync 以 ConflictError（退出码 3）停下并列出路径，确认可以丢弃后用 `aforge sync --force` 覆盖。手写过 `hooks.json` 的用户不会在开启这一档时被静默清掉。
 
 **声明驱动，不做探测**：写不写钩子只看 `profile.targets` 与各 target 的能力声明，不看本机装没装 codex、装在哪。同一份 SoT 在两台机器上产出同样的投影产物与同一个 `contentHash`。
+
+### 另外三家将来要支持的前置条件
+
+记在这里是为了说明"为什么现在不做"不等于"以后也不做"，以及要做的话先得解决什么。
+
+**claude** 需要先给 `merge_json` 引入数组级合并语义，四条同时成立才安全：只作用于明确白名单的键路径（不能变成 `merge_json` 的普遍行为，否则所有 JSON 落点的数组都跟着改语义）；对数组**只增不减**；AgentForge 加的条目带可识别标记（否则 `auto_capture` 改回 `off` 时 §7.6 的 prune 无从按元素删除——那是用户的 `settings.json`，不能整文件删）；并定义好"用户手工改过被标记的条目"时怎么办（保留还是 `ConflictError(3)` 停下）。本仓库**不做**：这一圈特例语义的风险面大于它换来的收益。
+
+**opencode / pi** 要先回答与[声明式适配器](profile.md#声明式适配器第三方-target)同一批安全问题——投放到用户配置目录的可执行代码由谁审、从哪一层发现（适配器的答案是只认 user 层，project 层需 `AGF_ALLOW_PROJECT_ADAPTERS=1` 显式授权）、以及 prune 的"改过的不删"保护在 `.ts` 文件上还剩多少。
+
+**真正的"会话结束抽取"**（把 transcript 变成结构化条目）另需先回答：谁来做这次抽取（再起一次模型调用？），以及那次调用的成本与准确率是否值得。
 
