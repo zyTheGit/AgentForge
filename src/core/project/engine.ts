@@ -62,14 +62,16 @@
  *
  * 模块划分（本文件只留 syncOnce 的阶段编排，各阶段实现在同目录）：
  * - `sync-types`：对外数据契约（SyncOptions / SyncResult / 失败汇总）；
- * - `sync-lock`：`.sync.lock\` 目录锁；`sync-prepare`：初始化检查 / 目标过滤 / 渲染；
+ * - `sync-lock`：`.sync.lock\` 目录锁；`sync-prepare`：初始化检查 / 目标过滤 / 渲染
+ *   / skills 与命令薄壳解析（含 `skills.on_demand` 按需装载）；
  * - `sync-transaction`：备份与回滚；`sync-recovery`：崩溃恢复与备份保全；
  * - `sync-abort`：信号处理器用的同步回滚；`sync-verify`：冲突预检查与 sync-meta；
  * - `sync-residuals`：残留物盘点；`sync-gitignore`：生成物 .gitignore 段；
  * - `sync-result`：dry-run / apply 两条返回路径的 SyncResult 装配；
  * - `sync-prune`：上一轮投影产物的差集清理（§7.6）；
- * - `sync-notices`：plan 派生的提示类产出（命令跳过 / MCP transport 能力落差 /
- *   `learning.auto_capture: hook` 的 target 降级），三类共用「不进 warnings」不变式。
+ * - `sync-notices`：提示类产出（命令跳过 / MCP transport 能力落差 /
+ *   `learning.auto_capture: hook` 的 target 降级 / `skills.on_demand` 物化跳过），
+ *   四类共用「不进 warnings」不变式。
  *
  * 这些符号在此 re-export：既有调用方（命令层 / doctor / 测试）继续从 `./engine`
  * 单点 import，拆分不改变对外导出面。
@@ -80,8 +82,6 @@ import { resolveEffectiveConfig } from '../config/defaults';
 import { ConfigError } from '../errors';
 import { renderedSectionHash } from '../markers';
 import { resolveProjectSoT, resolveUserSoT } from '../paths';
-import { readSkillsToMaterialize } from '../sources/skill';
-import { resolveCommandsToExpose } from './commands';
 import { projectorRegistry, registeredTargetIds } from './projectors/registry';
 import { GITIGNORE_MARKERS, GITIGNORE_TARGET_ID, planGitignoreItem } from './sync-gitignore';
 import { acquireSyncLocks, releaseSyncLocks, resolveLockRoots } from './sync-lock';
@@ -93,6 +93,7 @@ import {
   renderRulesMd,
   requireUserProfileForProjection,
   resolveMarkers,
+  resolveSkillsForProjection,
   type TargetFailure,
 } from './sync-prepare';
 import { pruneStaleProjections } from './sync-prune';
@@ -167,6 +168,7 @@ export {
   type SyncOptions,
   type SyncResult,
   type SyncRollbackEntry,
+  type SyncSkillSkip,
   type SyncTargetResult,
   type SyncWarning,
 } from './sync-types';
@@ -201,15 +203,14 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     config.profile,
     os,
   );
-  // M8：skills.always 物化数据源（§7.6 实体 copy；同名 project > user，§5.3）
-  const skillsToMaterialize = await readSkillsToMaterialize(
+  // M8 / Phase 2：skills.always 物化 + skills.on_demand 按需装载 + §8.8 命令薄壳
+  // （数据源与子集校验都在 sync-prepare；skips 为 on_demand 侧的非致命跳过）
+  const skills = await resolveSkillsForProjection(
     host,
     userSoTRoot,
     projectSoTRoot,
     config.profile,
   );
-  // §8.8：expose_as_command 点名的技能额外产出命令薄壳（名单非 always 子集 → 退出码 2）
-  const commandsToExpose = resolveCommandsToExpose(config.profile, skillsToMaterialize);
 
   const ctx: ProjectContext = {
     os,
@@ -218,8 +219,8 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     renderedRulesMd,
     habits: config.habits,
     profile: config.profile,
-    skillsToMaterialize, // M8：skill add 接入（write 项/事务 M6 已就绪）
-    commandsToExpose, // §8.8：命令薄壳（codex project scope 由该 projector 自行跳过）
+    skillsToMaterialize: skills.artifacts, // M8 always + Phase 2 on_demand（正文已加工）
+    commandsToExpose: skills.commands, // §8.8：命令薄壳（codex project scope 自行跳过）
     mcpServers: config.profile.mcp.servers ?? [],
     dryRun: opts.dryRun,
     lineEnding: config.profile.projection.line_ending,
@@ -251,16 +252,18 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
 
   const contentHash = renderedSectionHash(renderedRulesMd, ctx.markerBegin, ctx.markerEnd);
 
-  // ---- plan 派生的提示类产出（投影仍完整，只是有事要告诉用户；dry-run 同样成立）----
+  // ---- 本轮的提示类产出（投影仍完整，只是有事要告诉用户；dry-run 同样成立）----
   // §8.8.4 命令薄壳整项跳过 + Phase 2 MCP transport 能力落差 + §7.4 hook 档下无钩子
-  // 落点的 target 降级。三类都不进 warnings（否则误伤 §7.6 记账），判定见 sync-notices。
+  // 落点的 target 降级 + Phase 2 `skills.on_demand` 物化跳过（判定在 sync-prepare，
+  // 这里只穿进去）。四类都不进 warnings（否则误伤 §7.6 记账），判定见 sync-notices。
   const advisories = collectSyncAdvisories({
     profile: config.profile,
     scope: ctx.scope,
-    hasCommandsToExpose: commandsToExpose.length > 0,
+    hasCommandsToExpose: skills.commands.length > 0,
     targetIds: planned.map((t) => t.targetId),
     projectors: projectorRegistry.list(),
     mcpServers: ctx.mcpServers,
+    skillSkips: skills.skips,
   });
 
   // ctx 建好之后一律用 ctx.scope（与 config.effectiveScope 同值——ctx 就是由它赋的；

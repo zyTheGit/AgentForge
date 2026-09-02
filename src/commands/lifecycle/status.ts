@@ -11,8 +11,10 @@
  *   无记录 → never）；
  * - custom / learnings / templates 计数（两层合并、同名 / 同 id 去重——
  *   与渲染素材口径一致：project 覆盖 user）；
- * - profile.skills 的 always / on_demand 清单——on_demand 在 MVP 中**只登记不物化**
- *   （Spec §4.2 注记），在此如实标注，避免该字段静默无效；
+ * - profile.skills 的 always / on_demand 清单——`on_demand` 的技能**正文照常投影**，
+ *   只是在产物 frontmatter 里多一行 `disable-model-invocation: true`（不进模型的自动
+ *   路由清单，仍可 `/name` 显式调用）；名字装了没有、各 target 支持差异由
+ *   `aforge doctor` 的 skills-on-demand 条目负责（status 只读 profile，不扫 SoT）；
  * - user 层 sources.json 的登记源（含默认注册的官方模板源：禁用态 / 是否已拉取 / pin），
  *   见 ./status-sources —— 读取零网络；登记表读不出来时打 `(unreadable)` 而不是伪装成空表；
  * - profile.learning.auto_capture 的声明值与生效值（§7.4）：`prompt` 时说明投影正文含
@@ -93,8 +95,11 @@ export interface StatusResult {
   /** profile.skills.always：会被 sync 物化并投影的 skill 名。 */
   readonly alwaysSkills: readonly string[];
   /**
-   * profile.skills.on_demand：**MVP 只登记不物化**（Spec §4.2 注记）。
-   * 在此展示，是为了让「声明了但不会被投影」这件事可见——否则该字段静默无效。
+   * profile.skills.on_demand：**按需装载**（Phase 2）——正文照常投影，产物 frontmatter
+   * 多一行 `disable-model-invocation: true`，因此不进模型的自动路由清单，只能显式调用。
+   *
+   * 这里只列声明值：某个名字装了没有、opencode 是否支持该键，属于诊断范畴，
+   * 由 `aforge doctor` 的 skills-on-demand 条目负责（status 保持只读 profile 的轻量）。
    */
   readonly onDemandSkills: readonly string[];
   /**
@@ -380,12 +385,12 @@ export function formatStatus(result: StatusResult, ui: Ui = getUi()): string {
   const always = renderList(result.alwaysSkills);
   const onDemand = renderList(result.onDemandSkills);
   lines.push(ui.kv('always', `${always} ${ui.dim('(materialized by sync)')}`, WIDE_LABEL_WIDTH));
-  // MVP 决定：on_demand 只登记不物化（Spec §4.2 注记）——如实说明，避免用户
-  // 以为声明后就会被投影
+  // Phase 2：on_demand 正文照常投影，只是不进模型的自动路由清单（frontmatter
+  // disable-model-invocation: true）——如实说明，避免用户以为它跟 always 一样会被自动用上
   lines.push(
     ui.kv(
       'on_demand',
-      `${onDemand} ${ui.dim('(declared only - not projected in MVP)')}`,
+      `${onDemand} ${ui.dim('(projected, hidden from model auto-routing - invoke explicitly)')}`,
       WIDE_LABEL_WIDTH,
     ),
   );

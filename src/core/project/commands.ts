@@ -170,13 +170,91 @@ export function assertAllowedPlaceholders(body: string, skill: string): void {
 }
 
 /**
- * 从 `SKILL.md` 正文提取 frontmatter 的透传键（§8.8.1）。
+ * 定位 `SKILL.md` 的 frontmatter 区间（行下标；`start` 与 `end` 分别指两条 fence）。
  *
  * 只认「首行即 `---`」的标准形态：正文前有空行或其它内容时视为无 frontmatter，
- * 不做容错猜测——猜错会把正文首段当成 description 投出去。
+ * 不做容错猜测——猜错会把正文首段当成 description 投出去。没有结束 fence 同样
+ * 视为无 frontmatter（半截的 fence 不是合法 frontmatter）。
  *
- * 解析失败（YAML 损坏、顶层不是映射）一律返回空对象而不抛：技能正文的
- * frontmatter 不合法不该阻断整次 sync，薄壳退化成「无 frontmatter」仍可用。
+ * UTF-8 BOM 先剥掉再判首行：Windows 编辑器存 BOM 很常见，`\uFEFF---` 不匹配
+ * `^---` 会让「明明写了 frontmatter」被判成没有（薄壳丢 description、按需标记
+ * 静默不注入）。BOM 只可能出现在首行行首，剥掉不影响任何行下标。
+ *
+ * **本函数只定位 fence，不保证区间里是合法 YAML。** 需要据此改写用户文件时
+ * （`on_demand` 标记注入）必须走 `parseFrontmatterMapping`——宽松的 fence 判定在
+ * 只读解析里判错只是退化成空对象，在写入里判错会把一行 YAML 插进正文。
+ *
+ * @returns fence 行下标；无 frontmatter → null。
+ */
+export function frontmatterRange(content: string): { start: number; end: number } | null {
+  const lines = content.replace(/^\uFEFF/, '').split('\n');
+  if (lines.length === 0 || !FRONTMATTER_FENCE.test(lines[0] ?? '')) {
+    return null;
+  }
+  for (let i = 1; i < lines.length; i += 1) {
+    if (FRONTMATTER_FENCE.test(lines[i] ?? '')) {
+      return { start: 0, end: i };
+    }
+  }
+  return null;
+}
+
+/** frontmatter 区间的 YAML 解析结论（三态，供只读派生与写入注入共用）。 */
+export type FrontmatterMapping =
+  /** 没有 fence 区间（首行不是 `---`，或没有结束 fence）。 */
+  | { readonly kind: 'none' }
+  /** 有 fence 区间，但区间内不是合法 YAML 顶层映射（含空区间）。 */
+  | { readonly kind: 'invalid'; readonly range: { start: number; end: number } }
+  /** 有 fence 区间且解析出顶层映射。 */
+  | {
+      readonly kind: 'mapping';
+      readonly range: { start: number; end: number };
+      readonly record: Record<string, unknown>;
+    };
+
+/**
+ * 解析 frontmatter 区间为顶层映射（`frontmatterRange` 的 YAML 合法性守卫）。
+ *
+ * 单一事实源：薄壳派生（`parseSkillFrontmatter`）、`on_demand` 标记注入
+ * （`injectOnDemandMarker`）与 doctor 的按需诊断都取这一个判定，否则「这份
+ * SKILL.md 有没有可用的 frontmatter」会在三处给出三个答案。
+ *
+ * 不抛异常：YAML 损坏、顶层是数组/标量、区间为空都归为 `invalid`，由调用方决定
+ * 是退化（只读）还是拒绝改写（写入）。
+ */
+export function parseFrontmatterMapping(content: string): FrontmatterMapping {
+  const range = frontmatterRange(content);
+  if (range === null) {
+    return { kind: 'none' };
+  }
+  // 逐行剥掉行尾 `\r`：CRLF 文档按 `\n` 切分后每行都带 `\r`，`yaml` 会把它算进标量
+  // （`true\r` 是字符串而不是布尔），于是 CRLF 的 SKILL.md 在薄壳派生与按需判定里
+  // 都会拿到带 CR 的值
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(
+      content
+        .split('\n')
+        .slice(range.start + 1, range.end)
+        .map((line) => line.replace(/\r$/, ''))
+        .join('\n'),
+    );
+  } catch {
+    return { kind: 'invalid', range };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { kind: 'invalid', range };
+  }
+  return { kind: 'mapping', range, record: parsed as Record<string, unknown> };
+}
+
+/**
+ * 从 `SKILL.md` 正文提取 frontmatter 的透传键（§8.8.1）。
+ *
+ * 区间定位与 YAML 解析见 `parseFrontmatterMapping`。
+ *
+ * 解析失败（无 frontmatter、YAML 损坏、顶层不是映射）一律返回空对象而不抛：技能
+ * 正文的 frontmatter 不合法不该阻断整次 sync，薄壳退化成「无 frontmatter」仍可用。
  * 技能本身的合法性由 `aforge doctor` 负责报告。
  */
 export function parseSkillFrontmatter(content: string): {
@@ -184,32 +262,12 @@ export function parseSkillFrontmatter(content: string): {
   argumentHint?: string;
   commandBody?: string;
 } {
-  const lines = content.split('\n');
-  if (lines.length === 0 || !FRONTMATTER_FENCE.test(lines[0] ?? '')) {
-    return {};
-  }
-  let end = -1;
-  for (let i = 1; i < lines.length; i += 1) {
-    if (FRONTMATTER_FENCE.test(lines[i] ?? '')) {
-      end = i;
-      break;
-    }
-  }
-  if (end === -1) {
+  const parsed = parseFrontmatterMapping(content);
+  if (parsed.kind !== 'mapping') {
     return {};
   }
 
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(lines.slice(1, end).join('\n'));
-  } catch {
-    return {};
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return {};
-  }
-
-  const record = parsed as Record<string, unknown>;
+  const record = parsed.record;
   const result: { description?: string; argumentHint?: string; commandBody?: string } = {};
   const description = record[PASSTHROUGH_DESCRIPTION];
   if (typeof description === 'string' && description.trim() !== '') {

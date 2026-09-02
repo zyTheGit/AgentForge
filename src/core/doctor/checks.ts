@@ -11,7 +11,8 @@
  * 6. OneDrive 检测（§2.1.1 → warn）；
  * 7. 声明值与 detected 不一致（§4.1：声明优先，仅提示 → warn）；
  * 8. 现有 merge_json 投影损坏（硬项 error(3)，soft 项 warn——§8.2/§8.6）；
- * 9. profile.skills.on_demand 清单（信息项：MVP 只登记不物化，§4.2 注记）；
+ * 9. profile.skills.on_demand 名单（Phase 2 按需装载：未装 / 被 always 遮蔽 /
+ *    SKILL.md 无 frontmatter / opencode 不支持该 frontmatter 键 → warn）；
  * 10. pi 的 MCP 历史落点残留（`.pi\settings.json` 含 `mcpServers` → warn，只诊断不删）；
  * 11. profile.skills.copy_mode 声明 `symlink`（恒被忽略且不计划实现 → warn，§4.2）；
  * 12. profile.learning.auto_capture：三档如实报 ok；`hook` 档下没有会话钩子落点的
@@ -40,7 +41,8 @@
  * - `check-paths`：doctor 侧 plan ctx 构造、§9 第 1 条路径枚举、启用 target 的投影计划；
  * - `check-writable`：SoT 根与目标目录可写性探针（唯一有写副作用的检查）；
  * - `check-residuals`：事务残留（锁 / journal / 回滚失败备份）的级别与提示取舍；
- * - `check-consistency`：渲染基准 / 模板解析 / on_demand / copy_mode / sync-meta / merge_json；
+ * - `check-consistency`：渲染基准 / 模板解析 / 命令暴露 / sync-meta / merge_json；
+ * - `check-skills`：profile.skills.* 的「声明 vs 实际」（on_demand / copy_mode）；
  * - `check-mcp-transport`：MCP transport × target 能力落差（降级 / 跳过）；
  * - `check-projection-hash`：marker 区间三方比对（当前渲染 vs 记录 vs 磁盘）；
  * - `check-environment`：declared vs detected / OneDrive / skills/ 下的 symlink。
@@ -68,8 +70,6 @@ import {
   checkCommandsExposure,
   checkLearningAutoCapture,
   checkMergeJson,
-  checkSkillsCopyMode,
-  checkSkillsOnDemand,
   checkTemplates,
   readSyncMetaForDoctor,
   renderForDoctor,
@@ -84,6 +84,7 @@ import { checkMcpTransport } from './check-mcp-transport';
 import { buildPlanCtx, checkTargetPaths, collectEnabledPlans } from './check-paths';
 import { checkProjectionHashes } from './check-projection-hash';
 import { piLegacyMcpResults, residualResults } from './check-residuals';
+import { checkSkillsCopyMode, checkSkillsOnDemand } from './check-skills';
 import { checkDefaultSources } from './check-sources';
 import { type DoctorCheckResult, type DoctorReport, doctorExitCode } from './check-types';
 import { checkSotWritable, checkTargetDirsWritable } from './check-writable';
@@ -188,8 +189,8 @@ async function runConfigDependentChecks(
   // ---- §9 第 5 条：未解析的 template id（sync 将失败，error(2)）----
   await checkTemplates(host, results, roots, config);
 
-  // ---- profile.skills.on_demand：MVP 只登记不物化（Spec §4.2 注记）----
-  checkSkillsOnDemand(results, config);
+  // ---- profile.skills.on_demand：按需装载名单（未装 / 被 always 遮蔽 / opencode 不支持 → warn）----
+  await checkSkillsOnDemand(host, results, roots, config);
 
   // ---- profile.skills.copy_mode：symlink 已声明未实现（§4.2 注记 / §12 Phase 2）----
   checkSkillsCopyMode(results, config);

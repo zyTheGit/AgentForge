@@ -6,6 +6,8 @@
  * 让「哪些失败无需回滚」在文件边界上就看得出来。
  *
  * renderedRulesMd 在整个 sync 中只渲染一次，再分发给全部 target（§8.2）。
+ * skills 与命令薄壳的解析（resolveSkillsForProjection）也在这一段：它同样是
+ * 「读 SoT + 纯计算」，失败即 fail-fast，与写入阶段无关。
  */
 import path from 'node:path';
 import type { Host } from '../../infra/host';
@@ -18,9 +20,12 @@ import { resolveTemplate } from '../generate/resolver';
 import { effectiveAutoCapture } from '../learning/auto-capture';
 import { readLearningLayer } from '../learning/store';
 import { currentOs, type OsContext } from '../paths';
+import type { SkillMaterializeSkip } from '../sources/skill';
+import { readSkillsToMaterialize } from '../sources/skill';
+import { resolveCommandsToExpose } from './commands';
 import { registeredTargetIds } from './projectors/registry';
 import type { SyncItemStatus } from './sync-types';
-import type { ProjectContext, ProjectionPlan } from './types';
+import type { CommandArtifact, ProjectContext, ProjectionPlan, SkillArtifact } from './types';
 import { DEFAULT_PROJECTION_MARKERS, type ProjectionMarkers } from './writer';
 
 /**
@@ -234,6 +239,43 @@ export function requireUserProfileForProjection(env: EnvSnapshot): string {
     });
   }
   return env.userProfile;
+}
+
+/** 本轮 skills 相关的三份产出（技能正文 / 命令薄壳 / 跳过的 on_demand 名字）。 */
+export interface ResolvedSkills {
+  readonly artifacts: readonly SkillArtifact[];
+  readonly commands: readonly CommandArtifact[];
+  readonly skips: readonly SkillMaterializeSkip[];
+}
+
+/**
+ * 解析本轮的 skills 与命令薄壳（§7.6 / §8.8 / Phase 2 `skills.on_demand`）。
+ *
+ * 两步合成一个函数，是因为第二步必须吃第一步的结果：`expose_as_command` 的子集
+ * 校验比对的是**实际可物化的技能**，而不是静态的 `skills.always`（§5.3 合并后
+ * 两者可能不同层）。
+ *
+ * 命令薄壳只认 `always` 的技能（`skills.filter(a => a.onDemand !== true)`）：
+ * §8.8 明写「必须是 skills.always 的子集」，doctor 的 skills-expose-as-command
+ * 也按 `skills.always` 判定——放 on_demand 进来，两处判据立刻分叉（doctor 报
+ * error(2) 而 sync 通过）。
+ *
+ * @throws ConfigError(2) `skills.always` 声明的技能未安装 / `expose_as_command`
+ *         条目非法或不是已装技能的子集（异常契约见被调两函数）。
+ */
+export async function resolveSkillsForProjection(
+  host: Host,
+  userSoTRoot: string,
+  projectSoTRoot: string,
+  profile: Profile,
+): Promise<ResolvedSkills> {
+  const materialized = await readSkillsToMaterialize(host, userSoTRoot, projectSoTRoot, profile);
+  const alwaysOnly = materialized.artifacts.filter((artifact) => artifact.onDemand !== true);
+  return {
+    artifacts: materialized.artifacts,
+    commands: resolveCommandsToExpose(profile, alwaysOnly),
+    skips: materialized.skips,
+  };
 }
 
 /** 一个 target 的 plan 结果与 apply 状态追踪（事务内部结构）。 */

@@ -8,8 +8,9 @@
  *   要读改写 profile.yaml，与"文件搬运"不是一件事），本模块原样再导出；
  * - listSkills：目标层 SoT skills\ + 各源 skills 清单（源侧直接列目录名，
  *   manifest.skills 为 loose 结构不作强约束）；
- * - readSkillsToMaterialize：sync 引擎的物化数据源（§5.3 同名优先级
- *   project SoT > user SoT；profile.skills.always 逐名取 SKILL.md）。
+ * - readSkillsToMaterialize：sync 引擎的物化数据源，实现在 skill-materialize
+ *   （`skills.always` 原文 + `skills.on_demand` 注入按需标记；§5.3 同名优先级
+ *   project SoT > user SoT），本模块原样再导出。
  *
  * copy 经 Host 的 readFile/writeFile（UTF-8 文本域）；二进制文件不属于
  * M8 支持范围（skill 以 Markdown 说明为主，§10 投影只 copy 不执行）。
@@ -26,11 +27,9 @@
 import path from 'node:path';
 import { atomicWrite, listDirSafe, mkdirp } from '../../infra/fsutil';
 import type { FileStat, Host } from '../../infra/host';
-import type { Profile } from '../../schema';
 import type { EnvSnapshot } from '../env';
 import { ConfigError, ConflictError } from '../errors';
 import { type OsContext, SKILL_DOC_FILENAME, SKILLS_DIRNAME } from '../paths';
-import type { SkillArtifact } from '../project/types';
 import {
   listSources,
   loadSourceManifest,
@@ -445,40 +444,21 @@ export async function listSkills(ctx: SkillContext): Promise<SkillListItem[]> {
 }
 
 /**
- * 读取物化 skill 列表（sync 引擎数据源，§5.3：project SoT > user SoT）。
- * 仅消费 SKILL.md 正文（projector 产出 write 项；附属文件 M8 不投影）。
+ * 读取物化 skill 列表（sync 引擎数据源，§5.3 / Phase 2 `skills.on_demand`）。
  *
- * @throws ConfigError(2) profile.skills.always 声明的名字两层均不存在
- *         （声明但未安装，fail-fast 同“未解析的 template id”语义）。
+ * 实现搬到了 skill-materialize（那边管「sync 该投影哪些正文」，本模块管「把源里的
+ * skill 目录搬进 SoT」，两件事的失败语义与安全边界完全不同）；这里原样再导出，
+ * 既有调用点（engine / 测试）仍从 `core/sources/skill` 单点 import。
  */
-export async function readSkillsToMaterialize(
-  host: Host,
-  userSoTRoot: string,
-  projectSoTRoot: string,
-  profile: Profile,
-): Promise<SkillArtifact[]> {
-  const names = profile.skills.always ?? [];
-  const artifacts: SkillArtifact[] = [];
-
-  for (const name of names) {
-    const candidates = [
-      path.join(projectSoTRoot, SKILLS_DIRNAME, name, SKILL_DOC_FILENAME),
-      path.join(userSoTRoot, SKILLS_DIRNAME, name, SKILL_DOC_FILENAME),
-    ];
-    let content: string | undefined;
-    for (const file of candidates) {
-      if (await host.exists(file)) {
-        content = await host.readFile(file);
-        break;
-      }
-    }
-    if (content === undefined) {
-      throw new ConfigError(`profile.skills.always 声明的 skill 未安装: ${name}`, {
-        hint: '运行 aforge skill add 安装，或从 profile.yaml 的 skills.always 中移除该名字',
-        details: { name, candidates },
-      });
-    }
-    artifacts.push({ name, content });
-  }
-  return artifacts;
-}
+export {
+  injectOnDemandMarker,
+  isOnDemandEffective,
+  ON_DEMAND_FRONTMATTER_KEY,
+  ON_DEMAND_FRONTMATTER_LINE,
+  type OnDemandInjectionStatus,
+  readSkillsToMaterialize,
+  type SkillMaterializeSkip,
+  type SkillMaterializeSkipReason,
+  type SkillsToMaterialize,
+  skillDocCandidates,
+} from './skill-materialize';
