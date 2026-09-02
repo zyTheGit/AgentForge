@@ -194,26 +194,16 @@ describe('readSkillsToMaterialize（§5.3 project > user）', () => {
     host.files.set(path.join(PROJECT_SOT, 'skills', 'pdf', 'SKILL.md'), '项目版');
     host.files.set(path.join(USER_SOT, 'skills', 'pdf', 'SKILL.md'), '用户版');
 
-    const artifacts = await readSkillsToMaterialize(
-      host,
-      USER_SOT,
-      PROJECT_SOT,
-      profileWith(['pdf']),
-    );
-    expect(artifacts).toEqual([{ name: 'pdf', content: '项目版' }]);
+    const result = await readSkillsToMaterialize(host, USER_SOT, PROJECT_SOT, profileWith(['pdf']));
+    expect(result).toEqual({ artifacts: [{ name: 'pdf', content: '项目版' }], skips: [] });
   });
 
   it('project 层缺失时回退 user 层', async () => {
     const host = createDirAwareHost();
     host.files.set(path.join(USER_SOT, 'skills', 'pdf', 'SKILL.md'), '用户版');
 
-    const artifacts = await readSkillsToMaterialize(
-      host,
-      USER_SOT,
-      PROJECT_SOT,
-      profileWith(['pdf']),
-    );
-    expect(artifacts).toEqual([{ name: 'pdf', content: '用户版' }]);
+    const result = await readSkillsToMaterialize(host, USER_SOT, PROJECT_SOT, profileWith(['pdf']));
+    expect(result).toEqual({ artifacts: [{ name: 'pdf', content: '用户版' }], skips: [] });
   });
 
   it('声明未安装 → ConfigError(2)（fail-fast，同未解析 template id 语义）', async () => {
@@ -223,9 +213,12 @@ describe('readSkillsToMaterialize（§5.3 project > user）', () => {
     ).rejects.toMatchObject({ code: 2 });
   });
 
-  it('skills.always 为空 → []', async () => {
+  it('skills.always 为空 → 空产物、空跳过', async () => {
     const host = createDirAwareHost();
-    expect(await readSkillsToMaterialize(host, USER_SOT, PROJECT_SOT, profileWith([]))).toEqual([]);
+    expect(await readSkillsToMaterialize(host, USER_SOT, PROJECT_SOT, profileWith([]))).toEqual({
+      artifacts: [],
+      skips: [],
+    });
   });
 });
 

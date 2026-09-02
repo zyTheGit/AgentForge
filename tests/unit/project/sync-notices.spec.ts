@@ -1,15 +1,18 @@
 /**
  * sync 提示类产出的判定单测（§7.4 hook 档降级 / §8.8.4 命令薄壳跳过 /
- * Phase 2 MCP transport 落差）。
+ * Phase 2 MCP transport 落差 / Phase 2 `skills.on_demand` 物化跳过）。
  *
  * 覆盖这些纯函数：
  * - `hookCapableTargetIds`：能力从 projector 读（不是外部映射表）；
  * - `partitionSessionHookTargets`：本轮 target 按"有没有钩子落点"切两半；
  * - `collectSessionHookNotices` / `collectSyncAdvisories`：切分结果 → 提示条目，
- *   以及三类提示（命令跳过 / MCP 落差 / 钩子降级）走同一条通道后互不干扰。
+ *   以及四类提示（命令跳过 / MCP 落差 / 钩子降级 / on_demand 跳过）走同一条通道后
+ *   互不干扰。`skillSkips` 是唯一**不在本模块判定**的一类（判定在 sync-prepare），
+ *   这里只断言它被原样透传、不被改写也不被丢弃。
  *
  * 全部不碰 IO、不注册任何钩子：这里只断言"该报哪几条"，产物形态见
  * projectors/codex.spec.ts，MCP 能力矩阵本身见 projectors/mcp-transport.spec.ts，
+ * `skillSkips` 的判定见 sources/skill-on-demand.spec.ts，
  * 端到端见 tests/integration/learning-hook-capture.spec.ts。
  */
 import { describe, expect, it } from 'vitest';
@@ -24,6 +27,7 @@ import {
   type SyncAdvisoryInput,
   sessionHookUnsupportedMessage,
 } from '../../../src/core/project/sync-notices';
+import type { SyncSkillSkip } from '../../../src/core/project/sync-types';
 import type { ProjectionPlan, Projector } from '../../../src/core/project/types';
 import {
   type AutoCapture,
@@ -134,7 +138,7 @@ describe('collectSessionHookNotices（降级提示条目）', () => {
   });
 });
 
-describe('collectSyncAdvisories（三类提示汇总，dry-run 与实际写入同一份结论）', () => {
+describe('collectSyncAdvisories（四类提示汇总，dry-run 与实际写入同一份结论）', () => {
   /** 只有 codex 表达不了的 transport（矩阵判 unsupported；opencode 判 degraded）。 */
   const SSE_SERVER: McpServer = McpServerSchema.parse({
     name: 'remote-sse',
@@ -142,7 +146,14 @@ describe('collectSyncAdvisories（三类提示汇总，dry-run 与实际写入�
     url: 'https://example.test/sse',
   });
 
-  /** 入参构造：默认「无命令 / 无 MCP server / off 档」，各用例只覆写关心的那几项。 */
+  /** on_demand 侧的跳过项样本（判定发生在 sync-prepare，这里只作为入参透传）。 */
+  const SKILL_SKIP: SyncSkillSkip = {
+    name: 'ghost',
+    reason: 'not-installed',
+    detail: 'skills/ghost/SKILL.md 不存在',
+  };
+
+  /** 入参构造：默认「无命令 / 无 MCP server / off 档 / 无技能跳过」。 */
   function input(overrides: Partial<SyncAdvisoryInput> = {}): SyncAdvisoryInput {
     return {
       profile: profileWith('off', ['codex']),
@@ -151,6 +162,7 @@ describe('collectSyncAdvisories（三类提示汇总，dry-run 与实际写入�
       targetIds: ['codex'],
       projectors: PROJECTORS,
       mcpServers: [],
+      skillSkips: [],
       ...overrides,
     };
   }
@@ -237,26 +249,48 @@ describe('collectSyncAdvisories（三类提示汇总，dry-run 与实际写入�
     ).toEqual([]);
   });
 
-  it('三类提示可同时出现，互不干扰', () => {
+  it('skillSkips 原样透传：本模块不重算、不改写、不丢弃（判定在 sync-prepare）', () => {
+    const advisories = collectSyncAdvisories(input({ skillSkips: [SKILL_SKIP] }));
+    expect(advisories.skillSkips).toEqual([SKILL_SKIP]);
+    // 与 target 无关的一类：不因本轮投影哪几家而增删
+    expect(
+      collectSyncAdvisories(
+        input({
+          profile: profileWith('off', ['codex', 'claude']),
+          targetIds: ['claude'],
+          skillSkips: [SKILL_SKIP],
+        }),
+      ).skillSkips,
+    ).toEqual([SKILL_SKIP]);
+  });
+
+  it('没有 on_demand 跳过 → 空数组（不制造"一切正常"的噪音行）', () => {
+    expect(collectSyncAdvisories(input()).skillSkips).toEqual([]);
+  });
+
+  it('四类提示可同时出现，互不干扰', () => {
     const advisories = collectSyncAdvisories(
       input({
         profile: profileWith('hook', ['codex', 'claude']),
         hasCommandsToExpose: true,
         targetIds: ['codex', 'claude'],
         mcpServers: [SSE_SERVER],
+        skillSkips: [SKILL_SKIP],
       }),
     );
     expect(advisories.commandSkips.map((s) => s.targetId)).toEqual(['codex']);
     expect(advisories.mcpTransportNotices.map((n) => n.targetId)).toEqual(['codex']);
     expect(advisories.sessionHookNotices.map((n) => n.targetId)).toEqual(['claude']);
+    expect(advisories.skillSkips.map((s) => s.name)).toEqual(['ghost']);
   });
 
-  it('三类都是 plan 派生结论：同一份入参重复调用结果稳定（dry-run 与实写同源）', () => {
+  it('四类都与写入成败无关：同一份入参重复调用结果稳定（dry-run 与实写同源）', () => {
     const shared = input({
       profile: profileWith('hook', ['codex', 'claude']),
       hasCommandsToExpose: true,
       targetIds: ['codex', 'claude'],
       mcpServers: [SSE_SERVER],
+      skillSkips: [SKILL_SKIP],
     });
     expect(collectSyncAdvisories(shared)).toEqual(collectSyncAdvisories(shared));
   });

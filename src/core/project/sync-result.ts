@@ -30,7 +30,7 @@ import type { ProjectionPlanItem } from './types';
 
 /**
  * 两条返回路径共享的本轮事实：位置（scope / 三个根）、内容基准（contentHash）、
- * 以及与写入成败无关的 plan 派生结论（skippedTargets + 三类提示，见 sync-notices）。
+ * 以及与写入成败无关的结论（skippedTargets + 四类提示，见 sync-notices）。
  */
 export interface SyncResultBase {
   readonly scope: Scope;
@@ -41,7 +41,10 @@ export interface SyncResultBase {
   readonly contentHash: string;
   /** profile.targets 中已启用但注册表无 projector 的 target。 */
   readonly skippedTargets: readonly string[];
-  /** 命令跳过 / MCP transport 落差 / 会话钩子降级；三类都不进 `warnings`。 */
+  /**
+   * 命令跳过 / MCP transport 落差 / 会话钩子降级 / on_demand 技能跳过；
+   * 四类都不进 `warnings`。
+   */
   readonly advisories: SyncAdvisories;
 }
 
@@ -60,7 +63,7 @@ export interface AppliedSyncFacts {
 }
 
 /**
- * `SyncAdvisories` 的三类提示摊平进 `SyncResult` 的顶层字段。
+ * `SyncAdvisories` 的四类提示摊平进 `SyncResult` 的顶层字段。
  *
  * `satisfies` 把两边的键集绑在一起：给 `SyncAdvisories` 新增一类提示而忘了在这里摊平
  * → 本对象缺键 → TS 立刻报错。手写摊平且**没有**这道断言时，新增的那类会被
@@ -77,6 +80,7 @@ function flattenAdvisories(advisories: SyncAdvisories): {
     commandSkips: advisories.commandSkips,
     mcpTransportNotices: advisories.mcpTransportNotices,
     sessionHookNotices: advisories.sessionHookNotices,
+    skillSkips: advisories.skillSkips,
   } satisfies { readonly [K in keyof SyncAdvisories]: SyncAdvisories[K] };
 }
 

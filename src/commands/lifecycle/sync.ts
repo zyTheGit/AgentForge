@@ -26,6 +26,7 @@ import { readEnv } from '../../core/env';
 import {
   getSyncFailureReport,
   type SyncResult,
+  type SyncSkillSkip,
   type SyncTargetResult,
   syncOnce,
 } from '../../core/project/engine';
@@ -76,6 +77,24 @@ export async function runSync(
     dryRun: options.dryRun === true,
     force: options.force === true,
   });
+}
+
+/**
+ * `skills.on_demand` 跳过原因的英文一行说明（口径与 doctor 的 skills-on-demand 一致）。
+ *
+ * 四种原因都不是失败：投影仍然完整，只是这个名字没拿到完整的「按需装载」待遇。
+ */
+function describeSkillSkip(skip: SyncSkillSkip): string {
+  switch (skip.reason) {
+    case 'not-installed':
+      return 'not installed in either SoT layer - not projected (run `aforge skill add`)';
+    case 'invalid-frontmatter':
+      return 'frontmatter is not a valid YAML mapping - refused to rewrite it, projected as-is';
+    case 'declared-false':
+      return 'frontmatter declares a non-true disable-model-invocation - honored, on-demand not applied on any target';
+    default:
+      return 'SKILL.md has no frontmatter - projected as-is, on-demand marker not applied';
+  }
 }
 
 /** 单个 target 的明细行（`[claude] merge (marker): <path>`，附状态标注）。 */
@@ -154,6 +173,13 @@ export function printSyncResult(result: SyncResult, ui: Ui = getUi()): void {
   for (const notice of result.sessionHookNotices) {
     // §7.4 hook 档：该 target 没有钩子落点 → 显式降级，不静默（该 target 其余产物照常投影）
     lines.push(ui.yellow(`[${notice.targetId}] ${notice.message}`));
+  }
+  for (const skip of result.skillSkips) {
+    // `skills.on_demand` 侧的非致命跳过（未安装 / 被 always 遮蔽 / 无 frontmatter）；
+    // 与 target 无关，故不带 [target] 前缀
+    lines.push(
+      ui.yellow(`[on_demand] ${skip.name}: ${describeSkillSkip(skip)} ${ui.dim(skip.detail)}`),
+    );
   }
 
   if (result.targets.length > 0) {

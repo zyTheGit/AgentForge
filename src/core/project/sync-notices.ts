@@ -1,16 +1,17 @@
 /**
  * Sync 的**提示类**产出（Spec §7.3 输出 / §7.4 / §8.8.4 / Phase 2「MCP 字段与上游
- * 对齐」）：不是失败、也不是 soft 失败，只是"这次投影里有件事用户必须知道"。
+ * 对齐」/「skills 按需装载」）：不是失败、也不是 soft 失败，只是"这次投影里有件事
+ * 用户必须知道"。
  *
- * 三类结论放在同一个模块，因为它们是**同一种东西**——plan 派生的结论：
- * - 只由「SoT 声明」×「本轮投影哪些 target」决定，与写入成败无关 → dry-run 也照样
- *   给（用户在真写之前就该看到 codex 会跳掉哪条、哪几家的钩子等同 off）；
+ * 四类结论放在同一个模块，因为它们是**同一种东西**——与写入成败无关的本轮结论：
+ * - 只由「SoT 声明」×「本轮投影哪些 target」决定 → dry-run 也照样给（用户在真写
+ *   之前就该看到 codex 会跳掉哪条、哪几家的钩子等同 off、哪个技能没备上货）；
  * - **刻意不并进 `SyncResult.warnings`**：`writeSyncMetaOnSuccess` 按
  *   `warnings[].targetId` 判定「该 target 投影不完整 → 本轮不记账」（见 sync-verify
- *   的 JSDoc）。这三类都是**设计如此**的边界、投影仍然完整，混进 warnings 会让那个
+ *   的 JSDoc）。这四类都是**设计如此**的边界、投影仍然完整，混进 warnings 会让那个
  *   target 的 `artifacts` 记账整轮丢失 → §7.6 的 prune 从此永远清不掉它的产物。
  *
- * 三个来源：
+ * 四个来源：
  * - **命令薄壳整项跳过**（§8.8.4）：codex 的 project scope 不支持命令文件；
  * - **MCP transport 能力落差**（Phase 2）：某个 target 表达不了某个 server 的
  *   transport 时的降级 / 跳过（判据与文案的单一事实源在 `projectors/mcp-transport`
@@ -19,12 +20,16 @@
  *   target 里有几家没有可声明式写入的会话钩子（opencode / pi 需要投放可执行的
  *   plugin / extension 代码，claude 的钩子只能并入共享的 `.claude\settings.json`
  *   数组——详见 docs/learning.md 的支持矩阵与理由）。这些 target 在 hook 档下
- *   **行为等同 off**，必须说出来，不能静默。
+ *   **行为等同 off**，必须说出来，不能静默；
+ * - **`skills.on_demand` 未按预期物化**（Phase 2「skills 按需装载」）：名单里的技能
+ *   没装 / 被 `always` 遮蔽 / frontmatter 缺失或非法而无处注入按需标记。判定发生在
+ *   更早的 `sync-prepare.resolveSkillsForProjection`（读 SoT 时就定了），本模块
+ *   **不重算**，只负责把它归到同一个通道上。
  *
  * 单独成模块而不是留在 engine.ts 里：engine.ts 只留 syncOnce 的阶段编排（同
  * sync-prune / sync-gitignore 的划分口径）。数据形状（`SyncCommandSkip` /
- * `SyncNotice`）在 sync-types、`McpTransportNotice` 在 projectors/mcp-transport，
- * 这里只放"本轮该报哪几条"的判定。
+ * `SyncNotice` / `SyncSkillSkip`）在 sync-types、`McpTransportNotice` 在
+ * projectors/mcp-transport，这里只放"本轮该报哪几条"的判定。
  *
  * 全部纯函数、不碰 IO：engine 在 plan 之后、写入之前调 `collectSyncAdvisories`
  * 一次，dry-run 与实际写入走同一份结论。
@@ -37,7 +42,7 @@ import {
   collectMcpTransportNoticesForTargets,
   type McpTransportNotice,
 } from './projectors/mcp-transport';
-import type { SyncCommandSkip, SyncNotice } from './sync-types';
+import type { SyncCommandSkip, SyncNotice, SyncSkillSkip } from './sync-types';
 import type { Projector } from './types';
 
 /** `learning.auto_capture: hook` 下不支持钩子写入的 target 的提示 item。 */
@@ -134,6 +139,17 @@ export interface SyncAdvisoryInput {
   readonly projectors: readonly Projector[];
   /** SoT 声明的 MCP server 全集（`enabled: false` 的过滤在能力矩阵侧做）。 */
   readonly mcpServers: readonly McpServer[];
+  /**
+   * `skills.on_demand` 的物化跳过项，来自 `sync-prepare.resolveSkillsForProjection`。
+   *
+   * 与其余三类不同，这一类**不是本模块算出来的**：判定要读 SoT（技能装没装、
+   * frontmatter 合不合法），发生在 plan 之前，本模块是纯函数、不碰 IO，重算既做不到
+   * 也必然与 sync-prepare 的判据漂移。
+   *
+   * 直接收结论数组而不是整个 `ResolvedSkills`：这里一行都用不到 `artifacts`，收窄
+   * 到实际依赖面能避免把 sync-notices 绑在 sync-prepare 的内部形状上。
+   */
+  readonly skillSkips: readonly SyncSkillSkip[];
 }
 
 /**
@@ -150,26 +166,29 @@ export function collectCommandSkips(input: SyncAdvisoryInput): SyncCommandSkip[]
 /**
  * 本轮的全部提示类产出。
  *
- * **三类分开保存而不是压成一个数组**：三者的载荷不同构——`SyncCommandSkip` 是
+ * **四类分开保存而不是压成一个数组**：四者的载荷不同构——`SyncCommandSkip` 是
  * targetId + reason，`SyncNotice` 是 targetId + item + message，
- * `McpTransportNotice` 还带 serverName / transport / support / hint，命令层要按
- * `support` 选 `skipped` / `degraded` 标签并把 hint 单独打一行 dim。压成一条
- * message 字符串会让这些结构化字段（以及 doctor 的 `hint` 出口）全部退化成不可
- * 解析的文本。共同的**不变式**（不进 warnings、dry-run 也给）由本模块的 JSDoc 与
- * 单一入口 `collectSyncAdvisories` 保证，不靠"塞进同一个数组"来表达。
+ * `McpTransportNotice` 还带 serverName / transport / support / hint，而
+ * `SyncSkillSkip` 是 name + reason 且**根本没有 targetId**（说的是 SoT 侧名单，
+ * 与投影到哪几家无关）。命令层要按 `support` 选 `skipped` / `degraded` 标签并把
+ * hint 单独打一行 dim。压成一条 message 字符串会让这些结构化字段（以及 doctor 的
+ * `hint` 出口）全部退化成不可解析的文本。共同的**不变式**（不进 warnings、dry-run
+ * 也给）由本模块的 JSDoc 与单一入口 `collectSyncAdvisories` 保证，不靠"塞进同一个
+ * 数组"来表达。
  */
 export interface SyncAdvisories {
   readonly commandSkips: readonly SyncCommandSkip[];
   readonly mcpTransportNotices: readonly McpTransportNotice[];
   readonly sessionHookNotices: readonly SyncNotice[];
+  readonly skillSkips: readonly SyncSkillSkip[];
 }
 
 /**
  * 汇总本轮提示（纯函数）：命令薄壳跳过（§8.8.4）+ MCP transport 落差（Phase 2）+
- * hook 档 target 降级（§7.4）。
+ * hook 档 target 降级（§7.4）+ `skills.on_demand` 物化跳过（Phase 2）。
  *
- * 三类一起算而不是散在 engine 各处：它们的共同点是"投影是完整的，但有件事必须
- * 告诉用户"，且都必须在 dry-run 下也成立。engine 只管把结论塞进 SyncResult。
+ * 四类走同一个出口而不是散在 engine 各处：它们的共同点是"投影是完整的，但有件事
+ * 必须告诉用户"，且都必须在 dry-run 下也成立。engine 只管把结论塞进 SyncResult。
  */
 export function collectSyncAdvisories(input: SyncAdvisoryInput): SyncAdvisories {
   return {
@@ -181,5 +200,7 @@ export function collectSyncAdvisories(input: SyncAdvisoryInput): SyncAdvisories 
       input.targetIds,
       input.projectors,
     ),
+    // 只归通道、不重算：判定在 sync-prepare（见 SyncAdvisoryInput.skillSkips）
+    skillSkips: input.skillSkips,
   };
 }

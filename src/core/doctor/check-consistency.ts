@@ -1,12 +1,12 @@
 /**
- * 一致性检查（Spec §9 第 5/8 条与 sync-meta / 渲染 / on_demand 信息项）。
+ * 一致性检查（Spec §9 第 5/8 条与 sync-meta / 渲染 / 命令暴露信息项）。
  *
  * 为什么单独成模块：这几项共享同一个前提——EffectiveConfig 已装配成功——且都在回答
  * 「这次 sync 会不会失败、上次 sync 留下的基准是什么」。渲染基准（renderForDoctor）
  * 必须与 sync 共用 sync-prepare.renderRulesMd 这一单一事实源（直接指实现模块，不经
  * engine 门面——那会把整个 sync 引擎图拖进 doctor），放在同一文件里让"doctor 不
  * 得自己拼渲染"这条约束有个明确落点；marker 区间三方比对因判定表独立，另置
- * check-projection-hash。
+ * check-projection-hash；`profile.skills.*` 的「声明 vs 实际」另置 check-skills。
  */
 import path from 'node:path';
 import type { Host } from '../../infra/host';
@@ -136,56 +136,6 @@ export async function checkTemplates(
       detail: `全部 ${templateIds.length} 个模板 id 解析成功`,
     });
   }
-}
-
-/** profile.skills.on_demand：MVP 只登记不物化（Spec §4.2 注记）。 */
-export function checkSkillsOnDemand(results: DoctorCheckResult[], config: EffectiveConfig): void {
-  // 与 status 的展示口径一致（同一句 "declared only - not projected in MVP"），
-  // 让"声明了但不会被投影"这件事在 doctor 里也可见；纯信息项，恒 ok（不影响退出码）
-  const onDemandSkills = config.profile.skills.on_demand ?? [];
-  results.push({
-    section: 'config',
-    level: 'ok',
-    item: 'skills-on-demand',
-    detail:
-      onDemandSkills.length === 0
-        ? 'profile.skills.on_demand 未声明'
-        : `${onDemandSkills.join(', ')} (declared only - not projected in MVP)`,
-  });
-}
-
-/**
- * profile.skills.copy_mode：`symlink` 恒被忽略且**不计划实现**（Spec §4.2）。
- *
- * 为什么是 warn 而不是让 schema 拒绝：`CopyMode` enum 从 M1 起就收 `symlink`，
- * 改成拒绝会让既有写了该值的 profile 直接加载失败（ConfigError(2)），是破坏性变更。
- * 但静默接受同样不行——用户以为配了就生效，实际 `skill add` 与四个 projector 恒做
- * 实体 copy。折中：照旧接受，由 doctor 明说"声明了但不生效、且不会生效"。
- *
- * 恒不影响退出码（warn 不参与 §6.1 的码计算），因为投影结果本身是正确的，
- * 只是与声明不符；与 skills-on-demand 同属"声明 vs 实际"的信息类落点。注意两者的
- * 后续走向不同：on_demand 仍排在 Phase 2，copy_mode: symlink 已明确不做（理由见
- * §4.2：与 §7.6 prune 判据冲突、Windows 默认无创建权限、四家读取行为未实测）。
- */
-export function checkSkillsCopyMode(results: DoctorCheckResult[], config: EffectiveConfig): void {
-  const copyMode = config.profile.skills.copy_mode;
-  if (copyMode === 'symlink') {
-    results.push({
-      section: 'config',
-      level: 'warn',
-      item: 'skills-copy-mode',
-      detail:
-        'profile.skills.copy_mode: symlink 已声明，但该取值恒被忽略、投影恒为实体 copy（Spec §4.2：已决定不实现）——当前投影行为不受影响',
-      hint: '改为 skills.copy_mode: copy 可消除该告警；symlink 不在任何 Phase 的计划内',
-    });
-    return;
-  }
-  results.push({
-    section: 'config',
-    level: 'ok',
-    item: 'skills-copy-mode',
-    detail: `profile.skills.copy_mode: ${copyMode}（skills 投影为实体 copy）`,
-  });
 }
 
 /**

@@ -1,6 +1,37 @@
 /**
- * 配置默认值与三层装配（Spec §4.2 Windows 安装默认值 / §2.4 环境变量覆盖）。
+ * 合并结果的出口校验（填充 schema 默认值），失败包成 **ConfigError(2)**。
  *
+ * 为什么不能直接 `ProfileSchema.parse`：跨层不变式（如 `skills.always` 与
+ * `skills.on_demand` 交集非空——user 层写了 always、project 层写了 on_demand 时
+ * 单层各自都合法）只有在合并后才暴露，裸 ZodError 走 errors.toExitCode 会退化成
+ * GenericError(1) + 裸堆栈，与 loadProfile 里逐层校验失败的 ConfigError(2) 不一致。
+ *
+ * @throws ConfigError(2) 合并后的 profile 校验失败（附字段路径与逐条 issue）。
+ */
+function parseMergedProfile(
+  merged: ProfileInput,
+  userSoTRoot: string,
+  projectSoTRoot: string,
+): Profile {
+  const result = ProfileSchema.safeParse(merged);
+  if (result.success) {
+    return result.data;
+  }
+  const issues = result.error.issues;
+  const lines = issues.map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`);
+  throw new ConfigError(
+    `user + project 两层合并后的 profile 校验失败，共 ${issues.length} 处问题:\n${lines.join('\n')}`,
+    {
+      hint: '按上述字段路径修正任一层的 profile.yaml（跨层合并后才暴露的冲突需要两层一起看）',
+      details: { userSoTRoot, projectSoTRoot, issues },
+    },
+  );
+}
+
+/**
+ * 三层装配入口（Spec §4.2 / §2.4）。
+ *
+
  * 优先级（高 → 低）：
  *   env（AGF_LINE_ENDING 等） > project 层文件 > user 层文件 > 内置默认
  *
@@ -14,6 +45,7 @@ import type { Host } from '../../infra/host';
 import type { Habits, HabitsInput, Profile, ProfileInput } from '../../schema';
 import { HabitsSchema, ProfileSchema } from '../../schema';
 import type { EnvSnapshot, Scope } from '../env';
+import { ConfigError } from '../errors';
 import { loadHabits, loadProfile } from './load';
 import { type MergeOptions, mergeHabits, mergeProfiles } from './merge';
 
@@ -87,7 +119,7 @@ export async function resolveEffectiveConfig(
       : mergeHabits(userHabits, projectHabits, opts);
 
   // 出口统一填充 schema 默认值（此后对象为完整形态，消费端不再判空）
-  const profile = ProfileSchema.parse(mergedProfile);
+  const profile = parseMergedProfile(mergedProfile, userSoTRoot, projectSoTRoot);
   const habits = HabitsSchema.parse(mergedHabits);
 
   // env 覆盖（Spec §2.4）：AGF_LINE_ENDING > 文件声明 > 内置默认

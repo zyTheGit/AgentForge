@@ -68,6 +68,55 @@ codex 是四家里唯一用 `$` 的，`/<name>` 不展开。`aforge skill add` �
 - 装到 user 层时注意 §5.3 合并语义：`merge.arrays: replace`（缺省）下 project 层自己写了 `skills.always` 就会整体覆盖 user 层那份；
 - 附属文件（脚本、参考资料）会拷进 SoT，但当前只有 `SKILL.md` 正文参与投影。
 
+## 按需装载（on_demand）
+
+`skills.always` 与 `skills.on_demand` 都会被 `sync` 物化投影，区别只有一个：**技能要不要进模型的自动路由清单**。
+
+先说清楚一件容易误解的事：四家客户端的技能加载**本来就是按需的**——常驻上下文里只有 `name` + `description` 一行，正文只在技能被选中时才读（claude 给这份清单的预算是上下文窗口的 1%，codex 是 2% 或 8000 字符）。所以「按需」不可能是「AgentForge 先不投影正文、等用的时候再投」：正文不投影，客户端就根本发现不了这个技能。真正可控的只有自动路由这一档。
+
+```yaml
+skills:
+  always:
+    - code-review        # 进模型清单，模型自己判断何时用
+  on_demand:
+    - deep-research      # 不进模型清单，只在你显式调用时加载
+```
+
+`sync` 后：
+
+- 四家的 `SKILL.md` 落点与调用方式**与 `always` 完全相同**（见上表，codex 仍是 `$<name>`）；
+- claude / pi 的产物 frontmatter 里多一行 `disable-model-invocation: true`；
+- codex 额外多一个 sidecar：`.agents\skills\<name>\agents\openai.yaml`，内容为 `policy: allow_implicit_invocation: false`（codex 的开关不在 frontmatter）；
+- `always` 的产物**逐字节等于 SoT 原文**，不受本功能影响。
+
+### 各 target 的支持差异
+
+| target | 关闭自动路由的机制 | 效果 |
+|---|---|---|
+| claude | frontmatter `disable-model-invocation: true` | description 不进上下文，`/<name>` 显式调用时才加载整个技能 |
+| pi | 同上 | 技能从 system prompt 隐藏，须用 `/skill:<name>` |
+| codex | sidecar `agents\openai.yaml` 的 `policy.allow_implicit_invocation: false` | 不隐式调用，`$<name>` 仍可用 |
+| opencode | **无对应开关** | 未知 frontmatter 键被忽略：技能可用，但仍进模型清单 |
+
+opencode 这一档是明确的降级：`aforge doctor` 会报 `skills-on-demand/opencode-unsupported`（warn，不影响退出码），提示在 `opencode.json` 里配 `permission.skill.<name>: "ask"` 或 `"deny"` 自己挡一道。注入那一行对 opencode 是安全的空操作，不会让技能失效。
+
+### 缺失与冲突的处理
+
+- **点名却没装**：不像 `always` 那样 fail-fast。`sync` 照常成功，输出里一行 `[on_demand] <name>: not installed in either SoT layer ...`，`doctor` 报 `skills-on-demand/<name>` warn。`on_demand` 的定位就是「备货清单」，允许先写名字再逐个 `aforge skill add <name> --no-register`；
+- **同名同时在 `always` 里**：按 `always` 投影（仍进模型清单），不注入按需标记，`doctor` 报 warn 提示要先从 `always` 里摘掉；
+- **`SKILL.md` 没有 frontmatter**：正文照常投影，但无处注入标记，按需语义不生效（`doctor` warn）。四家客户端本来也要求 `name` / `description` 必填，这种文档本身就该补 frontmatter；
+- **`expose_as_command` 只认 `always`**：命令薄壳是「强制调用」的手段，与「别自动用它」的诉求正交；点名一个只在 `on_demand` 里的技能仍是退出码 2。
+
+### 两张名单之间迁移
+
+改完名单跑一次 `sync` 即可，产物差异由 §7.6 prune 收敛：
+
+- `always` → `on_demand`：`SKILL.md` 路径不变、内容被覆盖（多一行标记），codex 的 sidecar 新建；
+- `on_demand` → `always`：`SKILL.md` 恢复原文，sidecar 被删除并列进 `pruned`；
+- 两张名单都摘掉：四份 `SKILL.md` 与 sidecar 全部删除（手工改过的那份保留并进 `prune skipped`）。
+
+`aforge status` 的 `on_demand` 行会标注 `(projected, hidden from model auto-routing - invoke explicitly)`，`aforge doctor` 的 `skills-on-demand` 条目列出本轮真正生效的名字。
+
 ## 额外投影成命令（expose_as_command）
 
 装好的技能四家都能直接调（上表），所以命令薄壳**默认不产出**。只有需要下面两件事时才开：
