@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { atomicWrite, mkdirp } from '../infra/fsutil';
 import type { Host } from '../infra/host';
 import { realHost } from '../infra/real-host';
+import { AdapterSchema } from './adapter';
 import { HabitsSchema } from './habits';
 import { LearningSchema } from './learning';
 import { ManifestSchema } from './manifest';
@@ -34,7 +35,7 @@ interface EmitEntry {
   readonly schema: z.ZodType;
 }
 
-/** 六个工件与源 schema 的映射（顺序即生成顺序）。 */
+/** 七个工件与源 schema 的映射（顺序即生成顺序）。 */
 const ENTRIES: readonly EmitEntry[] = [
   { id: 'habits', title: 'AgentForge habits.yaml', schema: HabitsSchema },
   { id: 'profile', title: 'AgentForge profile.yaml', schema: ProfileSchema },
@@ -42,6 +43,7 @@ const ENTRIES: readonly EmitEntry[] = [
   { id: 'sources', title: 'AgentForge sources.json', schema: SourcesFileSchema },
   { id: 'sync-meta', title: 'AgentForge sync-meta.json', schema: SyncMetaSchema },
   { id: 'manifest', title: 'AgentForge template package manifest.yaml', schema: ManifestSchema },
+  { id: 'adapter', title: 'AgentForge adapters/<id>.yaml', schema: AdapterSchema },
 ];
 
 /**

@@ -16,7 +16,8 @@
       "type": "array",
       "items": {
         "type": "string",
-        "enum": ["opencode", "codex", "claude", "pi"]
+        "minLength": 1,
+        "description": "投影目标 id：内置 opencode / codex / claude / pi，或 user 层 SoT 的 adapters/<id>.yaml 注册的声明式适配器 id（运行时校验，静态 schema 无从枚举）"
       }
     },
     "templates": {

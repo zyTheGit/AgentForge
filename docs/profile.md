@@ -49,7 +49,7 @@ learning:
 | --- | --- | --- | --- |
 | `version` | `1` | `1` | schema 版本，目前只接受 `1` |
 | `scope` | `user` \| `project` | 无 | 仅声明本文件所属层级；实际有效 scope 由「哪一层在用」推导（`AGF_SCOPE` 可强制），合并后该字段无意义 |
-| `targets` | `(opencode\|codex\|claude\|pi)[]` | **必填**，至少一项 | 投影目标。**选择型数组**：合并时 project 层恒覆盖 user 层，不受 `merge.arrays` 影响 |
+| `targets` | `string[]` | **必填**，至少一项 | 投影目标 id：内置 `opencode` / `codex` / `claude` / `pi`，或[声明式适配器](#声明式适配器第三方-target)注册的 id。**选择型数组**：合并时 project 层恒覆盖 user 层，不受 `merge.arrays` 影响 |
 | `templates` | `string[]` | 无（渲染层兜底 `base/default`） | 模板 id 列表，内容型数组，参与 `merge.arrays`。解析优先级与自定义写法见 [规则正文装配](rules.md) |
 | `extensions` | object | `{}` | 用户自定义扩展键，原样透传、不校验内部结构 |
 
@@ -58,11 +58,76 @@ learning:
 `targets` 的取值域分两层，各有**一个**事实源，代码里也确实只有这一份：
 
 - **运行时可用集合** = projector 注册表（`src/core/project/projectors/registry.ts`）。`aforge sync --targets` 的合法性校验每次现读注册表内容（不再对照另写一份常量），因此运行时新注册的 projector 会立刻被 `--targets` 认下。
-- **`profile.yaml` 的取值域** = 内置 id 元组（`src/core/project/target-ids.ts`）。`schema/profile.ts` 的 `TargetEnum` 与注册表的装配表都从这个叶子模块取同一份元组（叶子模块零 import，避免 `schema/profile → registry` 成环），所以加内置 projector 时漏改一处即编译失败。
+- **`profile.yaml` 的取值域** = 内置 id 元组 + 已加载的声明式适配器 id（`src/core/project/target-ids.ts` 的 `knownTargetIds()`）。`schema/profile.ts` 的 `TargetEnum` 与注册表的装配表都从这个叶子模块取同一份数据（叶子模块零 import，避免 `schema/profile → registry` 成环），所以加内置 projector 时漏改一处即编译失败。
 
-注意 `profile.yaml` 这一侧目前仍**只接受四个内置 id**：运行时后补注册的第三方 target 能被 `aforge sync --targets` 认下，却**写不进本文件**（schema 的枚举只认内置元组）。放开这一层取决于外部/声明式适配器的加载方案，收在 issue [#53](https://github.com/zyTheGit/AgentForge/issues/53)（[路线图](roadmap.md#phase-3已完成)「适配器插件化」的第二层）。
+因为声明式适配器是在 CLI 装配阶段才加载的，`TargetEnum` 不能是静态 `z.enum`——它每次校验都现读 `knownTargetIds()`。这也意味着 `schemas/profile.schema.json` 里 `targets[]` 只能是 `string`（静态 schema 无从枚举运行时才知道的 id），编辑器补全对第三方 id 无效，写错时靠 `aforge doctor` 兜。
+
+「第三方 target 能过 `aforge sync --targets`、却写不进本文件」这条不对称（issue [#53](https://github.com/zyTheGit/AgentForge/issues/53)，[路线图](roadmap.md#phase-3已完成)「适配器插件化」第二层）已经消除：声明式适配器加载后两侧都认。剩下的差别只在**来源**——`--targets` 认注册表里的一切（含测试/宿主代码后补注册的 projector），`profile.yaml` 只认内置 id + 从 `adapters/*.yaml` 加载成功的 id。
+
+写了一个未注册的 id 时，报错会区分四种成因（成因不同，修法完全不同）：打错了（提示「是否想写 X」）、对应的 `adapters/<id>.yaml` 加载失败（报具体是 YAML / schema / 模板 / 落点越界，并给出文件路径）、适配器在 project 层未授权（给出 `AGF_ALLOW_PROJECT_ADAPTERS=1`）、压根没有那个文件（列出扫过哪些目录）。
 
 `templates` 里能填哪些 id，取决于 user 层 `sources.json` 中登记且**已启用**的源（`sources.json` 与 `store\` 恒在 user 层）。`aforge init` 默认注册的官方模板源是**禁用**态，启用方式、pin 策略与离线行为见 [命令速查](commands.md#官方模板源默认注册默认禁用)。
+
+## 声明式适配器（第三方 target）
+
+在 **user 层 SoT** 放一份 `adapters/<id>.yaml`，就能把第三方 agent 变成一个 target，之后照常写进 `profile.targets`。schema 见 `schemas/adapter.schema.json`。
+
+```yaml
+# ~/.agentforge/adapters/my-agent.yaml
+version: 1
+id: my-agent # 必须与文件名一致
+description: 我自己那个 agent
+skill_invoke_prefix: / # 或 $
+main_rule:
+  toggle: always # always | agents_md | claude_md | claude_md_optional
+  action: merge_marker # merge_marker（跟随 marker_mode）| write
+commands:
+  namespace: subdir # subdir（落子目录）| flatten（命名空间拼进文件名）
+mcp:
+  dialect: mcpServers # mcpServers | opencode
+  soft: false
+scopes:
+  project:
+    base: '{projectRoot}/.my-agent'
+    skills_dir: '{base}/skills' # 必填
+    main_rule: '{base}/AGENTS.md'
+    commands_dir: '{base}/commands'
+    mcp_file: '{base}/mcp.json'
+  user:
+    # base 是候选列表：取第一个变量全部可解析的候选
+    # 这就是「环境变量覆盖」的写法，等价于内置 codex 的 CODEX_HOME ?? ~/.codex
+    base: ['{env:CODEX_HOME}', '{userHome}/.my-agent']
+    skills_dir: '{base}/skills'
+```
+
+`scopes.project` / `scopes.user` 至少要有一个；每个已声明 scope 的 `skills_dir` 必填（`Projector.skillDir` 是接口契约位，`skill remove` 的清理提示等都要它给出真实落点）。其余三项缺省即该类产物不投影。声明了 `mcp_file` 就必须给顶层 `mcp.dialect`。
+
+### 只接受数据，不接受代码
+
+`aforge sync` 是**持锁写用户主目录**的进程。如果这一层支持从 SoT 加载可执行模块，`git clone && aforge sync` 就等于执行仓库里的任意代码。所以适配器只能是数据：路径模板、开关、内置枚举。
+
+因此下列能力**明确不支持**，需要它们的 target 只能写成内置 projector（改代码 + 走评审）：
+
+- **TOML 序列化**（`merge_toml` 动作不开放）。codex 的 `config.toml` 是手写序列化——basic string 转义、bare key 判定、inline table 全是代码而非数据；放开它只会产出一份 codex 读不懂的配置，把用户其他配置一起带下水。
+- **scope 条件产出**（「project scope 整项跳过」这类条件分支）。只能整个 scope 声明或不声明。
+- **非标准 MCP payload 形状**。只有 `mcpServers`（Claude `.mcp.json` 形状）与 `opencode`（`opencode.json` 形状）两种内置 dialect，不接受自由字段映射——`{type:'local', command:[cmd, ...args]}` 是映射逻辑，transport 能力落差（codex 无 sse、opencode 无法区分 sse/http）也只能由归一化层表达。
+- **`soft` 的行为语义**。可以标 `mcp.soft: true` 复用引擎既有的 best-effort 语义（失败只 warning、不回滚），但不能自定义「失败时怎么办」。
+- **会话钩子**。声明式 target 的 `writesSessionHooks` 恒为 `false`；`learning.auto_capture: hook` 对它等同 `off`，`aforge doctor` / `status` 会如实说明。
+
+### 安全边界
+
+| 边界 | 规则 | 违反时 |
+| --- | --- | --- |
+| 发现来源 | 只从 **user 层** SoT 的 `adapters/*.yaml` 发现。project 层默认**忽略**（`git clone` 一个仓库不该自动获得往用户主目录写文件的能力），需 `AGF_ALLOW_PROJECT_ADAPTERS=1` 显式授权 | 被忽略的条目进 `doctor` warn 与 `status`，不静默消失 |
+| 路径形态 | 只接受**模板 + 白名单变量**：`{projectRoot}` / `{userHome}` / `{base}` / `{env:NAME}`。不接受自由绝对路径、相对路径、`..` 段、段内 `:`（挡盘符跳变）。`NAME` 也走白名单：`CODEX_HOME` / `PI_CODING_AGENT_DIR` / `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `APPDATA` / `LOCALAPPDATA` | `ConfigError(2)` |
+| 落点收敛 | 模板求值后**必须**落在 `projectRoot` / `userHome` / 白名单环境变量指向的目录之下。`..` 穿越、盘符跳变、UNC、前缀相似的兄弟目录、**指向根外的 symlink / 目录联接**一律拒 | `ConfigError(2)` |
+| 规模上限 | 单层最多 16 个适配器文件、单文件 64 KiB、单次投影最多 256 个产物、单条路径最多 24 段（每段 ≤128 字符） | `ConfigError(2)` |
+| 动作取值域 | 只有 `write` / `merge_marker` / `merge_json`（**没有** `merge_toml`） | schema 拒收 |
+| MCP dialect | 内置枚举 `mcpServers` / `opencode`，无自由映射 | schema 拒收 |
+| id 冲突 | id 撞内置 target id、或两层同 id → 装配冲突；`sync` 前置 fail-fast | `GenericError(1)` |
+
+`aforge doctor` 的 `adapters/loaded` / `adapters/ignored/<id>` / `adapters/<id>` 三类条目分别报「加载了哪些、扫过哪些目录」「哪些因未授权被忽略」「哪些加载失败及原因」。适配器坏掉**不会**让 doctor 报告消失——加载阶段永不抛异常，失败只进报告。`aforge status` 额外打印每个第三方 target 的来源文件。
+
 
 ## mcp
 

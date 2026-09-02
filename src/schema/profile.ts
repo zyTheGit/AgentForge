@@ -49,24 +49,44 @@
  *   本文件末尾的 superRefine 直接拒掉（两张名单语义互斥，ConfigError(2)）。
  */
 import { z } from 'zod';
+import { describeUnknownTargetId } from '../core/adapters/diagnostics';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../core/markers';
-import { BUILTIN_TARGET_IDS } from '../core/project/target-ids';
+import { BUILTIN_TARGET_IDS, knownTargetIds } from '../core/project/target-ids';
 import { SchemaVersion, ScopeEnum } from './common';
 
 /**
- * Spec §4.2 targets 元素：内置的四个投影目标。
+ * Spec §4.2 targets 元素：内置四个 target **＋ 已加载的声明式适配器**（Phase 3 第二层）。
  *
- * 取值域直接来自 `core/project/target-ids`（与 projector 注册表的装配表同一份元组），
- * 不再另抄一遍字面量：加第五个内置 projector 时忘改这里，症状会是「新 target 能用
- * `--targets`、却写不进 profile.yaml」这种没有编译错误的静默偏差。
+ * 取值域在**每次校验时现读** `knownTargetIds()`（= `core/project/target-ids` 的
+ * 内置元组 + `adapters/<id>.yaml` 注册进来的第三方 id），因此**不是** `z.enum`：
+ * 枚举会在模块加载时刻把取值域冻结，而声明式适配器是在 CLI 装配阶段才加载的——
+ * 冻结的症状是「`--targets my-agent` 能过、写进 profile.yaml 却被拒」，也就是
+ * 第一层留下的那个耦合点。
  *
  * 之所以取那个**叶子**模块而不是 `projectors/registry`：registry → projectors/* →
  * project/types → schema/profile 已经是一条依赖链，从这里反向 import registry 会成环。
+ * `describeUnknownTargetId` 同理放在零 import 的 `core/adapters/diagnostics` 叶子上。
  *
- * 注意本枚举只认内置 id：运行时后补注册的第三方 target 目前进不了 profile.yaml
- * （roadmap Phase 3 第二层放开外部适配器加载时再议）。
+ * 拒收时的提示会区分成因（打错了 / 适配器文件坏了 / project 层未授权 / 没有该文件），
+ * 见 `describeUnknownTargetId`——同一个症状有四类完全不同的修法，只说「不是有效值」
+ * 会让用户对着一个没问题的 yaml 反复检查。
+ *
+ * 注意 `schemas/profile.schema.json` 工件里这一项只能是 `string`：JSON Schema 是静态
+ * 产物，无从知道某台机器上装了哪些声明式适配器。工件里的 description 列出内置四个。
  */
-export const TargetEnum = z.enum(BUILTIN_TARGET_IDS);
+export const TargetEnum = z
+  .string()
+  .min(1)
+  .superRefine((id, ctx) => {
+    const known = knownTargetIds();
+    if (known.includes(id)) {
+      return;
+    }
+    ctx.addIssue({ code: 'custom', message: describeUnknownTargetId(id, known) });
+  })
+  .describe(
+    `投影目标 id：内置 ${BUILTIN_TARGET_IDS.join(' / ')}，或 user 层 SoT 的 adapters/<id>.yaml 注册的声明式适配器 id（运行时校验，静态 schema 无从枚举）`,
+  );
 
 /**
  * Spec §4.2 skills.copy_mode。
@@ -150,7 +170,10 @@ export const ProfileSchema = z
     version: SchemaVersion,
     /** 本文件声明的所属层级（缺省由加载上下文判定，合并后无意义——见 effectiveScope）。 */
     scope: ScopeEnum.optional(),
-    /** 投影目标（至少一项；选择型数组：合并时 project 恒覆盖，Spec §4.2 示例）。 */
+    /**
+     * 投影目标（至少一项；选择型数组：合并时 project 恒覆盖，Spec §4.2 示例）。
+     * 取值域 = 内置四个 + user 层 `adapters/<id>.yaml` 注册的声明式适配器（见 TargetEnum）。
+     */
     targets: z.array(TargetEnum).min(1),
     /** 模板 id 列表（内容型数组：参与 merge.arrays 合并；缺省由渲染层兜底 base/default）。 */
     templates: z.array(z.string()).optional(),

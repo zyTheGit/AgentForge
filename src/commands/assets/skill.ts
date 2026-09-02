@@ -198,7 +198,16 @@ export function projectedSkillDocPaths(
     // env 必须注入：codex 的 skillPath 走 ctx.env?.codexHome 分支，缺了会忽略 CODEX_HOME
     env,
   };
-  return projectorRegistry.list().map((projector) => projector.skillPath(planCtx, skillName));
+  return projectorRegistry.list().flatMap((projector) => {
+    // 声明式适配器（issue #53）可能没声明当前 scope，或模板算不出落点 → skillPath 抛
+    // ConfigError(2)。这里是「装完/删完去哪儿看」的提示行，不能因为一个第三方
+    // adapter 写错就让整条 skill 命令失败（诊断归 aforge doctor）。
+    try {
+      return [projector.skillPath(planCtx, skillName)];
+    } catch {
+      return [];
+    }
+  });
 }
 
 /**

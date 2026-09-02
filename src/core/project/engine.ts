@@ -78,6 +78,7 @@
  */
 import path from 'node:path';
 import { mkdirp } from '../../infra/fsutil';
+import { assertNoAdapterAssemblyConflicts } from '../adapters/gate';
 import { resolveEffectiveConfig } from '../config/defaults';
 import { ConfigError } from '../errors';
 import { renderedSectionHash } from '../markers';
@@ -193,6 +194,11 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   const config = await resolveEffectiveConfig(env, userSoTRoot, projectSoTRoot, host);
 
   await assertInitialized(host, userSoTRoot, projectSoTRoot);
+
+  // 声明式适配器的装配冲突（id 撞内置 / 撞另一个适配器）→ GenericError(1)。
+  // 内容类失败（YAML / schema / 路径越界）不在这里拦：它们由 TargetEnum 在解析
+  // profile.targets 时报出更精准的成因，没被 profile 引用的坏适配器不该中断 sync。
+  assertNoAdapterAssemblyConflicts();
 
   const requested = filterTargets(config.profile.targets, opts.targetsFilter);
   const renderedRulesMd = await renderRulesMd(

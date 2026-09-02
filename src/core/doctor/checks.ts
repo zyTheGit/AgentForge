@@ -26,10 +26,16 @@
  * 14. MCP transport × target 能力落差（Phase 2 MCP 对齐）：某家上游表达不了某种
  *     transport 时报 warn（codex 不支持 sse → 跳过；opencode 的 remote 无法区分 sse
  *     → 按 streamable HTTP 连接）；
- * 15. 默认注册源（官方模板源）：登记 / 启用 / 缓存 / pin 状态（只读 fs、零网络，恒 ok|warn）。
+ * 15. 默认注册源（官方模板源）：登记 / 启用 / 缓存 / pin 状态（只读 fs、零网络，恒 ok|warn）；
+ * 16. 声明式适配器（Phase 3 第二层 / issue #53）：已加载的第三方 target、project 层
+ *     未授权而被忽略的（warn）、加载失败的（error，退出码按成因分 1/2）。
  *
  * 设计原则：
- * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题；
+ * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题。
+ *   **这条对 projector.plan 同样成立**，且只靠两处机制（不设整块兜底，见下方
+ *   runDoctorChecks 里 envForPlan 处的注释）：#59 的「消因」把非法外部路径取值摘出
+ *   env，check-paths 的「接缝兜底」对每个 projector 单独 try/catch——诊断报告在最
+ *   需要它的时刻整份消失是最坏的失效模式；
  * - 无持久副作用：除目录可写性探针（mkdirp + 临时文件 + 删除，§7.3-7 语义）
  *   外不写任何文件——探针创建的空目录与 sync 行为一致，无害；
  * - 与 sync 共用 `sync-prepare.renderRulesMd`（不经 engine 门面）；
@@ -47,7 +53,8 @@
  *   MCP scope × target 落点不可安全写入（claude user scope 整项跳过）；
  * - `check-projection-hash`：marker 区间三方比对（当前渲染 vs 记录 vs 磁盘）；
  * - `check-environment`：declared vs detected / OneDrive / skills/ 下的 symlink。
- * - `check-sources`：源登记表与默认注册的官方模板源（只读 fs、零网络、恒不抬退出码）。
+ * - `check-sources`：源登记表与默认注册的官方模板源（只读 fs、零网络、恒不抬退出码）；
+ * - `check-adapters`：声明式适配器的加载状态（只读进程级报告，零 IO）。
  *
  * 类型与 doctorExitCode 在此 re-export：既有调用方（commands/lifecycle/doctor、测试）继续从
  * `./checks` 单点 import，拆分不改变对外导出面。
@@ -58,6 +65,7 @@ import type { EffectiveConfig } from '../config/defaults';
 import type { EnvSnapshot } from '../env';
 import { ExitCode } from '../errors';
 import type { OsContext } from '../paths';
+import { checkDeclarativeAdapters } from './check-adapters';
 import {
   checkInitialization,
   checkYamlFiles,
@@ -142,6 +150,11 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
   // ---- 坏 YAML 检查（§9：逐文件报告损坏的 habits / profile）----
   const yamlOk = await checkYamlFiles(host, results, roots);
 
+  // ---- 声明式适配器（Phase 3 第二层）：已加载 / 被忽略 / 加载失败 ----
+  // 放在配置装配**之前**：profile 里写了第三方 target 时，装配会因 TargetEnum 拒收而
+  // 失败，此时用户最需要看到的就是「那个适配器为什么没加载」这一条。
+  checkDeclarativeAdapters(results);
+
   // ---- 三层配置装配（坏 YAML 时跳过——错误已在上面逐文件报告，避免重复）----
   let config: EffectiveConfig | undefined;
   if (yamlOk) {
@@ -153,6 +166,14 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
   // 报完 error 后把该取值摘掉，后续检查按默认落点继续跑（否则整份报告一起丢）
   const envForPlan = checkTargetDirOverrides(results, env, os);
 
+  // 「报告不被截断」只有两处机制，刻意不加第三层整块 try/catch（PR #59 / #53）：
+  // 1. **消因**：上面这一行把非法的外部路径取值报成 error 后从 env 里摘掉，内置
+  //    projector 于是不会再抛；
+  // 2. **接缝兜底**：声明式适配器无法用同样的办法消因（模板算不出落点就是算不出，
+  //    没有"合法的默认值"可退回），所以 check-paths 在**逐 projector** 的粒度上兜
+  //    （planSafely）。
+  // 再套一层整块 catch 会把「新增检查项真的有 bug」掩盖成一条 warn，而且同一件事
+  // 出现两份判据，下次改动必有一处漏改。
   if (config !== undefined) {
     await runConfigDependentChecks(host, results, envForPlan, os, cwd, roots, config);
   }
@@ -237,7 +258,7 @@ async function runConfigDependentChecks(
     await checkCodexInlineHooks(host, results, ctx, config);
 
     // ---- 有效 scope 启用 target 的投影计划（merge_json 检查与目标目录可写性共用）----
-    const enabledPlans = collectEnabledPlans(ctx, config);
+    const enabledPlans = collectEnabledPlans(ctx, config, results);
 
     // ---- 现有 merge_json 投影损坏（硬项 error(3)；soft 项 warn，§8.2/§8.6）----
     await checkMergeJson(host, results, enabledPlans);
