@@ -67,9 +67,15 @@ export interface DefaultSourceDecl {
    * 播种时是否直接启用。
    *
    * 官方源恒为 `false`：启用它意味着"这台机器会去 clone 一个远端仓库"，那是用户的
-   * 决定而不是安装器的决定。禁用态下 listTemplates / resolveTemplate 都跳过它，
-   * 于是「默认注册」不带来任何网络与行为变化——真正的零配置是"想用时一条命令"，
-   * 不是"装完就偷偷联网"。
+   * 决定而不是安装器的决定。禁用态下 listTemplates **完全跳过它**（不联网、不进
+   * 清单），于是「默认注册」不带来任何网络与行为变化——真正的零配置是"想用时一条
+   * 命令"，不是"装完就偷偷联网"。
+   *
+   * **已知限制**：`enabled` 只被 listTemplates 与 `source list` 读取；渲染侧的
+   * resolveTemplate 第 4 层（generate/resolver.lookupStore）按 `store\` 下的**目录名**
+   * 扫描，不读 `sources.json`。因此"enable → 拉取 → disable"之后，缓存里的模板
+   * **仍可被 sync 渲染**（前提是用户把该模板 id 显式写进了 profile.templates）。
+   * 要彻底不参与渲染，用 `aforge source remove <id>`（连缓存一起回收）。
    */
   readonly enabledByDefault: boolean;
   /** 人类可读说明（doctor / status 的展示文案）。 */
@@ -187,7 +193,8 @@ export interface SetSourceEnabledResult {
  * 只会让登记表长出用户没要求的东西。
  *
  * 禁用不删缓存：`store\<id>` 留着，重新 enable 时无需再联网。要回收缓存用
- * `aforge source remove`（§7.6 的既有语义）。
+ * `aforge source remove`（§7.6 的既有语义）——它也是让该源**彻底不参与渲染**的唯一
+ * 方式，原因见 DefaultSourceDecl.enabledByDefault 的「已知限制」。
  *
  * @throws ConfigError(2) id 非法 / 源不存在且不是默认注册项。
  */

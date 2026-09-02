@@ -13,7 +13,7 @@
  */
 import path from 'node:path';
 import { defaultHabits, windowsDefaultProfile } from '../../core/config/defaults';
-import { HABITS_FILE, PROFILE_FILE } from '../../core/config/load';
+import { HABITS_FILE, PROFILE_FILE, SOURCES_FILE } from '../../core/config/load';
 import { serializeYamlDoc } from '../../core/config/serialize';
 import type { DetectedSnapshot } from '../../core/detector/engine';
 import { runDetection } from '../../core/detector/engine';
@@ -23,6 +23,7 @@ import { ConfigError } from '../../core/errors';
 import { resolveProjectSoT, resolveUserSoT, SKILLS_DIRNAME } from '../../core/paths';
 import { SYNC_LOCK_DIRNAME, withSotLock } from '../../core/project/sync-lock';
 import { seedDefaultSources } from '../../core/sources/official';
+import { STORE_DIR } from '../../core/sources/store';
 import { atomicWrite, listDirSafe, mkdirp } from '../../infra/fsutil';
 import type { HabitsInput } from '../../schema';
 import type { CommandContext } from '../_shared/context';
@@ -225,6 +226,20 @@ export function sotRootForScope(ctx: InitContext, env: EnvSnapshot, scope: Scope
 }
 
 /**
+ * SoT 根下**不算用户内容**的直接子项：计入「目录非空」判据会让 init 自己把自己挡死。
+ *
+ * - `.sync.lock`：事务锁目录。runInit 把「判空 → 写入」整段包在 withSotLock 里
+ *   （并发 init 串行化），锁目录就建在这个还没内容的根下，它是运行时产物（§3.2）；
+ * - `sources.json` / `store\`：源登记表与 git 源缓存**恒在 user 层**（§3.1）。任意
+ *   项目里跑过一次 `aforge init`（project scope）都会顺带播种出 user 层的
+ *   `sources.json`（见 seedDefaultSourcesForInit），此后 `aforge init --scope user`
+ *   会撞上 ConfigError(2)「SoT 目录非空」——而那条 hint 让用户"清空该目录"，
+ *   照做就删掉了自己的源登记表与全部源缓存。它们与 `.sync.lock` 同属登记 / 运行时
+ *   产物，不是用户放进去的内容。
+ */
+const NON_CONTENT_ENTRIES: readonly string[] = [SYNC_LOCK_DIRNAME, SOURCES_FILE, STORE_DIR];
+
+/**
  * 解析 scope 对应的 SoT 根；**已存在且非空** → ConfigError(2)（Spec §6.1
  * 「init 目录非空」）。
  *
@@ -234,9 +249,7 @@ export function sotRootForScope(ctx: InitContext, env: EnvSnapshot, scope: Scope
  * 内容纳入一个用户没打算创建的 SoT。init -i 的交互流程不受影响：本函数在任何
  * 写入之前只调用一次（edit 分支落盘 habits.yaml 骨架发生在此之后）。
  *
- * 唯一的例外是事务锁目录 `.sync.lock`：runInit 把「判空 → 写入」整段包在
- * withSotLock 里（并发 init 串行化），锁目录就建在这个还没内容的根下。它是**运行时
- * 产物**而非用户内容（Spec §3.2），若计入非空判据，init 会自己把自己挡死。
+ * 例外见 NON_CONTENT_ENTRIES：运行时 / 登记产物不算"用户内容"。
  */
 export async function resolveFreshSoTRoot(
   ctx: InitContext,
@@ -247,7 +260,7 @@ export async function resolveFreshSoTRoot(
 
   // 目录不存在 / 不可读 → []（等同"空目录"，init 可继续）
   const entries = (await listDirSafe(ctx.host, sotRoot)).filter(
-    (entry) => entry !== SYNC_LOCK_DIRNAME,
+    (entry) => !NON_CONTENT_ENTRIES.includes(entry),
   );
   if (entries.length > 0) {
     const hasProfile = await ctx.host.exists(path.join(sotRoot, PROFILE_FILE));

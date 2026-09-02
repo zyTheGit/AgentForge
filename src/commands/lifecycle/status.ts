@@ -16,7 +16,7 @@
  * - profile.learning.auto_capture 的声明值与生效值（§7.4）：`hook` 未实现时标出原因，
  *   `prompt` 时说明投影正文含 `## Learning Protocol` 段，CI 下补一句"本次不会写入"；
  * - user 层 sources.json 的登记源（含默认注册的官方模板源：禁用态 / 是否已拉取 / pin），
- *   见 ./status-sources —— 读取零网络、失败降级为空清单；
+ *   见 ./status-sources —— 读取零网络；登记表读不出来时打 `(unreadable)` 而不是伪装成空表；
  * - --json 输出机器可读 JSON（路径一律绝对路径）。
  *
  * 只读命令：不做渲染（profile.templates 未解析不影响路径展示，环境探测
@@ -116,10 +116,17 @@ export interface StatusResult {
    *
    * 在 status 展示的理由与 on_demand / auto_capture 同源——"登记了但不生效"必须可见：
    * 官方源默认以 disabled 落盘，不打这一节的话用户无从知道它存在、也无从知道
-   * 为什么 `template list` 里没有它的模板。读取零网络、失败降级为空数组
-   * （诊断归 aforge doctor）。
+   * 为什么 `template list` 里没有它的模板。读取零网络；登记表读不出来时见
+   * `sourcesUnreadable`（详细诊断归 aforge doctor）。
    */
   readonly sources: readonly StatusSourceInfo[];
+  /**
+   * `sources.json` 存在但读不出来（坏 JSON / 越界 id）。
+   *
+   * 与 `sources: []` 分开的理由见 ./status-sources.StatusSourcesReport.unreadable：
+   * 两态同形会把"登记表损坏"显示成"没登记过任何源"。
+   */
+  readonly sourcesUnreadable: boolean;
 }
 
 /** stat 失败（不存在 / 不可访问）→ 非文件。 */
@@ -286,6 +293,7 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
   };
 
   const autoCapture = resolveAutoCapture(config.profile, env);
+  const sourcesReport = await collectStatusSources(host, env, os, cwd, userSoTRoot);
 
   return {
     effectiveScope: config.effectiveScope,
@@ -305,7 +313,8 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
       reason: describeAutoCaptureReason(autoCapture),
       ciNote: describeAutoCaptureCiNote(autoCapture),
     },
-    sources: await collectStatusSources(host, env, os, cwd, userSoTRoot),
+    sources: sourcesReport.sources,
+    sourcesUnreadable: sourcesReport.unreadable,
   };
 }
 
@@ -404,7 +413,9 @@ export function formatStatus(result: StatusResult, ui: Ui = getUi()): string {
   );
 
   lines.push('');
-  lines.push(...formatStatusSources(result.sources, ui));
+  lines.push(
+    ...formatStatusSources({ sources: result.sources, unreadable: result.sourcesUnreadable }, ui),
+  );
 
   lines.push('');
   lines.push(ui.bold('learning (profile.learning):'));

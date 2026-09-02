@@ -140,6 +140,10 @@ function assertNotOffline(env: EnvSnapshot, operation: string): void {
  * pin 语义就会有两个事实源。
  *
  * 调用方须已校验 url / ref / id（本函数只做 store 边界的纵深防御断言）。
+ *
+ * **中途失败必清目录**：clone 成功而后续任一步失败时，`store\<id>` 里留下的是
+ * **远端默认分支**的内容且 commit 未落定；凡以「目录存在」判"已就绪"的调用点都会
+ * 零网络返回这份未 pin 的内容，且不会自愈。清理是 best-effort（原错误优先）。
  */
 async function clonePinned(
   ctx: SourceManagerContext,
@@ -152,18 +156,27 @@ async function clonePinned(
     await ctx.host.rm(args.storeDir);
   }
 
-  await gitMust(ctx, ['clone', '--depth', '1', '--', args.url, args.storeDir], { what: 'clone' });
-  await gitMust(ctx, ['fetch', '--depth', '1', 'origin', args.ref], {
-    cwd: args.storeDir,
-    what: 'fetch',
-  });
-  await gitMust(ctx, ['checkout', '--detach', 'FETCH_HEAD'], {
-    cwd: args.storeDir,
-    what: 'checkout',
-  });
-  return (
-    await gitMust(ctx, ['rev-parse', 'HEAD'], { cwd: args.storeDir, what: 'rev-parse' })
-  ).trim();
+  try {
+    await gitMust(ctx, ['clone', '--depth', '1', '--', args.url, args.storeDir], { what: 'clone' });
+    await gitMust(ctx, ['fetch', '--depth', '1', 'origin', args.ref], {
+      cwd: args.storeDir,
+      what: 'fetch',
+    });
+    await gitMust(ctx, ['checkout', '--detach', 'FETCH_HEAD'], {
+      cwd: args.storeDir,
+      what: 'checkout',
+    });
+    return (
+      await gitMust(ctx, ['rev-parse', 'HEAD'], { cwd: args.storeDir, what: 'rev-parse' })
+    ).trim();
+  } catch (err) {
+    try {
+      await ctx.host.rm(args.storeDir);
+    } catch {
+      // best-effort：清理失败最多留下与修复前等同的残骸，原错误优先
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +286,8 @@ export async function listSources(ctx: SourceManagerContext): Promise<Source[]> 
  *
  * 与 updateSource 的分工：update 是"已有缓存，前进到 ref 当前指向"；本函数是
  * "还没有缓存，按 ref 拉一份"。两者共用 clonePinned 的 pin 序列，故 commit 语义一致。
- * 已有缓存时本函数**不做任何网络操作**直接返回（幂等），调用方无需先判存在性。
+ * **已就绪**时本函数不做任何网络操作直接返回（幂等），调用方无需先判存在性；判据是
+ * 「store 目录存在 **且** 登记项有 commit」而非只判目录存在（见下方注释）。
  *
  * @throws ConfigError(2) id 不存在 / local 源 / 缺 url 或 ref/commit / ref 非法。
  * @throws OfflineError(5) AGF_OFFLINE=1（§7.8）。
@@ -300,9 +314,13 @@ export async function materializeGitSource(
 
   const storeDir = sourceStoreDir(ctx, id);
   assertWithinStore(ctx, storeDir);
-  if (await ctx.host.exists(storeDir)) {
-    // 已有缓存 → 不联网。commit 可能仍为空（手工编辑的登记表），如实回报磁盘现状
-    return { source, commit: source.commit ?? '', file: sourcesFilePath(ctx), storeDir };
+  // 「已就绪」＝ 目录存在 **且** 登记项有 commit。只判目录存在会把一次中途失败的
+  // clone 残留（内容为远端默认分支、commit 为空）永久当成缓存：此后每次调用都零网络
+  // 返回，doctor 也照报"缓存就绪"，而它渲染出来的规则与 pin 无关。commit 缺失时
+  // 落到下方的完整 pin 序列（clonePinned 会先清掉残留目录）。
+  const cached = source.commit;
+  if (cached !== undefined && cached.trim() !== '' && (await ctx.host.exists(storeDir))) {
+    return { source, commit: cached, file: sourcesFilePath(ctx), storeDir };
   }
 
   assertNotOffline(ctx.env, `拉取源 ${id}`);

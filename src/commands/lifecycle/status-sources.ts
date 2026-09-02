@@ -8,13 +8,14 @@
  * 两条硬约束：
  * - **零网络**：只读 `sources.json` 与 `store\<id>` 的存在性。status 是"看一眼当前
  *   状态"的命令，不该因为登记了一个远端源就去联网；
- * - **不让 status 失败**：登记表缺失 / 损坏 / user 根不可解析时返回空数组。status 的
- *   主职责是 scope 与投影路径，一个可选特性读不出来不该把整条命令打挂——同一件事的
- *   诊断由 `aforge doctor` 的 `sources/*` 检查项负责（那里会说清原因）。
+ * - **不让 status 失败**：登记表缺失 / 损坏 / user 根不可解析时不抛错。但"读不出来"
+ *   与"没有登记"必须**分开呈现**——两者都打 `(none registered)` 会让登记表损坏的用户
+ *   以为自己真的没登记过任何源，而正主（`aforge source *` 会以退出码 2 失败）无人指向。
+ *   详细诊断仍归 `aforge doctor` 的 `sources/*` 检查项（那里会说清原因）。
  */
 import type { EnvSnapshot } from '../../core/env';
 import type { OsContext } from '../../core/paths';
-import { listSources, sourceStoreDir } from '../../core/sources/manager';
+import { listSources, type SourceManagerContext, sourceStoreDir } from '../../core/sources/manager';
 import { isDefaultSourceId } from '../../core/sources/official';
 import type { Host } from '../../infra/host';
 import { getUi, type Ui } from '../../infra/ui';
@@ -35,18 +36,33 @@ export interface StatusSourceInfo {
   readonly official: boolean;
 }
 
-/** 读取登记源状态（失败一律降级为空数组，见文件头）。 */
+/** collectStatusSources 结果：清单 + "登记表读不出来"这一态。 */
+export interface StatusSourcesReport {
+  readonly sources: readonly StatusSourceInfo[];
+  /**
+   * `sources.json` 存在但读取失败（坏 JSON / 越界 id）。
+   *
+   * 与 `sources: []`（真的没登记）分开的理由：两者在 status 里长得一样的话，登记表
+   * 损坏会被显示成"没有登记过任何源"——用户不会去查 doctor，而 `aforge source *`
+   * 已经在以退出码 2 失败。这与 doctor 的 `sources/registry` warn 是同一件事的两处呈现。
+   */
+  readonly unreadable: boolean;
+}
+
+/** 读取登记源状态（失败降级为 `unreadable`，绝不抛错，见文件头）。 */
 export async function collectStatusSources(
   host: Host,
   env: EnvSnapshot,
   os: OsContext,
   cwd: string,
   userSoTRoot: string | null,
-): Promise<StatusSourceInfo[]> {
+): Promise<StatusSourcesReport> {
   if (userSoTRoot === null) {
-    return [];
+    return { sources: [], unreadable: false };
   }
-  const mgr = { host, env, userSoTRoot, cwd, os };
+  // 显式标注类型：与 doctor 侧 check-sources.managerContextForDoctor 同一契约，
+  // 少一个字段应当在此处报错，而不是等到传进 listSources 时才被推断出来
+  const mgr: SourceManagerContext = { host, env, userSoTRoot, cwd, os };
   try {
     const sources = await listSources(mgr);
     const infos: StatusSourceInfo[] = [];
@@ -62,9 +78,9 @@ export async function collectStatusSources(
         official: isDefaultSourceId(source.id),
       });
     }
-    return infos;
+    return { sources: infos, unreadable: false };
   } catch {
-    return [];
+    return { sources: [], unreadable: true };
   }
 }
 
@@ -76,17 +92,23 @@ function sourceState(info: StatusSourceInfo, ui: Ui): string {
   return info.materialized ? ui.green('enabled') : ui.yellow('enabled, not fetched');
 }
 
-/** status 的 `sources:` 一节（空登记表也打一行，避免"这个特性存不存在"的疑问）。 */
-export function formatStatusSources(
-  sources: readonly StatusSourceInfo[],
-  ui: Ui = getUi(),
-): string[] {
+/**
+ * status 的 `sources:` 一节（空登记表也打一行，避免"这个特性存不存在"的疑问）。
+ *
+ * 三态分开：读不出来 → `(unreadable - see aforge doctor)`（措辞与 status 里 SoT 根
+ * 不可解析那行同源）；空表 → `(none registered)`；否则逐条列出。
+ */
+export function formatStatusSources(report: StatusSourcesReport, ui: Ui = getUi()): string[] {
   const lines = [ui.bold('sources (user-level sources.json):')];
-  if (sources.length === 0) {
+  if (report.unreadable) {
+    lines.push(`  ${ui.yellow('(unreadable - see aforge doctor)')}`);
+    return lines;
+  }
+  if (report.sources.length === 0) {
     lines.push(`  ${ui.dim('(none registered)')}`);
     return lines;
   }
-  for (const info of sources) {
+  for (const info of report.sources) {
     const tag = info.official ? ui.dim(' [official]') : '';
     const pin = info.ref === null ? '' : ` ${ui.dim(`pin ${info.ref}`)}`;
     lines.push(`  ${ui.bold(info.id)}${tag}  ${info.type}  ${sourceState(info, ui)}${pin}`);

@@ -6,10 +6,12 @@
  * - 播种语义：`sources.json` 不存在才播种；已存在 → registry-exists；
  *   `remove` 之后再 `init` **不复活**（登记表的存在即墓碑）；
  * - enable/disable：翻位、幂等 no-op、老 SoT 的补登记（迁移路径）、disable 不补登记；
- * - 按需拉取：已有缓存 → 零 git 调用；AGF_OFFLINE / CI → 不联网且给可操作说明；
- *   拉取失败 → 降级为说明而不是抛错；
- * - doctor 的 `sources/default/official` 四态与 `sources/custom`（只读 fs、只 ok/warn）；
- * - status 的源一节（"登记了但不生效"必须可见）；
+ * - 按需拉取：已就绪（有缓存 + 有 commit）→ 零 git 调用；AGF_OFFLINE / CI → 不联网且
+ *   给可操作说明；拉取失败 → 降级为说明而不是抛错，且**清掉残留目录**；
+ *   目录在但 commit 缺失（中途失败的存量残留）→ 重走完整 pin 序列；
+ * - 源模板清单：有 manifest 以其为准，无 manifest 回落扫描 `templates\**.md`；
+ * - doctor 的 `sources/default/official` 五态与 `sources/custom`（只读 fs、只 ok/warn）；
+ * - status 的源一节（"登记了但不生效"必须可见；登记表读不出来 ≠ 没有登记）；
  * - bundle export/import 往返后登记状态与 pin 不漂移。
  */
 
@@ -41,6 +43,7 @@ import {
 } from '../../../src/core/sources/official';
 import { listTemplates } from '../../../src/core/sources/template';
 import type { Source } from '../../../src/schema';
+import { VERSION } from '../../../src/version';
 import { abs } from '../test-utils';
 import { createDirAwareHost, type DirAwareHost } from './helpers';
 
@@ -126,6 +129,14 @@ describe('DEFAULT_SOURCES / defaultSourceEntry', () => {
 
   it('enabled 可显式覆盖（enable 时补登记走这一支）', () => {
     expect(defaultSourceEntry(OFFICIAL, true).enabled).toBe(true);
+  });
+
+  it('pin 与 CLI 版本同源：ref 恒为 `v<package.json version>`', () => {
+    // 常量表的 pin 与发行版本必须一起动。没有这条断言时，改了 package.json 的
+    // version（或改了常量表的 ref）都不会有任何用例变红——本文件其余用例一律
+    // 从 OFFICIAL.ref 取值，天然自洽。VERSION 由 scripts/gen-version.mjs 从
+    // package.json 生成，CI 有 gen:version:check 卡住二者不漂移。
+    expect(OFFICIAL.ref).toBe(`v${VERSION}`);
   });
 
   it('findDefaultSource / isDefaultSourceId 只认常量表里的 id', () => {
@@ -339,17 +350,118 @@ describe('listTemplates 对官方源的按需拉取', () => {
     expect((await officialEntry(mgrCtx(host))).commit).toBe('abc123def456');
   });
 
-  it('已有缓存 → 零 git 调用（绝大多数调用走这里）', async () => {
+  it('已就绪（有缓存 + 登记项有 commit）→ 零 git 调用（绝大多数调用走这里）', async () => {
     const host = createDirAwareHost();
     await enabledOfficial(host);
+    // 先走一次首次拉取把 commit 落定，再补一个缓存内文件（fake fs 无空目录概念）
+    await listTemplates(tplCtx(host));
     host.files.set(
       path.join(sourceStoreDir(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID), '.git', 'HEAD'),
       'ref: v\n',
     );
+    host.gitCalls.length = 0;
 
     const result = await listTemplates(tplCtx(host));
     expect(result.warnings).toEqual([]);
     expect(host.gitCalls).toHaveLength(0);
+  });
+
+  it('目录在但登记项没有 commit（中途失败的存量残留）→ 重新走完整 pin 序列', async () => {
+    const host = createDirAwareHost();
+    await enabledOfficial(host);
+    // 模拟"clone 成功、fetch 失败"留下的残留：目录有内容，登记表无 commit
+    const storeDir = sourceStoreDir(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID);
+    host.files.set(path.join(storeDir, 'README.md'), '# 远端默认分支的内容\n');
+    expect((await officialEntry(mgrCtx(host))).commit).toBeUndefined();
+
+    await listTemplates(tplCtx(host));
+    // 只判"目录存在"时这里会是 0 —— 那份未 pin 的内容会被永久当成缓存
+    expect(host.gitCalls.map((c) => c.args[0])).toEqual([
+      'clone',
+      'fetch',
+      'checkout',
+      'rev-parse',
+    ]);
+    expect((await officialEntry(mgrCtx(host))).commit).toBe('abc123def456');
+    // clonePinned 会先清掉残留目录
+    expect(host.files.has(path.join(storeDir, 'README.md'))).toBe(false);
+  });
+
+  it('拉取中途失败（fetch）→ 清掉 clone 已落盘的内容，不留下未 pin 的缓存', async () => {
+    const host = createDirAwareHost(
+      {},
+      { fetch: { stdout: '', stderr: 'fatal: ref 不存在', code: 128 } },
+    );
+    await enabledOfficial(host);
+    const storeDir = sourceStoreDir(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID);
+    // fake git 本身不落文件；让 clone 写一个文件，才能验证"失败后残留被清掉"
+    // ——否则这条用例在没有 try/catch 的实现下也会绿。
+    const passthrough = host.exec.bind(host);
+    host.exec = async (cmd, args, opts) => {
+      const result = await passthrough(cmd, args, opts);
+      if (args[0] === 'clone') {
+        host.files.set(path.join(storeDir, 'README.md'), '# 远端默认分支的内容\n');
+      }
+      return result;
+    };
+
+    const result = await listTemplates(tplCtx(host));
+    expect(result.warnings[0]).toContain('首次拉取失败');
+    expect(host.gitCalls.map((c) => c.args[0])).toEqual(['clone', 'fetch']);
+    expect(await host.exists(storeDir)).toBe(false);
+    expect((await officialEntry(mgrCtx(host))).commit).toBeUndefined();
+  });
+
+  it('源无 manifest.yaml → 回落扫描 store\\<id>\\templates\\**.md（否则清单一个都不新增）', async () => {
+    const host = createDirAwareHost();
+    await enabledOfficial(host);
+    const storeDir = sourceStoreDir(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID);
+    // 顺序要紧：clonePinned 会先清空 storeDir，故内容必须在首次拉取**之后**铺进去
+    await listTemplates(tplCtx(host)); // 首次拉取落定 commit
+    // 官方仓库当前的实际形态：有 templates/，没有 manifest.yaml
+    host.files.set(path.join(storeDir, 'templates', 'base', 'default.md'), '# 官方 base\n');
+    host.files.set(path.join(storeDir, 'templates', 'review.md'), '# 官方 review\n');
+    host.gitCalls.length = 0;
+
+    const result = await listTemplates(tplCtx(host));
+    expect(result.warnings).toEqual([]);
+    expect(host.gitCalls).toHaveLength(0);
+    const fromSource = result.items.filter((i) => i.origin === 'source');
+    expect(fromSource.map((i) => i.id)).toEqual(['base/default', 'review']);
+    expect(fromSource.every((i) => i.sourceId === OFFICIAL_TEMPLATES_SOURCE_ID)).toBe(true);
+  });
+
+  it('源有 manifest.yaml → 以 manifest 声明为准（不叠加目录扫描）', async () => {
+    const host = createDirAwareHost();
+    await enabledOfficial(host);
+    const storeDir = sourceStoreDir(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID);
+    await listTemplates(tplCtx(host)); // 首次拉取落定 commit（会先清空 storeDir）
+    host.files.set(
+      path.join(storeDir, 'manifest.yaml'),
+      [
+        'name: official',
+        'version: 1.0.0',
+        'min_agentforge: 1',
+        'templates:',
+        '  - id: curated/one',
+        '    path: templates/curated/one.md',
+        '    description: 精选',
+        '',
+      ].join('\n'),
+    );
+    host.files.set(path.join(storeDir, 'templates', 'review.md'), '# 未登记进 manifest\n');
+    host.gitCalls.length = 0;
+
+    const result = await listTemplates(tplCtx(host));
+    expect(result.items.filter((i) => i.origin === 'source')).toEqual([
+      {
+        id: 'curated/one',
+        origin: 'source',
+        sourceId: OFFICIAL_TEMPLATES_SOURCE_ID,
+        description: '精选',
+        enabled: false,
+      },
+    ]);
   });
 
   it('AGF_OFFLINE=1 → 不联网，降级为可操作说明（清单仍可用）', async () => {
@@ -460,6 +572,35 @@ describe('checkDefaultSources（零网络、只 ok/warn）', () => {
     expect(entry.detail).toContain(`${OFFICIAL.ref} @ abc123def456`);
   });
 
+  it('缓存目录在但登记项无 commit → warn（不再谎报"缓存就绪"）', async () => {
+    const host = createDirAwareHost();
+    await seedDefaultSources(mgrCtx(host));
+    await setSourceEnabled(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID, true);
+    host.files.set(
+      path.join(sourceStoreDir(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID), 'README.md'),
+      '# 中途失败的拉取残留\n',
+    );
+
+    const entry = itemOf(await check(host), OFFICIAL_ITEM);
+    expect(entry.level).toBe('warn');
+    expect(entry.detail).toContain('未记录 commit');
+    expect(entry.hint).toContain(`aforge source update ${OFFICIAL_TEMPLATES_SOURCE_ID}`);
+    expect(host.gitCalls).toHaveLength(0);
+  });
+
+  it('未登记且登记表不存在 → detail 点出"登记表尚不存在"（区分播种半成功与主动 remove）', async () => {
+    const host = createDirAwareHost();
+    const absent = itemOf(await check(host), OFFICIAL_ITEM);
+    expect(absent.detail).toContain('登记表尚不存在');
+    expect(absent.detail).toContain(SOURCES_JSON);
+
+    // 登记表存在但没有该条目（remove 过 / 老 SoT）→ 另一句话
+    host.files.set(SOURCES_JSON, `${JSON.stringify({ version: 1, sources: [] })}\n`);
+    const removed = itemOf(await check(host), OFFICIAL_ITEM);
+    expect(removed.detail).toContain('登记表已存在但无此条目');
+    expect(removed.level).toBe('ok');
+  });
+
   it('用户改过 pin → 仍是 ok，但点明"本机改写优先"', async () => {
     const host = createDirAwareHost();
     host.files.set(
@@ -527,21 +668,24 @@ describe('collectStatusSources / formatStatusSources', () => {
     const host = createDirAwareHost();
     await seedDefaultSources(mgrCtx(host));
 
-    const infos = await collectStatusSources(host, envFor(), OS, PROJECT_ROOT, USER_SOT);
-    expect(infos).toEqual([
-      {
-        id: OFFICIAL_TEMPLATES_SOURCE_ID,
-        type: 'git',
-        enabled: false,
-        ref: OFFICIAL.ref,
-        commit: null,
-        materialized: false,
-        official: true,
-      },
-    ]);
+    const report = await collectStatusSources(host, envFor(), OS, PROJECT_ROOT, USER_SOT);
+    expect(report).toEqual({
+      unreadable: false,
+      sources: [
+        {
+          id: OFFICIAL_TEMPLATES_SOURCE_ID,
+          type: 'git',
+          enabled: false,
+          ref: OFFICIAL.ref,
+          commit: null,
+          materialized: false,
+          official: true,
+        },
+      ],
+    });
     expect(host.gitCalls).toHaveLength(0);
 
-    const text = formatStatusSources(infos).join('\n');
+    const text = formatStatusSources(report).join('\n');
     expect(text).toContain(`${OFFICIAL_TEMPLATES_SOURCE_ID} [official]  git  disabled`);
     expect(text).toContain(`pin ${OFFICIAL.ref}`);
   });
@@ -551,17 +695,36 @@ describe('collectStatusSources / formatStatusSources', () => {
     await seedDefaultSources(mgrCtx(host));
     await setSourceEnabled(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID, true);
 
-    const infos = await collectStatusSources(host, envFor(), OS, PROJECT_ROOT, USER_SOT);
-    expect(infos[0]).toMatchObject({ enabled: true, materialized: false });
-    expect(formatStatusSources(infos).join('\n')).toContain('enabled, not fetched');
+    const report = await collectStatusSources(host, envFor(), OS, PROJECT_ROOT, USER_SOT);
+    expect(report.sources[0]).toMatchObject({ enabled: true, materialized: false });
+    expect(formatStatusSources(report).join('\n')).toContain('enabled, not fetched');
   });
 
-  it('登记表损坏 / user 根不可解析 → 空数组（status 不因可选特性失败）', async () => {
+  it('登记表损坏 → unreadable（不能与"没有登记"同形，否则用户以为自己真没登记过）', async () => {
     const broken = createDirAwareHost();
     broken.files.set(SOURCES_JSON, '{ 坏 JSON');
-    expect(await collectStatusSources(broken, envFor(), OS, PROJECT_ROOT, USER_SOT)).toEqual([]);
-    expect(await collectStatusSources(broken, envFor(), OS, PROJECT_ROOT, null)).toEqual([]);
-    expect(formatStatusSources([]).join('\n')).toContain('(none registered)');
+
+    const report = await collectStatusSources(broken, envFor(), OS, PROJECT_ROOT, USER_SOT);
+    expect(report).toEqual({ sources: [], unreadable: true });
+    const text = formatStatusSources(report).join('\n');
+    expect(text).toContain('(unreadable - see aforge doctor)');
+    expect(text).not.toContain('(none registered)');
+  });
+
+  it('user 根不可解析 / 登记表不存在 → 空表且非 unreadable', async () => {
+    const host = createDirAwareHost();
+    expect(await collectStatusSources(host, envFor(), OS, PROJECT_ROOT, null)).toEqual({
+      sources: [],
+      unreadable: false,
+    });
+    // 登记表尚未创建也算"空表"（loadSourcesFile 不存在 → 空数组，不抛错）
+    expect(await collectStatusSources(host, envFor(), OS, PROJECT_ROOT, USER_SOT)).toEqual({
+      sources: [],
+      unreadable: false,
+    });
+    expect(formatStatusSources({ sources: [], unreadable: false }).join('\n')).toContain(
+      '(none registered)',
+    );
   });
 });
 

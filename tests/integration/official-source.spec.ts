@@ -8,7 +8,7 @@
  * 为什么用真 host 而不是 fake：这三条命令都要走锁目录、原子写、目录遍历，
  * 单测里的内存 fs 覆盖不到"离线环境下真跑一遍不会挂"这件事本身。
  */
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -155,6 +155,34 @@ describe('官方模板源：离线（AGF_OFFLINE=1）下的 init / status / doct
     expect(entry?.detail).toContain('尚未拉取');
     expect(report.exitCode).toBe(0);
     expect(ws.gitCalls).toEqual([]);
+  }, 30_000);
+
+  it('project init 播种后再 init --scope user → 不被"SoT 目录非空"挡住（登记产物不算用户内容）', async () => {
+    const ctx = { host: ws.host, cwd: ws.root, os: OS };
+    const first = await runInit(ctx);
+    expect(first.registeredSources).toEqual([OFFICIAL_TEMPLATES_SOURCE_ID]);
+    // 播种把 sources.json 写进了 **user 层** SoT 根，而它此时还没 init 过
+    expect(await registry(ws)).not.toBeNull();
+
+    const second = await runInit(ctx, { scope: 'user' });
+    expect(second.scope).toBe('user');
+    expect(second.sotRoot).toBe(ws.userSoTRoot);
+    // 登记表原样留着（user init 不覆盖它，也不再播种）
+    expect(second.registeredSources).toEqual([]);
+    expect(await registry(ws)).toMatchObject({
+      sources: [{ id: OFFICIAL_TEMPLATES_SOURCE_ID, enabled: false }],
+    });
+    expect(await readFile(path.join(ws.userSoTRoot, 'profile.yaml'), 'utf8')).toContain('user');
+    expect(ws.gitCalls).toEqual([]);
+  }, 30_000);
+
+  it('user 层 SoT 里有真正的用户内容 → init --scope user 仍以 ConfigError(2) 拒写', async () => {
+    await mkdir(ws.userSoTRoot, { recursive: true });
+    await writeFile(path.join(ws.userSoTRoot, '手工放的.md'), '用户内容\n', 'utf8');
+
+    await expect(
+      runInit({ host: ws.host, cwd: ws.root, os: OS }, { scope: 'user' }),
+    ).rejects.toMatchObject({ code: 2 });
   }, 30_000);
 
   it('remove 官方源后再 init（另一个项目根）→ 不复活', async () => {
