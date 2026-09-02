@@ -20,6 +20,7 @@ import { resolveTemplate } from '../generate/resolver';
 import { effectiveAutoCapture } from '../learning/auto-capture';
 import { readLearningLayer } from '../learning/store';
 import { currentOs, type OsContext } from '../paths';
+import { templateSourcesProvider } from '../sources/render-scope';
 import type { SkillMaterializeSkip } from '../sources/skill';
 import { readSkillsToMaterialize } from '../sources/skill';
 import { resolveCommandsToExpose } from './commands';
@@ -206,13 +207,14 @@ export async function renderRulesMd(
   const promotedLearnings = await readPromotedLearnings(host, userSoTRoot, projectSoTRoot, profile);
 
   const templateContents: TemplateContent[] = [];
+  const sources = templateSourcesProvider(host, userSoTRoot);
   for (const id of profile.templates ?? []) {
     templateContents.push(
       await resolveTemplate(id, {
         host,
         userSoTRoot,
         projectSoTRoot,
-        storeRoot: path.join(userSoTRoot, 'store'),
+        sources,
       }),
     );
   }
