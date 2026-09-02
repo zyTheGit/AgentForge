@@ -6,13 +6,15 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
 import {
   CLAUDE_MAIN_RULE_FILENAME,
+  CLAUDE_USER_CONFIG_FILENAME,
+  CLAUDE_USER_MCP_SKIP_REASON,
   claudeMainRulePath,
   claudeMcpPath,
   claudeProjector,
   claudeSkillPath,
 } from '../../../../src/core/project/projectors/claude';
 import type { ProjectContext } from '../../../../src/core/project/types';
-import { HabitsSchema, ProfileSchema } from '../../../../src/schema';
+import { HabitsSchema, McpServerSchema, ProfileSchema } from '../../../../src/schema';
 
 function buildCtx(overrides: Partial<ProjectContext> = {}): ProjectContext {
   return {
@@ -52,10 +54,28 @@ describe('claudeProjector.plan（Spec §8.5 主规则）', () => {
     ]);
   });
 
-  it('user scope：主规则 = <userHome>\\.claude\\CLAUDE.md', () => {
+  it('user scope：主规则 = <userHome>\\.claude\\CLAUDE.md；MCP 项整项不产出（issue #52）', () => {
     const ctx = buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u' });
     const plan = claudeProjector.plan(ctx);
     expect(plan.items[0]?.path).toBe('C:\\Users\\u\\.claude\\CLAUDE.md');
+    // 旧行为是往 `<userHome>\.mcp.json` 写一份 claude 根本不读的 mcpServers
+    expect(plan.items.map((i) => i.path)).not.toContain('C:\\Users\\u\\.mcp.json');
+    expect(plan.items.some((i) => i.action === 'merge_json')).toBe(false);
+  });
+
+  it('user scope：有 enabled server 也不产出 MCP 项（拒写 ~\\.claude.json，降级由 notice 说明）', () => {
+    const servers = [
+      McpServerSchema.parse({ name: 'fs', transport: 'stdio', command: 'npx' }),
+    ] as const;
+    const userPlan = claudeProjector.plan(
+      buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u', mcpServers: [...servers] }),
+    );
+    expect(userPlan.items.filter((i) => i.action === 'merge_json')).toEqual([]);
+    // 同一份 server 在 project scope 下照常投影（对照组：不是"MCP 整体坏了"）
+    const projectPlan = claudeProjector.plan(buildCtx({ mcpServers: [...servers] }));
+    expect(projectPlan.items.filter((i) => i.action === 'merge_json').map((i) => i.path)).toEqual([
+      'C:\\proj\\.mcp.json',
+    ]);
   });
 
   it('posix os：分隔符为 /（Spec §2.1 路径随平台）', () => {
@@ -104,8 +124,16 @@ describe('claude 路径常量（§8.5 skills / MCP 契约位）', () => {
     );
   });
 
-  it('MCP 路径：project 根下 .mcp.json（user scope 同样落在 rootDir 基准，M6/M8 决定全局策略）', () => {
+  it('MCP 路径：project = <root>\\.mcp.json；user = null（不投影，issue #52）', () => {
     expect(claudeMcpPath(buildCtx())).toBe('C:\\proj\\.mcp.json');
+    expect(claudeMcpPath(buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u' }))).toBeNull();
+  });
+
+  it('拒写文案（sync / doctor / mcp remove 共用）点名上游落点与手工命令，不含本机路径', () => {
+    expect(CLAUDE_USER_CONFIG_FILENAME).toBe('.claude.json');
+    expect(CLAUDE_USER_MCP_SKIP_REASON).toContain(CLAUDE_USER_CONFIG_FILENAME);
+    expect(CLAUDE_USER_MCP_SKIP_REASON).toContain('claude mcp add --scope user');
+    expect(CLAUDE_USER_MCP_SKIP_REASON).not.toMatch(/[A-Za-z]:[\\/]/);
   });
 
   it('claudeMainRulePath 与 plan 产出的路径一致（status/init 打印共用）', () => {

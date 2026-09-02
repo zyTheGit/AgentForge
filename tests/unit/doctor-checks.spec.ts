@@ -14,6 +14,7 @@ import {
   checkLearningAutoCapture,
   SESSION_HOOK_INLINE_ITEM,
 } from '../../src/core/doctor/check-consistency';
+import { checkClaudeUserScopeMcp } from '../../src/core/doctor/check-mcp-transport';
 import {
   type DoctorCheckResult,
   type DoctorReport,
@@ -25,6 +26,7 @@ import { ExitCode } from '../../src/core/errors';
 import { currentOs } from '../../src/core/paths';
 import { syncOnce } from '../../src/core/project/engine';
 import { projectorRegistry } from '../../src/core/project/projectors/registry';
+import { CLAUDE_USER_MCP_NOTICE_ITEM } from '../../src/core/project/sync-notices';
 import { HabitsSchema, type Profile, ProfileSchema, TargetEnum } from '../../src/schema';
 import { createFakeHost, errnoError, type FakeHost } from './test-utils';
 
@@ -1055,6 +1057,54 @@ describe('checkLearningAutoCapture — 支持度切分只看注册表命中的 t
     const registered = projectorRegistry.list().map((p) => p.id);
     for (const id of TargetEnum.options) {
       expect(registered).toContain(id);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #52：user scope × claude × 有 server → MCP 整项不投影，doctor 必须明说
+// ---------------------------------------------------------------------------
+
+describe('checkClaudeUserScopeMcp — user scope 的 claude MCP 不投影（issue #52）', () => {
+  function mcpConfig(
+    scope: 'project' | 'user',
+    targets: readonly string[],
+    servers: readonly Record<string, unknown>[],
+  ): EffectiveConfig {
+    return {
+      profile: ProfileSchema.parse({ version: 1, targets, mcp: { servers } }),
+      habits: HabitsSchema.parse({ version: 1 }),
+      userSoTRoot: USER_SOT,
+      projectSoTRoot: PROJECT_SOT,
+      effectiveScope: scope,
+    };
+  }
+
+  const FS_SERVER = { name: 'fs', transport: 'stdio', command: 'npx' };
+
+  it('三条件齐备 → 一条 warn，指明上游落点与手工登记命令', () => {
+    const results: DoctorCheckResult[] = [];
+    checkClaudeUserScopeMcp(results, mcpConfig('user', ['claude'], [FS_SERVER]));
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.level).toBe('warn');
+    expect(results[0]?.item).toBe(CLAUDE_USER_MCP_NOTICE_ITEM);
+    expect(results[0]?.detail).toContain('.claude.json');
+    expect(results[0]?.detail).toContain('claude mcp add --scope user');
+    // hint 给出「改走 project scope」这条真正能被投影的出路
+    expect(results[0]?.hint).toContain('--scope project');
+  });
+
+  it('project scope / claude 未启用 / 无 server → 都不报（该层落点与上游一致）', () => {
+    const cases: EffectiveConfig[] = [
+      mcpConfig('project', ['claude'], [FS_SERVER]),
+      mcpConfig('user', ['codex'], [FS_SERVER]),
+      mcpConfig('user', ['claude'], []),
+    ];
+    for (const config of cases) {
+      const results: DoctorCheckResult[] = [];
+      checkClaudeUserScopeMcp(results, config);
+      expect(results).toEqual([]);
     }
   });
 });

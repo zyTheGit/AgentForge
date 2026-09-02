@@ -7,6 +7,7 @@
 import { listDirSafe } from '../../infra/fsutil';
 import type { Host } from '../../infra/host';
 import { longPathAware, type OsContext, pathApiFor } from '../paths';
+import { CLAUDE_MCP_FILENAME } from './projectors/claude';
 import { PI_DIRNAME, PI_USER_DIR_SEGMENTS } from './projectors/pi';
 import {
   SYNC_BACKUP_DIRNAME,
@@ -36,7 +37,8 @@ export type SyncResidualKind =
   | 'lock-stale'
   | 'journal-pending'
   | 'backup-failed'
-  | 'pi-legacy-mcp';
+  | 'pi-legacy-mcp'
+  | 'claude-legacy-user-mcp';
 
 /** 单条残留诊断（path 一律给绝对路径，便于用户直接定位）。 */
 export interface SyncResidual {
@@ -192,4 +194,57 @@ async function hasMcpServersKey(host: Host, file: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// 投影侧的历史落点残留（claude 的 user scope MCP 曾写在 `~\.mcp.json`）
+// ---------------------------------------------------------------------------
+
+/**
+ * claude 的 user scope MCP 历史落点残留：`<userProfile>\.mcp.json` **且含
+ * `mcpServers` 键**（issue #52）。
+ *
+ * 为什么需要：那个落点从来没被 claude 当作 user 级配置读过（实测见
+ * `projectors/claude.claudeMcpPath`），现在 user scope 整项不再投影。**§7.6 的
+ * prune 清不掉它**——两条都不成立：
+ * 1. `artifacts` 记账只收 `action='write'` 的项，merge_json 的文件永不进那张表，
+ *    所以不会被整文件删（这是对的：里面可能有用户自己的东西）；
+ * 2. `mcpServers` 的差集摘键只遍历**本轮 planned 的 merge_json 项**，而 claude 的
+ *    user MCP 项从此不再产出 → 那个路径再也不会被遍历到。
+ *
+ * 于是旧文件里 AgentForge 认领过的 server 键会永久留在盘上。只诊断不删（同
+ * `inspectPiLegacyMcp`）：`.mcp.json` 是 claude 的**项目级**共享格式，cwd 落在用户
+ * 目录之下时 claude 会顺着目录向上把它当项目配置捞到，用户也可能是自己手写的——
+ * 在投影层自动删用户目录里的文件，风险远大于收益。
+ *
+ * @param projectRoot 当前项目根。`projectRoot === userProfile` 时**不报**：此时那份
+ *   `.mcp.json` 就是 project scope 的正常落点（仍在维护），报出来是错的。
+ * @param userProfile user scope 的投影基准根；缺失时不报。
+ */
+export async function inspectClaudeLegacyUserMcp(
+  host: Host,
+  projectRoot: string,
+  userProfile: string | undefined,
+  os: OsContext,
+): Promise<SyncResidual[]> {
+  if (userProfile === undefined || userProfile === '') {
+    return [];
+  }
+  const api = pathApiFor(os);
+  const file = api.join(userProfile, CLAUDE_MCP_FILENAME);
+  if (file === api.join(projectRoot, CLAUDE_MCP_FILENAME)) {
+    return [];
+  }
+  if (!(await hasMcpServersKey(host, longPathAware(file, os)))) {
+    return [];
+  }
+  return [
+    {
+      kind: 'claude-legacy-user-mcp',
+      path: file,
+      detail:
+        'claude 的 user scope MCP 曾投影到这里，但 claude 从不把它当 user 级配置读；' +
+        'AgentForge 已停止投影该落点，这份 mcpServers 不再被维护',
+    },
+  ];
 }

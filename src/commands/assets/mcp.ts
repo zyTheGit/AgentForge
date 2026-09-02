@@ -166,6 +166,12 @@ export async function runMcpRemove(
  * codex 不列：其 MCP 走 merge_toml 的 `# BEGIN/END AGENTFORGE MCP` 标记段**整段重写**，
  * 下次 sync 按 SoT 重算该段，摘掉的 server 自动消失，不需要用户动手。
  *
+ * **user scope 的 claude 也不列**（issue #52）：那一层根本不投影 MCP（上游只认
+ * `~\.claude.json`，而那是 claude 的运行时状态转储，见
+ * `projectors/claude.claudeMcpPath`）。列一条 aforge 从不写的路径，等于让用户去删一个
+ * 与本次 remove 无关的文件。历史落点留下的残留由 `aforge doctor` 的
+ * `residual/claude-legacy-user-mcp` 单独报。
+ *
  * 基准根走 context.projectionRootFor（与 skill remove 同一口径）：用户目录取不到时退化成
  * `~` 占位，这一行只是提示文案，不该让一次已经写盘成功的 remove 因为算不出提示而失败。
  */
@@ -182,7 +188,6 @@ function mcpProjectionFiles(ctx: McpCommandContext, env: EnvSnapshot, scope: Sco
   }
   return [
     api.join(root, ...OPENCODE_USER_DIR_SEGMENTS, OPENCODE_MCP_FILENAME),
-    api.join(root, CLAUDE_MCP_FILENAME),
     api.join(piUserAgentDir(root, env.piCodingAgentDir, ctx.os), PI_MCP_FILENAME),
   ];
 }

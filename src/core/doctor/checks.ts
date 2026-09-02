@@ -43,7 +43,8 @@
  * - `check-residuals`：事务残留（锁 / journal / 回滚失败备份）的级别与提示取舍；
  * - `check-consistency`：渲染基准 / 模板解析 / 命令暴露 / sync-meta / merge_json；
  * - `check-skills`：profile.skills.* 的「声明 vs 实际」（on_demand / copy_mode）；
- * - `check-mcp-transport`：MCP transport × target 能力落差（降级 / 跳过）；
+ * - `check-mcp-transport`：MCP transport × target 能力落差（降级 / 跳过）+
+ *   MCP scope × target 落点不可安全写入（claude user scope 整项跳过）；
  * - `check-projection-hash`：marker 区间三方比对（当前渲染 vs 记录 vs 磁盘）；
  * - `check-environment`：declared vs detected / OneDrive / skills/ 下的 symlink。
  * - `check-sources`：源登记表与默认注册的官方模板源（只读 fs、零网络、恒不抬退出码）。
@@ -80,10 +81,10 @@ import {
   checkPiCodingAgentDir,
   checkSkillsSymlinks,
 } from './check-environment';
-import { checkMcpTransport } from './check-mcp-transport';
+import { checkClaudeUserScopeMcp, checkMcpTransport } from './check-mcp-transport';
 import { buildPlanCtx, checkTargetPaths, collectEnabledPlans } from './check-paths';
 import { checkProjectionHashes } from './check-projection-hash';
-import { piLegacyMcpResults, residualResults } from './check-residuals';
+import { claudeLegacyUserMcpResults, piLegacyMcpResults, residualResults } from './check-residuals';
 import { checkSkillsCopyMode, checkSkillsOnDemand } from './check-skills';
 import { checkDefaultSources } from './check-sources';
 import { type DoctorCheckResult, type DoctorReport, doctorExitCode } from './check-types';
@@ -134,6 +135,9 @@ export async function runDoctorChecks(opts: DoctorOptions): Promise<DoctorReport
 
   // ---- 投影侧历史落点残留：pi 的 MCP 曾写在 .pi/settings.json（只诊断，不删）----
   results.push(...(await piLegacyMcpResults(host, cwd, env.userProfile, os)));
+
+  // ---- 投影侧历史落点残留：claude 的 user MCP 曾写在 ~/.mcp.json（只诊断，不删）----
+  results.push(...(await claudeLegacyUserMcpResults(host, cwd, env.userProfile, os)));
 
   // ---- 坏 YAML 检查（§9：逐文件报告损坏的 habits / profile）----
   const yamlOk = await checkYamlFiles(host, results, roots);
@@ -203,6 +207,9 @@ async function runConfigDependentChecks(
 
   // ---- MCP transport × target 能力落差（Phase 2 MCP 对齐：降级 / 跳过 → warn）----
   checkMcpTransport(results, config);
+
+  // ---- MCP scope × target 落点不可写（issue #52：claude user scope 整项跳过 → warn）----
+  checkClaudeUserScopeMcp(results, config);
 
   // ---- sync-meta 读取（损坏 → error(2)；不存在 → 信息性 ok）----
   const syncMeta = await readSyncMetaForDoctor(host, results, roots, config);

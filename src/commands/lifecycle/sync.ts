@@ -9,6 +9,8 @@
  * - soft warning（§8.6 Pi MVP）随成功结果输出 warning 列表；
  * - `learning.auto_capture: hook` 下没有钩子落点的 target 输出降级提示
  *   （sessionHookNotices；不是失败，该 target 其余产物照常投影，§7.4）；
+ * - MCP 落点不能安全写入的 target 输出整项跳过提示（mcpScopeNotices；目前唯一来源
+ *   是 claude 的 user scope，见 projectors/claude.claudeMcpPath）；
  * - 投影失败（已回滚）时打印失败汇总表（每 target 状态 + 回滚声明）后
  *   rethrow 原始错误——退出码 / message / hint 语义由 main.ts 统一出口保持；
  * - 回滚**未能全部恢复**时改用「rollback incomplete」措辞、前置未恢复清单、给出
@@ -173,6 +175,10 @@ export function printSyncResult(result: SyncResult, ui: Ui = getUi()): void {
   for (const notice of result.sessionHookNotices) {
     // §7.4 hook 档：该 target 没有钩子落点 → 显式降级，不静默（该 target 其余产物照常投影）
     lines.push(ui.yellow(`[${notice.targetId}] ${notice.message}`));
+  }
+  for (const notice of result.mcpScopeNotices) {
+    // issue #52：该 scope 的 MCP 落点不能安全写入 → 整项跳过 + 手工指引，不静默
+    lines.push(ui.yellow(`[${notice.targetId}] mcp skipped: ${notice.message}`));
   }
   for (const skip of result.skillSkips) {
     // `skills.on_demand` 侧的非致命跳过（未安装 / 被 always 遮蔽 / 无 frontmatter）；

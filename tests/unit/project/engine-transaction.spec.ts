@@ -9,6 +9,9 @@
  * 回滚前基准复核（写入后被外部改动 → 不覆盖）/ 回滚未完成时保留备份目录 /
  * 落盘备份与崩溃恢复（journal 来源与路径白名单校验、committed 只清理不回滚）/
  * 中断回滚句柄（getActiveSyncTransaction + rollbackActiveSyncTransactionSync，真实 fs 直测）。
+ *
+ * 历史落点：pi 的 settings.json 与 claude 的 user scope `~\.mcp.json`（issue #52）都只诊断
+ * 不删，且后者在 user scope sync 时既不被写、也不被 prune —— 旧文件逐字节保留。
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -37,9 +40,17 @@ import {
   type SyncOptions,
   syncOnce,
 } from '../../../src/core/project/engine';
+import {
+  CLAUDE_USER_CONFIG_FILENAME,
+  CLAUDE_USER_MCP_SKIP_REASON,
+} from '../../../src/core/project/projectors/claude';
 import { withSotLock } from '../../../src/core/project/sync-lock';
 import { syncMetaPath } from '../../../src/core/project/sync-meta';
-import { inspectPiLegacyMcp } from '../../../src/core/project/sync-residuals';
+import { CLAUDE_USER_MCP_NOTICE_ITEM } from '../../../src/core/project/sync-notices';
+import {
+  inspectClaudeLegacyUserMcp,
+  inspectPiLegacyMcp,
+} from '../../../src/core/project/sync-residuals';
 import { sha256Hex } from '../../../src/infra/fsutil';
 import { realHost } from '../../../src/infra/real-host';
 import { createFakeHost, type FakeHost } from '../test-utils';
@@ -1536,5 +1547,119 @@ describe('inspectPiLegacyMcp（只诊断不删）', () => {
     const host = createSyncHost();
     await host.writeFile(USER_LEGACY, JSON.stringify({ mcpServers: {} }));
     expect(await inspectPiLegacyMcp(host, CWD, undefined, OS)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// claude 的 user scope MCP 历史落点残留（~\.mcp.json，issue #52）
+// ---------------------------------------------------------------------------
+
+describe('inspectClaudeLegacyUserMcp（只诊断不删）', () => {
+  const USER_LEGACY = path.join(HOME, '.mcp.json');
+
+  it('含 mcpServers 的 <userProfile>\\.mcp.json → 一条 claude-legacy-user-mcp，文件原样保留', async () => {
+    const host = createSyncHost();
+    await host.writeFile(USER_LEGACY, JSON.stringify({ mcpServers: { fs: { type: 'stdio' } } }));
+
+    const residuals = await inspectClaudeLegacyUserMcp(host, CWD, HOME, OS);
+
+    expect(residuals.map((r) => r.kind)).toEqual(['claude-legacy-user-mcp']);
+    expect(residuals.map((r) => r.path)).toEqual([USER_LEGACY]);
+    // 只读诊断：prune 碰不到这个路径，但也绝不在诊断路径上替用户删文件
+    expect(host.files.has(USER_LEGACY)).toBe(true);
+  });
+
+  it('无 mcpServers 键 / 非法 JSON / 文件不存在 → 不报', async () => {
+    const host = createSyncHost();
+    await host.writeFile(USER_LEGACY, JSON.stringify({ other: 1 }));
+    expect(await inspectClaudeLegacyUserMcp(host, CWD, HOME, OS)).toEqual([]);
+
+    const broken = createSyncHost();
+    await broken.writeFile(USER_LEGACY, '{ not json');
+    expect(await inspectClaudeLegacyUserMcp(broken, CWD, HOME, OS)).toEqual([]);
+
+    expect(await inspectClaudeLegacyUserMcp(createSyncHost(), CWD, HOME, OS)).toEqual([]);
+  });
+
+  it('userProfile 缺失 → 不报（算不出那条路径）', async () => {
+    const host = createSyncHost();
+    await host.writeFile(USER_LEGACY, JSON.stringify({ mcpServers: {} }));
+    expect(await inspectClaudeLegacyUserMcp(host, CWD, undefined, OS)).toEqual([]);
+  });
+
+  it('projectRoot === userProfile → 不报（那份 .mcp.json 就是 project scope 的现行落点）', async () => {
+    const host = createSyncHost();
+    await host.writeFile(USER_LEGACY, JSON.stringify({ mcpServers: { fs: {} } }));
+    expect(await inspectClaudeLegacyUserMcp(host, HOME, HOME, OS)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #52：user scope 的 claude MCP 整项跳过（落点迁移 + prune 的实际行为）
+// ---------------------------------------------------------------------------
+
+/** user 层 profile：只启 claude + 一条 stdio server（构造 §8.5 的 MCP 落点判定）。 */
+const PROFILE_USER_CLAUDE_MCP = [
+  'version: 1',
+  'scope: user',
+  'targets: [claude]',
+  'mcp:',
+  '  servers:',
+  '    - name: fs',
+  '      transport: stdio',
+  '      command: npx',
+  '',
+].join('\n');
+
+describe('syncOnce — user scope 的 claude MCP 落点迁移（issue #52）', () => {
+  const USER_SOT_ROOT = path.join(HOME, '.agentforge');
+  const LEGACY_USER_MCP = path.join(HOME, '.mcp.json');
+  const CLAUDE_USER_CONFIG = path.join(HOME, CLAUDE_USER_CONFIG_FILENAME);
+
+  /** 只写 user 层 SoT（project 层缺席 → effectiveScope 落到 user）。 */
+  async function seedUserOnly(host: FakeHost): Promise<void> {
+    await host.writeFile(path.join(USER_SOT_ROOT, 'profile.yaml'), PROFILE_USER_CLAUDE_MCP);
+    await host.writeFile(path.join(USER_SOT_ROOT, 'habits.yaml'), HABITS_YAML);
+  }
+
+  it('历史落点 ~\\.mcp.json 逐字节不动、~\\.claude.json 不创建，落差进 mcpScopeNotices', async () => {
+    const host = createSyncHost();
+    await seedUserOnly(host);
+    // 旧版 AgentForge 留下的落点：既有 AgentForge 的管理键，也有用户自己的键
+    const legacy = JSON.stringify({ mcpServers: { fs: { command: 'npx' } }, myOwnKey: 1 }, null, 2);
+    await host.writeFile(LEGACY_USER_MCP, legacy);
+
+    const result = await syncOnce(syncOptions(host));
+
+    expect(result.scope).toBe('user');
+    // 迁移不做破坏性动作：旧落点整文件保留（prune 只删 action=write 的产物）
+    expect(host.files.get(LEGACY_USER_MCP)).toBe(legacy);
+    // 也不改写 claude 自己的运行时状态转储（拒绝 merge_json 的核心结论）
+    expect(host.files.has(CLAUDE_USER_CONFIG)).toBe(false);
+    // 本轮计划里根本没有这个路径 → 中途失败也不会出现"两个落点并存"
+    expect(result.targets.flatMap((t) => t.items.map((i) => i.path))).not.toContain(
+      LEGACY_USER_MCP,
+    );
+
+    expect(result.mcpScopeNotices).toEqual([
+      {
+        targetId: 'claude',
+        item: CLAUDE_USER_MCP_NOTICE_ITEM,
+        message: CLAUDE_USER_MCP_SKIP_REASON,
+      },
+    ]);
+    // 设计性降级不进 warnings：混进去会让 writeSyncMetaOnSuccess 判定 claude 投影不完整
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('project scope 不受影响：同一份声明仍落 <root>\\.mcp.json 且无 notice', async () => {
+    const host = createSyncHost();
+    await seed(host, PROFILE_WITH_MCP);
+
+    const result = await syncOnce(syncOptions(host));
+
+    expect(result.scope).toBe('project');
+    expect(JSON.parse(host.files.get(MCP_JSON) as string).mcpServers).toHaveProperty('fs');
+    expect(result.mcpScopeNotices).toEqual([]);
   });
 });

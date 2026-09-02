@@ -5,17 +5,18 @@
  * |----------|-----------------------------|-------------------------------|
  * | 主规则   | `<root>\CLAUDE.md`          | `%USERPROFILE%\.claude\CLAUDE.md` |
  * | Skills   | `.claude\skills\<name>\SKILL.md` | `%USERPROFILE%\.claude\skills\` |
- * | MCP      | `.mcp.json`（mcpServers）   | 对应全局配置                  |
+ * | MCP      | `.mcp.json`（mcpServers）   | **不投影**（见 claudeMcpPath）|
  * | Commands | `.claude\commands\<name>.md` | `%USERPROFILE%\.claude\commands\` |
  *
  * M6 范围：主规则（merge_marker）+ MCP（`.mcp.json` merge_json）+ skills write 项。
  * - 主规则动作按 profile.projection.marker_mode（§4.2；merge_marker 时 marker 外
  *   用户内容保留，Spec §8.2；none 时整文件 write），区间内容为同一份 renderedRulesMd
  *   （同一 SoT 渲染一次分发，Spec §8.2）；`write_claude_md: false` 关闭该项（§8.7）；
- * - MCP 恒产出（含空 servers——写入空 `mcpServers` 管理键，深合并时未知键/未知
- *   server 保留，Spec §8.2）；条目形状由 mcp-transport 归一化层给出（`type` 取
- *   `stdio` / `http` / `sse`，与 `claude mcp add` 写出的 `.mcp.json` 一致）；
- *   user scope 的全局 MCP 策略沿用 M5 契约位（rootDir 基准，见 claudeMcpPath）；
+ * - MCP：**只在 project scope 产出**（含空 servers——写入空 `mcpServers` 管理键，深
+ *   合并时未知键/未知 server 保留，Spec §8.2）；条目形状由 mcp-transport 归一化层给出
+ *   （`type` 取 `stdio` / `http` / `sse`，与 `claude mcp add` 写出的 `.mcp.json` 一致）；
+ *   user scope **整项不产出**——上游只认 `~\.claude.json`，而那个文件不适合 merge_json，
+ *   见 claudeMcpPath 的完整依据与取舍；
  * - skills：write 实体 copy（copy_mode=copy，非 symlink，Spec §7.6），
  *   M8 skill add 接入后 skillsToMaterialize 才有内容。
  *
@@ -45,6 +46,14 @@ export const CLAUDE_DIRNAME = '.claude';
 /** Spec §8.5 MCP 配置文件（project 级根下）。 */
 export const CLAUDE_MCP_FILENAME = '.mcp.json';
 
+/**
+ * claude 自己的 user 级配置 + 运行时状态文件名（`~\.claude.json`）。
+ *
+ * 导出只为让 doctor / 命令层的**提示文案**能拼出这条绝对路径。AgentForge 不写它，
+ * 理由见 claudeMcpPath。
+ */
+export const CLAUDE_USER_CONFIG_FILENAME = '.claude.json';
+
 /** Spec §8.5 Commands 目录名（§8.8：claude 用复数 `commands`）。 */
 export const CLAUDE_COMMANDS_DIRNAME = 'commands';
 
@@ -73,17 +82,62 @@ export function claudeSkillPath(ctx: ProjectContext, skillName: string): string 
 }
 
 /**
- * MCP 配置绝对路径（project 根下 .mcp.json）。
+ * MCP 配置绝对路径：project scope = `<root>\.mcp.json`；**user scope = null（不投影）**。
  *
- * **user scope 沿用同一 rootDir 基准**（`<userHome>\.mcp.json`）——这是 M5 起的契约位，
- * Phase 2 未改动。实测 `claude mcp add --scope user` 写的是 `~\.claude.json` 的顶层
- * `mcpServers`、`--scope local` 写的是同一文件里 `projects.<路径>.mcpServers`；换落点
- * 会连带改 §7.6 prune 判据与 sync-meta 记账（同一文件里还混着 claude 自己的大量会话
- * 状态），风险等级与本次「字段对齐」不同，须单独决策。
+ * ## 上游事实（实机验证：Claude Code 2.1.220 / Windows，临时目录重定向
+ * `USERPROFILE`+`HOME` 后跑 `claude mcp add` 与 `claude mcp list`）
+ *
+ * - `--scope project` → `<root>\.mcp.json` 的顶层 `mcpServers`（首次使用要在交互里
+ *   approve，`claude mcp list` 显示 "Pending approval"）；
+ * - `--scope user` → `~\.claude.json` 的**顶层** `mcpServers`；
+ * - `--scope local` → 同一文件的 `projects.<绝对路径>.mcpServers`；
+ * - `~\.claude\settings.json` 里写 `mcpServers` **不被读取**：只在那儿声明的 server
+ *   经 `claude mcp get <name>` 报 `No MCP server named ...`（settings.json 只有
+ *   `enableAllProjectMcpServers` / `enabledMcpjsonServers` 这类"是否放行"的开关）；
+ * - `~\.mcp.json`（本函数改之前的 user scope 落点）**不是** user 级来源：cwd 在用户
+ *   目录**之下**时它会被 `.mcp.json` 的逐层向上查找当成 *project* 配置捞到，cwd 在别处
+ *   时 `claude mcp list` 报 "No MCP servers configured"。所以旧落点对 claude 基本无效
+ *   —— issue #52 的现象成立。
+ *
+ * ## 为什么不改成写 `~\.claude.json`
+ *
+ * 那个文件不是配置文件，是 claude 的**运行时状态转储**：实测本机 42 个顶层键里只有
+ * `mcpServers` 一个属于配置，其余是 `numStartups` / `tipsHistory` / `seenNotifications`
+ * 以及 `projects.<路径>` 下的会话历史、成本与 token 统计、`hasTrustDialogAccepted`
+ * 信任标记、`--scope local` 的 MCP 声明。claude 每次启动 / 结束都重写它，并且在写之前
+ * 自己先存一份 `~\.claude\backups\.claude.json.backup.<epoch>`。
+ *
+ * 而 §8.2 的 merge_json 是**整文件**读 → 解析 → 序列化 → 原子改名：只要在我们读到写
+ * 之间 claude 写过一次（用户日常必然有 claude 在跑），那次写入就被整份丢弃——丢的是
+ * 会话状态、信任标记、以及用户用 `--scope local` 加的 MCP 声明。AgentForge 与 claude
+ * 之间没有共享的锁协议，这个窗口在投影层关不掉。
+ *
+ * 「只碰顶层 `mcpServers`、其余键逐字保留」这一条 merge_json 已经做到（未知键保留、
+ * 键序保留），但它挡不住上面的丢失更新。所以取舍是：**宁可不写**，如实降级 + 给手工
+ * 指引（`claude mcp add --scope user`），同 `writesSessionHooks: false` 的口径——
+ * 不静默、不猜、不替用户动他的运行时状态。
+ *
+ * project scope 不受影响：`<root>\.mcp.json` 与上游完全一致，是 claude 官方推荐的
+ * 可入库共享位。`local` scope 也不进 AgentForge 的 scope 模型——它落在同一个
+ * `~\.claude.json` 里，风险与 user scope 完全相同。
+ *
+ * @returns project scope 的绝对路径；user scope 恒为 `null`（调用方据此整项不产出）。
  */
-export function claudeMcpPath(ctx: ProjectContext): string {
+export function claudeMcpPath(ctx: ProjectContext): string | null {
+  if (ctx.scope !== 'project') {
+    return null;
+  }
   return pathApiFor(ctx.os).join(ctx.rootDir, CLAUDE_MCP_FILENAME);
 }
+
+/**
+ * user scope 下 claude MCP 整项跳过的原因（sync notice / doctor / `mcp remove`
+ * 提示共用一句——三处措辞分叉会让用户以为是三件事）。
+ *
+ * 判据与理由的单一事实源是 claudeMcpPath 的 JSDoc；这里只负责"说给用户听"。
+ */
+export const CLAUDE_USER_MCP_SKIP_REASON =
+  'claude 的 user 级 MCP 只认 ~\\.claude.json 顶层 mcpServers，而该文件同时存放 claude 自己的运行时状态（会话历史 / 信任标记 / local scope 的 MCP 声明）并被 claude 持续重写；AgentForge 的 merge_json 是整文件读改写，会吞掉 claude 并发写入的内容，因此**不投影**该项。请手工登记：claude mcp add --scope user <name> -- <command>（project scope 的 .mcp.json 不受影响）';
 
 /**
  * 单个命令薄壳的目标路径（§8.8 / §8.5 Commands 行）。
@@ -167,12 +221,18 @@ export const claudeProjector: Projector = {
       });
     }
 
-    // MCP：merge_json（AgentForge 管理 `mcpServers` 键，未知键保留，Spec §8.2）
-    items.push({
-      path: claudeMcpPath(ctx),
-      action: 'merge_json',
-      content: claudeMcpPayload(ctx.mcpServers),
-    });
+    // MCP：merge_json（AgentForge 管理 `mcpServers` 键，未知键保留，Spec §8.2）。
+    // user scope 整项不产出——上游只认 `~\.claude.json`，那是 claude 的运行时状态
+    // 转储，不能拿整文件读改写去碰（依据与取舍见 claudeMcpPath）。降级由
+    // sync-notices / doctor 明说，不静默
+    const mcpPath = claudeMcpPath(ctx);
+    if (mcpPath !== null) {
+      items.push({
+        path: mcpPath,
+        action: 'merge_json',
+        content: claudeMcpPayload(ctx.mcpServers),
+      });
+    }
 
     return { targetId: 'claude', items };
   },
