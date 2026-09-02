@@ -76,6 +76,19 @@ export interface SyncCommandSkip {
  */
 export type SyncSkillSkip = SkillMaterializeSkip;
 
+/**
+ * 一条**提示类**产出：不是失败、也不是 soft 失败，只是"这次投影里有件事用户必须
+ * 知道"（哪个 target、哪个议题、说什么）。
+ *
+ * 不并进 `warnings` 的理由同 `SyncCommandSkip`。`item` 与 doctor 的 `item` 取同一
+ * 命名空间，便于把 sync 的一行提示与 doctor 的同名条目对上。构造见 `sync-notices`。
+ */
+export interface SyncNotice {
+  readonly targetId: string;
+  readonly item: string;
+  readonly message: string;
+}
+
 /** syncOnce 结果：命令层据此打印绝对路径与摘要。 */
 export interface SyncResult {
   readonly scope: Scope;
@@ -107,6 +120,15 @@ export interface SyncResult {
    * `aforge skill add`（`always` 点名未装仍是 ConfigError(2)）。
    */
   readonly skillSkips: readonly SyncSkillSkip[];
+  /**
+   * `learning.auto_capture: hook` 下不支持钩子写入的 target 的降级提示（§7.4）。
+   *
+   * 与 `warnings` 分开的理由同 `commandSkips`：writeSyncMetaOnSuccess 按
+   * `warnings[].targetId` 判定「该 target 投影不完整 → 不记账」，而这里是设计如此的
+   * 降级、投影仍然完整，混进去会让那个 target 的 artifacts 记账整轮丢失（§7.6 prune
+   * 从此清不掉它的产物）。构造见 `sync-notices.collectSessionHookNotices`。
+   */
+  readonly sessionHookNotices: readonly SyncNotice[];
   /** soft 项（§8.6）apply 失败收集的 warning（不阻塞 sync）。 */
   readonly warnings: readonly SyncWarning[];
   /**

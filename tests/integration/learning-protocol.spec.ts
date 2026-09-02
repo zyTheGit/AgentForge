@@ -5,7 +5,8 @@
  *    在 custom 规则（§5.2 第 ① 层）之后、`## Learnings`（第 ② 层）之前；
  * 2. 改回 `off` → 该段从投影中消失，custom / Learnings 内容与 **marker 外**手写
  *    内容都不受影响；
- * 3. 声明 `hook`（MVP 未实现）→ 与 `off` 同，不渲染该段。
+ * 3. 声明 `hook` → 与 `off` 同，**不**渲染该段（hook 走会话钩子这条通道，与 prompt
+ *    互斥；钩子产物本身由 `tests/integration/learning-hook-capture.spec.ts` 验收）。
  *
  * 为什么要在集成层再来一遍：段落内容与渲染判据的单测在
  * `tests/unit/learning/auto-capture.spec.ts` 与 `tests/unit/generate/composer.spec.ts`，
@@ -169,7 +170,7 @@ describe('Learning Protocol 段投影（§7.4 prompt 档 / 验收 §11.2-15）',
     }
   }, 60_000);
 
-  it('声明 hook（MVP 未实现）→ 等同 off，不渲染该段', async () => {
+  it('声明 hook → 不渲染该段（与 prompt 互斥，协议改由会话钩子投递）', async () => {
     await seed();
     await setAutoCapture('hook');
     await runSync({ ...ctx(), agentforgeVersion: VERSION });

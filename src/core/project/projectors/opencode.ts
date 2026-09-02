@@ -138,6 +138,16 @@ export const opencodeProjector: Projector = {
   /** §8.8 实测：`GET /command` 里技能以 `source: "skill"` 出现，按 `/<name>` 调用。 */
   skillInvokePrefix: '/',
 
+  /**
+   * `false`——opencode 的会话生命周期（最近的是 `session.idle`）只对 **plugin**
+   * 开放，plugin 是放在 `.opencode\plugins\*.ts` / `~\.config\opencode\plugins\`
+   * 里的 JavaScript/TypeScript 模块。那是投放**可执行代码**，不是写配置数据：
+   * 与 AgentForge「投影只写声明式配置 + marker 区间」的边界不符，也让
+   * §7.6 的 prune「改过的不删」保护形同虚设（用户改一行 TS 就再也清不掉）。
+   * 因此 hook 档对 opencode 等同 off，由 sync notice 与 doctor warn 说明。
+   */
+  writesSessionHooks: false,
+
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];
 

@@ -3,12 +3,16 @@
  *
  * 为什么单独成模块：三档的**有效值**要在三个互不相邻的地方保持一致——渲染层
  * （composer 是否插 `## Learning Protocol` 段）、`aforge status`（如实展示生效档位
- * 与当前环境下会不会真的采集）、`aforge doctor`（`hook` 档未实现的告警）。把
+ * 与当前环境下会不会真的采集）、`aforge doctor`（各档位的告警）。把
  * "声明值 → 有效值"的唯一判定放在这里，三处共用，避免各自 if 出三份略有差异的口径。
  *
  * 两个出口刻意分开：**effectiveAutoCapture 与环境无关**（渲染层只用它，保证
  * contentHash 跨环境稳定），resolveAutoCapture 才吃 env、只为展示层补充说明。
  * 纯函数、不读 process.env：CI 判定由调用方从 EnvSnapshot 注入。
+ *
+ * 本模块**不知道 target**：`hook` 档写什么在 `hook-capture.ts`，写到哪在各
+ * projector，哪些 target 支持在 `core/project/sync-notices.ts`。三层拆开后，
+ * 新增一个 target 不必改这里的档位判定。
  */
 import type { AutoCapture, Profile } from '../../schema';
 
@@ -16,7 +20,7 @@ import type { AutoCapture, Profile } from '../../schema';
 export interface AutoCaptureState {
   /** profile 里声明的档位（缺省 off）。 */
   readonly declared: AutoCapture;
-  /** 实际生效的档位（仅 "hook 未实现" 会归并；与环境无关，见 effectiveAutoCapture）。 */
+  /** 实际生效的档位（当前三档恒等；与环境无关，见 effectiveAutoCapture）。 */
   readonly effective: AutoCapture;
   /**
    * CI 为真：本次运行不会有任何 learnings 落盘（§7.4 护栏 3 / §10）。
@@ -25,26 +29,27 @@ export interface AutoCaptureState {
    * 否则同一份 SoT 在 CI 与本地会产出不同的 contentHash（见 effectiveAutoCapture）。
    */
   readonly ciNoCapture: boolean;
-  /** 声明了 MVP 未实现的档位（当前仅 hook，§12 Phase 3）——行为等同 off。 */
-  readonly unimplemented: boolean;
 }
 
 /**
- * 渲染层用的有效档位（Spec §7.4）：**只做一次归并，且与环境无关**。
+ * 渲染层用的有效档位（Spec §7.4）：**恒等映射，且与环境无关**。
  *
- * - `hook` → `off`：schema 收该值（避免既有 profile 加载失败），但 MVP 没有任何
- *   target 侧钩子写入，语义上等同 off。与 `copy_mode: symlink` 同一处理口径：
- *   照旧接受，由 doctor 明说"声明了但当前不生效"。
+ * - 三档各自生效，不再有归并：`hook` 在 §12 Phase 3 已落地 target 侧钩子写入
+ *   （见 hook-capture.ts 与 codex projector），因此不再折叠成 `off`。保留这层
+ *   间接不删函数：它是「渲染层只认有效档位」这条约束的落点，将来若再引入需要
+ *   归并的档位，改这一处即可，三个消费方自动跟上。
  * - **CI 不参与判定**：护栏 3「CI 为真时任何档位都不得产生 `learnings/` 写入」约束的是
  *   *写入*路径（`aforge learn` 在 CI 下被 store 守卫拒掉，ConfigError(2)），不是渲染路径。
  *   若让 CI 也削掉这一段正文，同一份
  *   SoT 在 CI 与本地就会渲染出不同的 marker 区间 → contentHash 不同 → 任何跨环境
  *   的 hash 比对（CI 里 `aforge doctor` 对着本机 sync 出的产物）都会误报漂移。
  *   投影产物因此保持环境无关；"CI 里不会真的采集"由 status / doctor 如实说明。
+ * - **不看本机装了哪个 CLI**：`hook` 档的钩子写入是声明驱动的（按 `profile.targets`
+ *   与各 projector 的能力声明），不做任何探测，因此 contentHash 与钩子产物
+ *   都不因宿主环境而变。
  */
 export function effectiveAutoCapture(profile: Profile): AutoCapture {
-  const declared = profile.learning.auto_capture;
-  return declared === 'hook' ? 'off' : declared;
+  return profile.learning.auto_capture;
 }
 
 /**
@@ -57,13 +62,23 @@ export function resolveAutoCapture(
   profile: Profile,
   env: { readonly ci: boolean },
 ): AutoCaptureState {
-  const declared = profile.learning.auto_capture;
   return {
-    declared,
+    declared: profile.learning.auto_capture,
     effective: effectiveAutoCapture(profile),
     ciNoCapture: env.ci,
-    unimplemented: declared === 'hook',
   };
+}
+
+/**
+ * 该有效档位是否要求 target 侧写入会话钩子（Spec §7.4 `hook` 档 / §12 Phase 3）。
+ *
+ * 与 rendersLearningProtocol **互斥**：两者是同一份协议的两条投递通道
+ * （静态嵌进规则文件 vs 会话开始时由钩子动态注入），同时为真等于把协议投两遍。
+ * 单独成函数而不在 projector 里就地比较字面量：sync / status / doctor 三处都要
+ * 回答"这次会不会写钩子"，共用一个判据才不会漂移。
+ */
+export function writesSessionHooks(effective: AutoCapture): boolean {
+  return effective === 'hook';
 }
 
 /**

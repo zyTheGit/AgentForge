@@ -7,6 +7,8 @@
  * - 输出：逐项写入明细（`[target] action: path`）+ 每 target 汇总表 +
  *   结果摘要；--dry-run 明确标注且不落盘（含 sync-meta）；
  * - soft warning（§8.6 Pi MVP）随成功结果输出 warning 列表；
+ * - `learning.auto_capture: hook` 下没有钩子落点的 target 输出降级提示
+ *   （sessionHookNotices；不是失败，该 target 其余产物照常投影，§7.4）；
  * - 投影失败（已回滚）时打印失败汇总表（每 target 状态 + 回滚声明）后
  *   rethrow 原始错误——退出码 / message / hint 语义由 main.ts 统一出口保持；
  * - 回滚**未能全部恢复**时改用「rollback incomplete」措辞、前置未恢复清单、给出
@@ -167,6 +169,10 @@ export function printSyncResult(result: SyncResult, ui: Ui = getUi()): void {
   for (const skip of result.commandSkips) {
     // §8.8.4：命令薄壳整项跳过（该 target 的其余产物照常投影）
     lines.push(ui.yellow(`[${skip.targetId}] commands skipped: ${skip.reason}`));
+  }
+  for (const notice of result.sessionHookNotices) {
+    // §7.4 hook 档：该 target 没有钩子落点 → 显式降级，不静默（该 target 其余产物照常投影）
+    lines.push(ui.yellow(`[${notice.targetId}] ${notice.message}`));
   }
   for (const skip of result.skillSkips) {
     // `skills.on_demand` 侧的非致命跳过（未安装 / 被 always 遮蔽 / 无 frontmatter）；

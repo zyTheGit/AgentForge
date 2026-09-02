@@ -5,13 +5,24 @@
  * 幂等与内置模板资产同步性。
  */
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BASE_DEFAULT_TEMPLATE } from '../../../src/assets/templates';
 import { ConfigError, ExitCode } from '../../../src/core/errors';
 import type { ComposeInput } from '../../../src/core/generate/composer';
 import { applyPathStyle, composeRules, renderRules } from '../../../src/core/generate/composer';
-import type { Habits } from '../../../src/schema';
+import { effectiveAutoCapture, resolveAutoCapture } from '../../../src/core/learning/auto-capture';
+import { renderedSectionHash } from '../../../src/core/markers';
+import type { OsContext } from '../../../src/core/paths';
+import { renderRulesMd } from '../../../src/core/project/sync-prepare';
+import type { Host } from '../../../src/infra/host';
+import type { AutoCapture, Habits } from '../../../src/schema';
 import { HabitsSchema, ProfileSchema } from '../../../src/schema';
+import { abs, createFakeHost } from '../test-utils';
+
+/** 自定义 marker（防止 contentHash 只在默认 marker 下成立，见下方 hashFor）。 */
+const MARKER_BEGIN = '<!-- BEGIN CUSTOM AGF -->';
+const MARKER_END = '<!-- END CUSTOM AGF -->';
 
 /** Spec §13.1 的 habits 数据。 */
 function habits131(): Habits {
@@ -195,7 +206,7 @@ describe('auto_capture: prompt → ## Learning Protocol 段（§5.2 / §7.4）',
     expect(rules).toContain('aforge learn --file -');
   });
 
-  it('缺省 / off / hook → 不产出该段（hook 的降级在 learning 层完成）', async () => {
+  it('缺省 / off / hook → 不产出该段（hook 走会话钩子这条通道，与 prompt 互斥）', async () => {
     const habits = HabitsSchema.parse({ version: 1 });
     for (const autoCapture of [undefined, 'off', 'hook'] as const) {
       const rules = await composeRules(composeInput(habits, undefined, { autoCapture }));
@@ -207,6 +218,95 @@ describe('auto_capture: prompt → ## Learning Protocol 段（§5.2 / §7.4）',
     const habits = HabitsSchema.parse({ version: 1 });
     const input = composeInput(habits, undefined, { autoCapture: 'prompt' });
     expect(await composeRules(input)).toBe(await composeRules(input));
+  });
+});
+
+describe('contentHash 跨环境稳定（§7.4 / §8.2：投影产物与本机环境无关）', () => {
+  /**
+   * 含**路径 token** 的 custom 素材：`applyPathStyle`（§4.2）只改写路径 token，
+   * SoT 里一个都没有时"两个平台 hash 相同"是恒真的空断言。
+   */
+  const CUSTOM_WITH_PATH = '## Local layout\n\n- 规则素材放在 ~/notes/agentforge/custom\n';
+
+  /** custom/ 目录感知的 fake host（分隔符与被测代码的 path.join 一致）。 */
+  function hostWithCustom(userSoT: string): Host {
+    const file = path.join(userSoT, 'custom', 'local.md');
+    const base = createFakeHost();
+    base.files.set(file, CUSTOM_WITH_PATH);
+    return {
+      ...base,
+      async listDir(dir) {
+        return dir === path.join(userSoT, 'custom') ? ['local.md'] : [];
+      },
+    };
+  }
+
+  /**
+   * 走 sync 的**真实链路**：profile 声明 → effectiveAutoCapture → SoT 素材读取
+   * （`sync-prepare.renderRulesMd`）→ 三参 `renderedSectionHash(正文, begin, end)`，
+   * 与 engine 的 contentHash 计算逐字同源。marker 取自定义值，防止只在默认 marker 下成立。
+   */
+  async function hashFor(
+    declared: AutoCapture,
+    env: { readonly ci: boolean },
+    os?: OsContext,
+    pathStyle: 'auto' | 'posix' = 'auto',
+  ): Promise<string> {
+    const profile = ProfileSchema.parse({
+      version: 1,
+      targets: ['codex', 'claude'],
+      learning: { auto_capture: declared },
+      projection: {
+        path_style: pathStyle,
+        marker_begin: MARKER_BEGIN,
+        marker_end: MARKER_END,
+      },
+    });
+    // resolveAutoCapture 吃 env 只为展示层；渲染取 effective（对 env 免疫）——这里两者一起
+    // 走一遍，正是为了盯住"env 变了但 effective 没变"
+    expect(resolveAutoCapture(profile, env).effective).toBe(effectiveAutoCapture(profile));
+    const userSoT = abs('sot-user');
+    const rendered = await renderRulesMd(
+      hostWithCustom(userSoT),
+      userSoT,
+      abs('sot-project'),
+      habits131(),
+      profile,
+      os,
+    );
+    expect(rendered).toContain('Local layout'); // 素材真的进了正文（否则下面全是空断言）
+    return renderedSectionHash(rendered, MARKER_BEGIN, MARKER_END);
+  }
+
+  it.each(['off', 'prompt', 'hook'] as const)('%s 档：CI 与非 CI 的 hash 相同', async (tier) => {
+    expect(await hashFor(tier, { ci: true })).toBe(await hashFor(tier, { ci: false }));
+  });
+
+  it.each([
+    'off',
+    'prompt',
+    'hook',
+  ] as const)('%s 档：显式 path_style 下 win32 与 linux 宿主的 hash 相同', async (tier) => {
+    expect(await hashFor(tier, { ci: false }, { platform: 'win32' }, 'posix')).toBe(
+      await hashFor(tier, { ci: false }, { platform: 'linux' }, 'posix'),
+    );
+  });
+
+  it('path_style: auto + 含路径 token 的 SoT → 两平台 hash 本就不同（§4.2 设计，非缺陷）', async () => {
+    // 这条正是 doctor 必须与 sync 注入同一个 os 的原因（见 check-consistency.renderForDoctor）
+    expect(await hashFor('off', { ci: false }, { platform: 'win32' })).not.toBe(
+      await hashFor('off', { ci: false }, { platform: 'linux' }),
+    );
+  });
+
+  it('hook 档的 hash 与 off 档相同：hook 不往规则文件插正文（两条通道互斥）', async () => {
+    expect(await hashFor('hook', { ci: false })).toBe(await hashFor('off', { ci: false }));
+  });
+
+  it('prompt 档的 hash 与 off / hook 不同（防"三档 hash 全等"的假绿）', async () => {
+    const promptHash = await hashFor('prompt', { ci: false });
+    expect(promptHash).not.toBe(await hashFor('off', { ci: false }));
+    expect(promptHash).not.toBe(await hashFor('hook', { ci: false }));
   });
 });
 
