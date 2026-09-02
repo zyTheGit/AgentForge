@@ -7,6 +7,8 @@
  *
  * 陈旧锁判定同时看两件事：心跳停摆超过 SYNC_LOCK_STALE_MS **且**持有者进程已不存活。
  * 只看时间会误杀慢 sync（大仓库叠加杀毒扫描），只看进程会被 pid 重用骗过。
+ * 「进程是否存活」这一问只在持有者与本进程处于同一 pid 空间时才有意义——判据与锁
+ * 元数据的形状都在 sync-identity（机器 + 用户 + pid 空间，后者专治 WSL 边界）。
  */
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -15,13 +17,23 @@ import type { Host } from '../../infra/host';
 import { ConflictError, PermissionError } from '../errors';
 import { isWithinAnyRoot, longPathAware, type OsContext } from '../paths';
 import { SYNC_LOCK_DIRNAME } from './sync-artifacts';
+import {
+  isProcessAlive,
+  machineIdOf,
+  pidSpaceIdOf,
+  type SyncLockRecord,
+  sameProcessSpace,
+  userIdOf,
+} from './sync-identity';
 
 // ---------------------------------------------------------------------------
 // 事务互斥锁（备份-写入-回滚整段串行化）
 // ---------------------------------------------------------------------------
 
 // 锁目录名迁到 sync-artifacts（运行时产物命名的单一事实源）；此处 re-export
-// 保持对外导出面不变（engine 门面与 doctor 都从这里取）。
+// 保持对外导出面不变（engine 门面与 doctor 都从这里取）。持有者身份判据与锁元数据
+// 形状在 sync-identity——它的另外三个消费者（sync-recovery / sync-residuals /
+// sync-transaction）直接从那里取，不经本模块转发。
 export { SYNC_LOCK_DIRNAME };
 
 /** 锁目录内的持有者元数据文件名（pid / acquiredAt / token / 机器 / 用户）。 */
@@ -56,18 +68,6 @@ export function isLockFresh(ageMs: number): boolean {
  */
 export const SYNC_LOCK_HEARTBEAT_MS = 30 * 1000;
 
-/** 锁元数据：持有者身份 + 最近一次心跳时刻 + 随机 token（释放时的归属判定）。 */
-interface SyncLockRecord {
-  readonly pid: number;
-  /** 最近一次心跳时刻（获取时写入，持锁期间每 SYNC_LOCK_HEARTBEAT_MS 刷新）。 */
-  readonly acquiredAt: string;
-  readonly token: string;
-  /** 机器标识（跨机器共享 SoT 时无法用 pid 判活）。 */
-  readonly machine: string;
-  /** 用户标识（同机多用户时同理）。 */
-  readonly user: string;
-}
-
 /** 已获得的锁句柄（释放时校验 token，避免误删他人重新取得的锁）。 */
 export interface SyncLockHandle {
   /** 锁目录（`<sotRoot>/.sync.lock`）。 */
@@ -77,55 +77,6 @@ export interface SyncLockHandle {
   readonly token: string;
   /** 心跳定时器（release 时清理；unref 后不阻塞进程退出）。 */
   heartbeat: ReturnType<typeof setInterval> | null;
-}
-
-/**
- * 取第一个非空白值（`??` 不够：环境变量可以导出为空串，那与「没有」等价）。
- * 全部缺失时返回空串——调用方（锁 / journal 的归属判据）把空串视为"未知"。
- */
-function firstNonBlank(...values: readonly (string | undefined)[]): string {
-  for (const value of values) {
-    const trimmed = value?.trim();
-    if (trimmed !== undefined && trimmed !== '') {
-      return trimmed;
-    }
-  }
-  return '';
-}
-
-/**
- * 机器标识（优先 Host.env 口径，便于注入；环境变量缺失时退回 host.hostname()）。
- *
- * 为什么必须有 os 兜底：HOSTNAME 不是 POSIX 导出变量，`sh -c` / 容器 / systemd 下
- * 常常读不到。退化成空串后，「跨机器 journal 只清理不恢复」与「同机同用户才判 pid
- * 存活」两处判据会双双变成恒真——共享 SoT（网盘 / NFS）时可能拿别人机器的 journal
- * 回滚本机文件，或按本机 pid 空间误判他人的锁已死而抢占。
- */
-export function machineIdOf(host: Host): string {
-  return firstNonBlank(host.env('COMPUTERNAME'), host.env('HOSTNAME'), host.hostname());
-}
-
-/** 用户标识（同上；USER 在 cron / systemd 下同样可能未导出）。 */
-export function userIdOf(host: Host): string {
-  return firstNonBlank(host.env('USERNAME'), host.env('USER'), host.username());
-}
-
-/**
- * 进程是否仍存活（`kill(pid, 0)` 探针，不发送任何信号）。
- *
- * 仅在「同机器 + 同用户」时可信：跨机器的 pid 与本机 pid 空间无关，
- * 跨用户的进程 kill 探针会得到 EPERM（存在但无权限 → 同样按存活处理）。
- */
-export function isProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
 }
 
 /** 读锁元数据并解析；不存在 / 内容损坏 → null（损坏锁按陈旧处理，允许抢占）。 */
@@ -144,6 +95,8 @@ export async function readSyncLockRecord(
       token: typeof parsed.token === 'string' ? parsed.token : '',
       machine: typeof parsed.machine === 'string' ? parsed.machine : '',
       user: typeof parsed.user === 'string' ? parsed.user : '',
+      // 老版本写的锁文件没有这个字段 → 空串 → sameProcessSpace 恒为 false（保守降级）
+      pidSpace: typeof parsed.pidSpace === 'string' ? parsed.pidSpace : '',
     };
   } catch {
     return null;
@@ -236,10 +189,8 @@ async function acquireSyncLock(
   if (!created) {
     const holder = await readSyncLockRecord(host, metaFile);
     const ageMs = await lockAgeMs(host, dir, holder);
-    const sameHost =
-      holder !== null && holder.machine === machineIdOf(host) && holder.user === userIdOf(host);
     const fresh = isLockFresh(ageMs);
-    if (fresh || (sameHost && isProcessAlive(holder.pid))) {
+    if (fresh || (sameProcessSpace(holder, host, os) && isProcessAlive(holder.pid))) {
       throw lockBusyError(dir, holder, ageMs);
     }
     // 陈旧锁（心跳停摆且持有者已消失）/ 元数据损坏：抢占
@@ -272,7 +223,7 @@ async function acquireSyncLock(
   const token = randomBytes(12).toString('hex');
   const lock: SyncLockHandle = { dir, metaFile, token, heartbeat: null };
   try {
-    await writeSyncLockRecord(host, lock);
+    await writeSyncLockRecord(host, lock, os);
   } catch (err) {
     await releaseSyncLock(host, lock); // 元数据写不进去 → 不留下无主锁目录
     throw lockCreateError(err, dir);
@@ -292,18 +243,19 @@ async function acquireSyncLock(
     });
   }
 
-  startLockHeartbeat(host, lock);
+  startLockHeartbeat(host, lock, os);
   return lock;
 }
 
 /** 写入 / 刷新锁元数据（acquiredAt 即最近心跳时刻）。 */
-async function writeSyncLockRecord(host: Host, lock: SyncLockHandle): Promise<void> {
+async function writeSyncLockRecord(host: Host, lock: SyncLockHandle, os: OsContext): Promise<void> {
   const record: SyncLockRecord = {
     pid: process.pid,
     acquiredAt: host.now().toISOString(),
     token: lock.token,
     machine: machineIdOf(host),
     user: userIdOf(host),
+    pidSpace: pidSpaceIdOf(host, os),
   };
   await host.writeFile(lock.metaFile, `${JSON.stringify(record, null, 2)}\n`);
 }
@@ -312,9 +264,9 @@ async function writeSyncLockRecord(host: Host, lock: SyncLockHandle): Promise<vo
  * 启动心跳：周期性刷新 acquiredAt，向其他进程证明本次 sync 仍在活动。
  * 定时器 unref——绝不因心跳而延长进程生命周期。
  */
-function startLockHeartbeat(host: Host, lock: SyncLockHandle): void {
+function startLockHeartbeat(host: Host, lock: SyncLockHandle, os: OsContext): void {
   const timer = setInterval(() => {
-    void writeSyncLockRecord(host, lock).catch(() => {
+    void writeSyncLockRecord(host, lock, os).catch(() => {
       // best-effort：单次心跳失败无害（下一次仍会尝试；真正的写权限问题在 apply 阶段报错）
     });
   }, SYNC_LOCK_HEARTBEAT_MS);

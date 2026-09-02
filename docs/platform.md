@@ -11,7 +11,7 @@
   - *颜色*：默认只在 TTY 下开启；`NO_COLOR` 关闭（优先级最高）、`FORCE_COLOR` 强制开启（便于 `| less -R` 与 CI 日志）、`TERM=dumb` 关闭。此外所有命令都接受位置无关的 `--no-color` / `--color`。
   - `--json` 输出不经过呈现层，恒为无色纯 ASCII，逐字节稳定。
 - **交互 UI**：`init` 的交互流程需要真实终端（TTY），非 TTY 下自动退回静默默认值（等价 `init --yes`）。
-- **OneDrive**：`AGF_HOME` 或项目目录落在 OneDrive 下时 `aforge doctor` 会 warn（文件锁 / 占位符状态可能导致投影写入失败）。
+- **OneDrive**：用户目录、用户级 SoT 根（`AGF_HOME` 置位时即它）、项目目录三者任一落在 OneDrive 下时 `aforge doctor` 会 warn（文件锁 / 占位符状态可能导致投影写入失败）。
 - **会话钩子里的 `aforge`（`learning.auto_capture: hook`）**：钩子文件写的是**裸命令** `aforge learn --print-protocol`，由 codex 起进程时按 `PATH` 解析——刻意不写绝对路径，产物才能跨机器逐字节一致（见 [learning](learning.md#auto_capture-hook会话钩子投递协议)）。因此：
   - `aforge` 必须在**启动 agent 的那个 shell** 的 `PATH` 里。npm 全局安装在 Windows 上落 `%APPDATA%\npm\aforge.cmd`；如果你用 fnm / nvm 之类的版本管理器，切换 Node 版本会换掉全局 bin 目录，钩子可能突然找不到命令；
   - 找不到时钩子静默失败（非零退出被 codex 当作"该钩子没产出上下文"），会话照常继续，只是协议没注入。想确认，在同一个 shell 里跑一次 `aforge learn --print-protocol`，能打印出协议正文即为正常；
@@ -29,16 +29,18 @@
 > **本节的实测环境**：Windows 11（build 26200，`LongPathsEnabled=0`）+ WSL2 Ubuntu（内核 `6.6.114.1-microsoft-standard-WSL2`）。`/proc/mounts` 里 `/mnt/c` 的形态是
 > `C:\ /mnt/c 9p rw,noatime,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/,cache=5,access=client,msize=65536,trans=fd`——**没有 `metadata` 选项**（这是 WSL2 的默认）。Windows 侧 `COMPUTERNAME=AJIU`、`USERNAME=hpee2`；WSL 侧 `hostname` 为 `ajiu`、`USER=hpee2`（`COMPUTERNAME` / `USERNAME` / `HOSTNAME` 都没有导出给子进程）。带 `metadata` 挂载、或计算机名本身是大写的机器，结论可能不同——下面每条都写了判据，可自行复测。
 
-### AgentForge 不检测 WSL
+### AgentForge 几乎不检测 WSL
 
-- 环境快照只读这几个变量：`AGF_HOME` / `AGF_SCOPE` / `AGF_OFFLINE` / `AGF_LINE_ENDING` / `CI` / `CODEX_HOME` / `PI_CODING_AGENT_DIR`，加上家目录解析用的 `USERPROFILE` / `HOME`（`src/core/env.ts:93`）。**没有** `WSL_DISTRO_NAME` / `WSL_INTEROP` / `/proc/version` 之类判据；平台上下文只有 `win32` / `darwin` / `linux` 三值（`src/core/paths.ts:16`）。因此 **WSL 内的 aforge 就是一个普通 Linux 进程**，行为与原生 Linux 完全一致，没有任何 WSL 专属分支。
-- 唯一一处**已经**针对 WSL 互操作做过的处理：家目录解析按平台决定优先级——win32 上 `USERPROFILE` 优先，类 Unix 上 `HOME` 优先（`src/core/env.ts:75`）。理由就写在那段注释里：WSL 互操作会把 Windows 侧的 `USERPROFILE`（`C:\Users\x`）带进 Linux 进程，若固定 `USERPROFILE ?? HOME`，WSL 里的用户级 SoT 会落到一个不存在的盘符路径下。所以 WSL 里 SoT 稳定落在 `$HOME/.agentforge`。
+- 环境快照只读这几个变量：`AGF_HOME` / `AGF_SCOPE` / `AGF_OFFLINE` / `AGF_LINE_ENDING` / `CI` / `CODEX_HOME` / `PI_CODING_AGENT_DIR`，加上家目录解析用的 `USERPROFILE` / `HOME`（`src/core/env.ts:93`）。平台上下文只有 `win32` / `darwin` / `linux` 三值（`src/core/paths.ts` 的 `OsContext`）。**渲染与投影里没有任何 WSL 专属分支**——WSL 内的 aforge 就是一个普通 Linux 进程。
+- 例外只有一处，且不影响任何产物：事务锁的持有者信息会记一条 **pid 空间标识**，判据读 `WSL_DISTRO_NAME` / `WSL_INTEROP`（`src/core/project/sync-lock.ts` 的 `pidSpaceIdOf`）。原因是 WSL 的 hostname 默认就是 Windows 计算机名、两侧用户名也常相同，光靠「同机器 + 同用户」区分不出两个互不相干的 pid 空间，`kill(pid, 0)` 探针会探到本侧一个碰巧同号的无关进程。读不到发行版名时判据给出"未知"，调用方按**不同** pid 空间处理（不做 pid 探针，只走心跳超时），宁可多等一个 stale 窗口。
+- 另一处**已经**针对 WSL 互操作做过的处理：家目录解析按平台决定优先级——win32 上 `USERPROFILE` 优先，类 Unix 上 `HOME` 优先（`src/core/env.ts:75`）。理由就写在那段注释里：WSL 互操作会把 Windows 侧的 `USERPROFILE`（`C:\Users\x`）带进 Linux 进程，若固定 `USERPROFILE ?? HOME`，WSL 里的用户级 SoT 会落到一个不存在的盘符路径下。所以 WSL 里 SoT 稳定落在 `$HOME/.agentforge`。
 
 ### SoT 放置策略
 
-- **Windows 侧不能把 SoT 放进 WSL 文件系统。** `\\wsl$\<distro>\...` 与 `\\wsl.localhost\<distro>\...` 都是 UNC 形态；`AGF_HOME` 以 `\\` 或 `//` 开头时，win32 上直接 `GenericError` 退出码 1（`src/core/paths.ts:120`，判据就是这两个前缀）。这条属于「不予实现」，见 [路线图](roadmap.md#不予实现)。
-- 反方向（WSL 侧把 SoT 放在 `/mnt/c/...`）不会被拒：UNC 判据只在 win32 分支生效，posix 上 `//foo` 是合法绝对路径（`src/core/paths.ts:121` 的注释说明了为什么不能在 posix 上拦）。技术上可行，但要一并接受下面「锁与原子写」「大小写」两节的代价。AgentForge 依赖的**文件系统原语**已在 `/mnt/c` 上逐条实测通过（非递归 `mkdir` 的 `EEXIST`、同目录 rename、深路径读写，见下面两节），但**「WSL 侧跑一轮完整 `aforge sync`」这件事本身仍未实测**——本次验证用的发行版里没有 node / bun 运行时，装一个属于改动机器环境，没做。所以这条只能说「前提条件都成立」，不能说「整体可用」。
-- `aforge doctor` 的 `user-sot-root` 条目会把 UNC `AGF_HOME` 报成 error（`src/core/doctor/check-config.ts:27` 调 `resolveUserSoT`）——看到这条就是撞上了上面那条拒绝。
+- **Windows 侧不能把 SoT 放进 WSL 文件系统。** `\\wsl$\<distro>\...` 与 `\\wsl.localhost\<distro>\...` 都是 UNC 形态；win32 上以 `\\` 或 `//` 开头的**外部路径入口**（`AGF_HOME` / `CODEX_HOME` / `PI_CODING_AGENT_DIR` / 项目目录）一律 `GenericError` 退出码 1（判据在 `src/core/paths.ts` 的 `validatePath`，四个入口共用它）。这条属于「不予实现」，见 [路线图](roadmap.md#不予实现)。
+- 同一个守卫还拒绝**Windows 上的无盘符绝对路径**（`CODEX_HOME=/home/x/.codex` 这类照抄 WSL 侧配置的写法）：`path.win32.resolve` 会把它静默补成 `C:\home\x\.codex`，落点与用户写的完全不是一回事，所以报 `ConfigError` 退出码 2 而不是猜一个盘符。`~` 会先展开成家目录再校验，写 `~/.codex` 不会造出字面名为 `~` 的目录。
+- 反方向（WSL 侧把 SoT 放在 `/mnt/c/...`）不会被拒：UNC 判据只在 win32 分支生效，posix 上 `//foo` 是合法绝对路径（`validatePath` 里的注释说明了为什么不能在 posix 上拦）。技术上可行，但要一并接受下面「锁与原子写」「大小写」两节的代价。AgentForge 依赖的**文件系统原语**已在 `/mnt/c` 上逐条实测通过（非递归 `mkdir` 的 `EEXIST`、同目录 rename、深路径读写，见下面两节），但**「WSL 侧跑一轮完整 `aforge sync`」这件事本身仍未实测**——本次验证用的发行版里没有 node / bun 运行时，装一个属于改动机器环境，没做。所以这条只能说「前提条件都成立」，不能说「整体可用」。
+- `aforge doctor` 的 `user-sot-root` 条目会把 UNC `AGF_HOME` 报成 error（`src/core/doctor/check-config.ts:27` 调 `resolveUserSoT`）；`CODEX_HOME` / `PI_CODING_AGENT_DIR` 的同类问题由 `codex-home` / `pi-coding-agent-dir` 两条报出——看到这些就是撞上了上面那两条拒绝。
 
 ### user scope 是两份，不会自动合并
 
@@ -56,23 +58,27 @@
 
 ### 锁与原子写
 
-- `.sync.lock` 是**目录锁**，互斥原语是非递归 `mkdir` 的 `EEXIST`（`src/infra/real-host.ts:97`、`src/core/project/sync-lock.ts:231`）。**实测成立**：在 `/mnt/c` 的同一目录下，Windows 侧（node `fs.mkdirSync`，与 `Host.mkdirExclusive` 同一 syscall）与 WSL 侧（coreutils `mkdir`）按同一墙钟时刻起跑、各自以不同随机顺序抢同一批 20000 个目录名，结果是 Windows 赢 19079、WSL 赢 921，**合计正好 20000、双方赢下的名字集合交集为空**，磁盘上也正好 20000 个目录。真并发是确认过的（单侧独跑 20000 次约 0.2s，本轮 Windows 侧耗时 9.5s，被对侧压满）。单侧重复 `mkdir` 同一目录同样如期报 `File exists`。
-- 抢占陈旧锁的判据是「心跳停摆 > 5 分钟 **且** 持有者进程已不存活」，其中 pid 判活只在「同机器 + 同用户」时才采信（`src/core/project/sync-lock.ts:239`；`machineIdOf` / `userIdOf` 见同文件 `104` / `109`，`isProcessAlive` 见 `119`）。**判据是严格字符串相等**（`holder.machine === machineIdOf(host)`），而 `machineIdOf` 取 `COMPUTERNAME → HOSTNAME → os.hostname()`、`userIdOf` 取 `USERNAME → USER → os.userInfo().username`。实测这台机器上两侧的取值是：Windows `AJIU` / `hpee2`，WSL `ajiu` / `hpee2`（WSL 里 `COMPUTERNAME`、`USERNAME`、`HOSTNAME` 都不在子进程环境里，落到 `os.hostname()`）。**结论：机器名的大小写决定一切**——Windows 恒把 `COMPUTERNAME` 报成全大写，WSL 的 `hostname` 保留原始大小写。计算机名本身是小写/混合大小写时（本机就是），`sameHost` 跨边界为 **false**，pid 探针不被采信，落回心跳判据（30 秒刷新 / 5 分钟阈值，`sync-lock.ts:57` 与 `31`）；计算机名本身全大写时两侧字符串相同，`sameHost` 为 **true**，此时 pid 探针会拿本侧 pid 空间去判对侧进程，结论不可信——极端情况下会把对侧仍在写的锁判成「进程已消失」而抢占（前提是心跳同时已停摆超 5 分钟）。
+- `.sync.lock` 是**目录锁**，互斥原语是非递归 `mkdir` 的 `EEXIST`（`src/infra/real-host.ts:97`、`src/core/project/sync-lock.ts:184`）。**实测成立**：在 `/mnt/c` 的同一目录下，Windows 侧（node `fs.mkdirSync`，与 `Host.mkdirExclusive` 同一 syscall）与 WSL 侧（coreutils `mkdir`）按同一墙钟时刻起跑、各自以不同随机顺序抢同一批 20000 个目录名，结果是 Windows 赢 19079、WSL 赢 921，**合计正好 20000、双方赢下的名字集合交集为空**，磁盘上也正好 20000 个目录。真并发是确认过的（单侧独跑 20000 次约 0.2s，本轮 Windows 侧耗时 9.5s，被对侧压满）。单侧重复 `mkdir` 同一目录同样如期报 `File exists`。
+- 抢占陈旧锁的判据是「心跳停摆 > 5 分钟 **且** 持有者进程已不存活」，其中 pid 判活只在 `sameProcessSpace` 为真时才采信（`src/core/project/sync-lock.ts:193`；判据本体在 `src/core/project/sync-identity.ts` 的 `sameProcessSpace` / `machineIdOf` / `userIdOf` / `pidSpaceIdOf` / `isProcessAlive`）。三项都是**严格字符串相等且都不为空**：机器（`COMPUTERNAME → HOSTNAME → os.hostname()`）、用户（`USERNAME → USER → os.userInfo().username`）、**pid 空间**（`WSL_DISTRO_NAME` 置位 → `wsl:<发行版>`；检出 `WSL_INTEROP` 但读不到发行版名 → 空串"未知"；其余 → `native:<platform>`）。
+  - 前两项在本机的实测取值：Windows `AJIU` / `hpee2`，WSL `ajiu` / `hpee2`（WSL 里 `COMPUTERNAME`、`USERNAME`、`HOSTNAME` 都不在子进程环境里，机器名落到 `os.hostname()`，保留原始小写；Windows 恒把 `COMPUTERNAME` 报成全大写）。
+  - **跨 Windows / WSL 边界的结论不再取决于计算机名的大小写**：即使计算机名本身全大写、前两项字符串相等，pid 空间这一项也一定不等——Windows 侧恒为 `native:win32`，WSL 侧要么是 `wsl:<发行版>`、要么是空串（空串按"取不到"处理，同样判不等）。所以跨边界 `sameProcessSpace` 恒为 **false**，pid 探针不被采信，只能落回心跳判据（30 秒刷新 / 5 分钟阈值，`sync-lock.ts:69` 与 `43`）。这正是 PR #59 加 `pidSpace` 字段要解决的问题：旧的「同机器 + 同用户」判据在全大写计算机名的机器上会跨边界为真，于是 `kill(pid, 0)` 拿本侧 pid 空间去判对侧进程——极端情况下把对侧仍在写的锁判成「进程已消失」而抢占（前提是心跳同时已停摆超 5 分钟）。
+  - 代价在**老锁文件**上：`pidSpace` 是后加字段，旧版本写下的 `meta.json` 没有它 → 读成空串 → `sameProcessSpace` 为 false → 不做 pid 探针。于是一把真·本机活锁若心跳停摆超 5 分钟仍可能被抢占；这个方向是实现里刻意选的（反方向会让跨边界的陈旧锁被永久判成活锁，只能人工删目录）。
 - **「跨文件系统边界 rename 会失败」在这里不成立**：`atomicWrite` 的临时文件与目标**同目录**（`src/infra/fsutil.ts:100`），rename 永远发生在同一文件系统内。实测 WSL 侧在 `/mnt/c` 上做同目录 `mv` 成功。`/mnt/c` 场景下真实的风险是另一侧进程占用目标文件，rename 拿到 `EPERM` / `EACCES` → `PermissionError` 退出码 4（`src/infra/fsutil.ts:131`）。
 - `copyMode` 在 posix 上把目标原有权限位复制到临时文件（`src/infra/real-host.ts:71`，win32 上是 no-op）。**实测：默认（不带 `metadata`）挂载下 `chmod` 是无效操作**——`/mnt/c` 上新建文件恒为 `777`，`chmod 600` 退出码 0 但回读仍是 `777`（同一发行版 ext4 `/tmp` 上的对照组正确变成 `600`）。即 posix 分支的 `copyMode` 在 `/mnt/c` 上等价于 no-op：不报错、不阻断写入（失败本来也是 best-effort 吞掉，`src/infra/fsutil.ts:122`），只是「保留原权限」这件事不会发生。带 `metadata` 挂载选项时行为不同（本次未测）。
-- 结论：互斥原语本身跨边界成立（上面那轮 20000 次对抗实测），但仍**不建议**两侧同时对同一份 SoT 跑 `sync`——理由变成了后两条：`sameHost` 的取值取决于计算机名大小写这种偶然因素，以及大小写不敏感带来的「同一项目两个根 → 两把锁」。另见下方 [已知限制](#已知限制) 的并发安全条目。
+- 结论：互斥原语本身跨边界成立（上面那轮 20000 次对抗实测），`sameProcessSpace` 也已经把「跨边界误信 pid 探针」这个坑堵掉了，但仍**不建议**两侧同时对同一份 SoT 跑 `sync`——剩下的理由是：大小写不敏感带来的「同一项目两个根 → 两把锁」（互斥直接失效，见下节），以及跨边界的陈旧锁只能走「心跳停摆 5 分钟」这条慢路径恢复（pid 探针恒不采信）。另见下方 [已知限制](#已知限制) 的并发安全条目。
 
 ### 大小写与路径长度
 
-- posix 分支的路径比较是**大小写敏感**的：`samePath` 只在 win32 折叠大小写（`src/core/paths.ts:130`），`isWithinAnyRoot` 的 fold 同理（`src/core/paths.ts:236`）。而 `/mnt/c` **实测确认大小写不敏感**：WSL 侧建出 `.../CaseProbe` 后，`[ -d .../caseprobe ]` 与 `[ -d .../CASEPROBE ]` 都命中，再 `mkdir .../caseprobe` 报 `File exists`（即文件系统只认一个目录，但任意大小写写法都能访问到它）。于是 WSL 侧分别用 `/mnt/c/Zy/proj` 和 `/mnt/c/zy/proj` 访问同一个项目时，AgentForge 会当成两个不同的根：影响面是锁根推导（`resolveLockRoots`，`src/core/project/sync-lock.ts:427`）与落盘 journal 的归属判定——两个「根」各自建自己的 `.sync.lock`，互斥就失效了。规避办法是固定路径的大小写写法（例如始终用 `cd -P` 后的形态，或在脚本里写死一种）。
+- posix 分支的路径比较是**大小写敏感**的：`samePath` 只在 win32 折叠大小写（`src/core/paths.ts:130`），`isWithinAnyRoot` 的 fold 同理（`src/core/paths.ts:236`）。而 `/mnt/c` **实测确认大小写不敏感**：WSL 侧建出 `.../CaseProbe` 后，`[ -d .../caseprobe ]` 与 `[ -d .../CASEPROBE ]` 都命中，再 `mkdir .../caseprobe` 报 `File exists`（即文件系统只认一个目录，但任意大小写写法都能访问到它）。于是 WSL 侧分别用 `/mnt/c/Zy/proj` 和 `/mnt/c/zy/proj` 访问同一个项目时，AgentForge 会当成两个不同的根：影响面是锁根推导（`resolveLockRoots`，`src/core/project/sync-lock.ts:379`）与落盘 journal 的归属判定——两个「根」各自建自己的 `.sync.lock`，互斥就失效了。规避办法是固定路径的大小写写法（例如始终用 `cd -P` 后的形态，或在脚本里写死一种）。
 - Windows 长路径 `\\?\` 前缀只在 win32 上添加（`src/core/paths.ts:142`）。**实测：WSL 侧不受 260 字符限制**——在 `/mnt/c` 下逐级建到 40 层、目录路径 905 字符仍成功，在 914 字符处写文件并读回正常。反向读也没问题：Windows 侧 node 走普通路径（无 `\\?\`）就能 `readdir` / `stat` / 读到那个 910 字符的文件，加 `\\?\` 前缀同样可以——注意这台机器的 `LongPathsEnabled=0`，能成的原因是 libuv 自己会把超长绝对路径转成 `\\?\` 形式，**不能**据此推断「Win32 API 裸长路径可用」。`longPathAware` 因此是一层显式冗余保护，而不是唯一屏障。
 
 ### doctor 在跨环境下的读法
 
 - `path/<target>`：恒为 ok 的信息项，打印 project 与 user 两个 scope 的实际落点（`src/core/doctor/check-paths.ts:61`）。跨环境时**先看这条**确认到底写到哪。
 - `writable`：会真的 mkdirp + 写探针文件 + 删除（`src/core/doctor/check-writable.ts:33`）。跨边界目录（`/mnt/c` 上被 Windows 进程占用、或 UNC 位置）探测失败会报 error(4)——这**不是误报**，`sync` 在同一位置同样会失败。
-- `onedrive`：判据只看 `env.userProfile`，不看项目目录、也不看 `AGF_HOME`（`src/core/doctor/check-environment.ts:70` → `src/core/paths.ts:193`），而 `OneDrive` 环境变量默认不会通过 `WSLENV` 传进 WSL。因此在 WSL 侧对 `/mnt/c/Users/x/OneDrive/...` 下的项目**不会**告警——别把这条 ok 当成「不在 OneDrive 上」的证明。
-- `residual/lock-live` / `residual/lock-stale`：新鲜度判据与 sync 同源（`src/core/project/sync-lock.ts:46`），但元数据里的 `pid` / `machine` / `user` 是持有者那一侧的口径，跨环境共享 SoT 时不可直接解读。
+- `onedrive`：判据看三条路径——`env.userProfile`、用户级 SoT 根（`AGF_HOME` 置位时即它）、项目目录（`src/core/doctor/check-environment.ts` 的 `checkOneDrive`）。但 `OneDrive` 环境变量默认不会通过 `WSLENV` 传进 WSL，而 `detectOneDrive` 的第二条判据依赖它；因此在 WSL 侧对 `/mnt/c/Users/x/OneDrive/...` 下的项目，只有路径里带 `OneDrive` 目录段时才命中第一条判据。别把这条 ok 当成「不在 OneDrive 上」的证明。
+- `codex-home` / `pi-coding-agent-dir`：置位时报出「原值 → 解析后」的落点。相对取值报 warn（落点随 cwd 漂移）；UNC / Windows 上的无盘符绝对路径 / `~user` 报 error——那是 `sync` 会撞上的同一个守卫（`src/core/paths.ts` 的 `validatePath`）。报 error 之后 doctor 会把该取值**摘掉再跑完剩下的检查**（`path/<target>` 等依赖投影计划的条目按默认落点解析）：否则同一个守卫会在最需要诊断的时候把整份报告一起抛掉。退出码仍是 2。
+- `residual/lock-live` / `residual/lock-stale`：新鲜度判据与 sync 同源（`src/core/project/sync-lock.ts:46`），「持有者进程是否还活着」这一问也与 sync 共用 `sameProcessSpace`（机器 + 用户 + pid 空间三者全部非空且相等才做 pid 探针）。元数据里的 `pid` / `machine` / `user` 是持有者那一侧的口径，跨环境共享 SoT 时不可直接解读；**旧版本写下的锁文件没有 pid 空间字段**，一律按"不同 pid 空间"处理，于是只会按心跳静默时长判定新鲜/陈旧。
 
 ## 已知限制
 

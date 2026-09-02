@@ -98,9 +98,9 @@ skills:
 | codex | sidecar `agents\openai.yaml` 的 `policy.allow_implicit_invocation: false` | 不隐式调用，`$<name>` 仍可用 |
 | opencode | **无对应开关** | 未知 frontmatter 键被忽略：技能可用，但仍进模型清单 |
 
-codex 与 opencode 这两行是**实机验证过的**（验证方法与观察到的现象见下）：
+codex 与 opencode 这两行是**实机验证过的**（验证方法与观察到的现象见下）。注意下面两条讲的都是**客户端读取侧**的行为——即 `sync` 已经把产物写好之后，客户端怎么解读它；AgentForge **注入侧**的行为（什么情况下拒绝改写 `SKILL.md`）是另一码事，见下面的[缺失与冲突的处理](#缺失与冲突的处理)。
 
-- **codex 0.147.0**：隔离 `CODEX_HOME`、CWD 放在与家目录不相干的位置，用 `codex debug prompt-input`（"Render the model-visible prompt input list as JSON"）读模型真正看到的技能清单。只有 `SKILL.md` 的技能在清单里；加上 sidecar 后从清单消失；只写 frontmatter `disable-model-invocation: true` 而不给 sidecar 的技能**仍在清单里**——codex 确实不认这个 frontmatter 键，但也不会因为多这个键而拒绝加载技能。sidecar 里多写一个 codex 不认识的字段仍然生效；sidecar 写成非法 YAML 则整份被忽略、技能退回「和 always 一样」，不会加载失败。
+- **codex 0.147.0**：隔离 `CODEX_HOME`、CWD 放在与家目录不相干的位置，用 `codex debug prompt-input`（"Render the model-visible prompt input list as JSON"）读模型真正看到的技能清单。只有 `SKILL.md` 的技能在清单里；加上 sidecar 后从清单消失；只写 frontmatter `disable-model-invocation: true` 而不给 sidecar 的技能**仍在清单里**——codex 确实不认这个 frontmatter 键，但也不会因为多这个键而拒绝加载技能。sidecar 里多写一个 codex 不认识的字段仍然生效；**sidecar 自身**（`agents\openai.yaml`，与 `SKILL.md` 的 frontmatter 是两个不同的文件）写成非法 YAML 时整份被 codex 忽略、技能退回「和 always 一样」进清单，不会加载失败。
 - **opencode 1.15.13**：`opencode debug skill`（列出加载到的全部技能）在隔离 HOME / XDG 目录下跑，三个探针技能——不带额外键、带 `disable-model-invocation: true`、带一个随机未知键——**全部正常列出且都带 description**（即都会进模型清单）。其技能加载器只做 duck-type 校验（`name` 必须是字符串、`description` 可选字符串），`disable-model-invocation` 在其实现里零引用。
 
 opencode 这一档是明确的降级：`aforge doctor` 会报 `skills-on-demand/opencode-unsupported`（warn，不影响退出码），提示在 `opencode.json` 里配 `permission.skill.<name>: "ask"` 或 `"deny"` 自己挡一道。注入那一行对 opencode 是**空操作**——不会让技能失效，也不会关掉自动路由。
@@ -109,9 +109,12 @@ opencode 这一档是明确的降级：`aforge doctor` 会报 `skills-on-demand/
 
 ### 缺失与冲突的处理
 
+本节全部是 **AgentForge 注入侧**的行为：`sync` 在生成产物时怎么处理名单与 `SKILL.md` 的异常，与上面「客户端读取侧」是两层，别混着读。
+
 - **点名却没装**：不像 `always` 那样 fail-fast。`sync` 照常成功，输出里一行 `[on_demand] <name>: not installed in either SoT layer ...`，`doctor` 报 `skills-on-demand/<name>` warn。`on_demand` 的定位就是「备货清单」，允许先写名字再逐个 `aforge skill add <name> --no-register`；
-- **同名同时在 `always` 里**：按 `always` 投影（仍进模型清单），不注入按需标记，`doctor` 报 warn 提示要先从 `always` 里摘掉；
-- **`SKILL.md` 没有 frontmatter**：正文照常投影，但无处注入标记，按需语义不生效（`doctor` warn）。四家客户端本来也要求 `name` / `description` 必填，这种文档本身就该补 frontmatter；
+- **同名同时写进 `always` 与 `on_demand`**：**加载即失败**，退出码 2。两张名单语义互斥（一个进模型自动路由清单、一个不进），同一个技能只能选一张；报错落在 `skills.on_demand` 字段路径上并列出重复的名字。这条校验在 `profile.yaml` 装配阶段生效，因此 `sync` / `status` / `doctor` 一律走不到投影；
+- **SoT 的 `SKILL.md` 没有 frontmatter，或 frontmatter 不是合法 YAML 顶层映射**：AgentForge **拒绝改写**（不猜、不硬塞一行），正文照常逐字投影，但无处注入标记 → claude / pi 侧按需语义不生效（codex 的 sidecar 与 frontmatter 无关，仍会写），`doctor` 报 warn。四家客户端本来也要求 `name` / `description` 必填，这种文档本身就该补 frontmatter；
+- **SoT 自己写了 `disable-model-invocation: false`**（或其他非 `true` 的取值）：尊重该取值、一个字节都不改，因此**四家一律不启用**按需语义（codex 也不写 sidecar），`doctor` 报 warn 并提示把它改成 `true` 或整行删掉（删掉后由 `sync` 自动注入）。写了 `true` 的则视为已生效，产物逐字节等于原文；
 - **`expose_as_command` 只认 `always`**：命令薄壳是「强制调用」的手段，与「别自动用它」的诉求正交；点名一个只在 `on_demand` 里的技能仍是退出码 2。
 
 ### 两张名单之间迁移

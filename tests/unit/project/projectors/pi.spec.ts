@@ -3,6 +3,7 @@
  * 动作 / soft 标记）、MCP payload 序列化（mcpServers 键）、skills write 项。
  */
 import { describe, expect, it } from 'vitest';
+import { GenericError } from '../../../../src/core/errors';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
 import {
   piMainRulePath,
@@ -96,6 +97,42 @@ describe('piProjector.plan（Spec §8.6 主规则 / MCP soft / skills）', () =>
     expect(plan.items[0]?.path).toBe('D:\\pi-agent\\AGENTS.md');
     expect(plan.items[1]?.path).toBe('D:\\pi-agent\\skills\\s1\\SKILL.md');
     expect(plan.items.at(-1)?.path).toBe('D:\\pi-agent\\mcp.json');
+  });
+
+  it('PI_CODING_AGENT_DIR 过统一守卫：UNC 直接拒绝（Issue #51 第 1 条）', () => {
+    const ctx = buildCtx({
+      scope: 'user',
+      rootDir: 'C:\\Users\\u',
+      env: {
+        agfHome: undefined,
+        agfScope: undefined,
+        offline: false,
+        lineEnding: undefined,
+        ci: false,
+        codexHome: undefined,
+        piCodingAgentDir: '\\\\wsl.localhost\\Ubuntu\\home\\x\\.pi\\agent',
+        userProfile: 'C:\\Users\\u',
+      },
+    });
+    expect(() => piProjector.plan(ctx)).toThrow(GenericError);
+  });
+
+  it('PI_CODING_AGENT_DIR 的 `~` 展开（此前会落出字面名为 `~` 的目录）', () => {
+    const ctx = buildCtx({
+      scope: 'user',
+      rootDir: 'C:\\Users\\u',
+      env: {
+        agfHome: undefined,
+        agfScope: undefined,
+        offline: false,
+        lineEnding: undefined,
+        ci: false,
+        codexHome: undefined,
+        piCodingAgentDir: '~/pi-agent',
+        userProfile: 'C:\\Users\\u',
+      },
+    });
+    expect(piProjector.plan(ctx).items[0]?.path).toBe('C:\\Users\\u\\pi-agent\\AGENTS.md');
   });
 
   it('project scope 不受 PI_CODING_AGENT_DIR 影响（覆盖只针对 user 级 agent 目录）', () => {

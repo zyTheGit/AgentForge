@@ -29,7 +29,7 @@
  */
 import type { McpServer } from '../../../schema';
 import { codexSessionHooksJson } from '../../learning/hook-capture';
-import { pathApiFor } from '../../paths';
+import { CODEX_HOME_ENV, pathApiFor, resolveOverridableDir } from '../../paths';
 import { renderCommandShell } from '../commands';
 import {
   type CommandArtifact,
@@ -111,12 +111,22 @@ export const CODEX_PROMPTS_DIRNAME = 'prompts';
 export const CODEX_MCP_TOML_BEGIN = '# BEGIN AGENTFORGE MCP';
 export const CODEX_MCP_TOML_END = '# END AGENTFORGE MCP';
 
-/** codex 全局根目录（user scope）：CODEX_HOME 覆盖，否则 `<home>\.codex`（Spec §2.2）。 */
+/**
+ * codex 全局根目录（user scope）：CODEX_HOME 覆盖，否则 `<home>\.codex`（Spec §2.2）。
+ *
+ * 覆盖值过 core/paths 的统一守卫（`~` 展开 + UNC / 无盘符绝对路径拒绝）：本目录同时是
+ * `config.toml`（merge_toml）与 `hooks.json`（整文件 write）的落点，未校验的取值等于
+ * 把一次整文件覆盖导向任意目录。
+ */
 function codexUserDir(ctx: ProjectContext): string {
   const api = pathApiFor(ctx.os);
-  return ctx.env?.codexHome !== undefined && ctx.env.codexHome !== ''
-    ? api.resolve(ctx.env.codexHome)
-    : api.join(ctx.rootDir, CODEX_DIRNAME);
+  return resolveOverridableDir(
+    ctx.env?.codexHome,
+    api.join(ctx.rootDir, CODEX_DIRNAME),
+    CODEX_HOME_ENV,
+    ctx.rootDir,
+    ctx.os,
+  );
 }
 
 // ---------------------------------------------------------------------------

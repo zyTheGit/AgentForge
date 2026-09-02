@@ -60,7 +60,7 @@ export interface TemplateContext {
  * 递归扫描 `<root>/templates` 下的 .md 文件 → 模板 id 列表（相对路径去 .md，/ 分隔）。
  *
  * 两类根共用：两层 SoT 根，以及**源根**（`store\<id>` / local 源的 path）——后者是
- * 无 manifest 源的回落口径，与 resolver.lookupStore 的第 4 层布局同源（§4.5）。
+ * 无 manifest 源的回落口径，与 resolver 第 4 层（`<源根>\templates\<id>.md`）同源（§4.5）。
  */
 async function scanTemplatesUnder(host: Host, root: string): Promise<string[]> {
   const ids: string[] = [];
@@ -215,8 +215,9 @@ export async function listTemplates(ctx: TemplateContext): Promise<TemplateListR
     // 无 manifest（或 manifest 未声明 templates）→ 回落扫描源根的 `templates\**.md`。
     // 只认 manifest 时，一个没有 manifest.yaml 的源（官方模板仓库当前就是这样）付出
     // 一次整仓 clone 却在清单里新增不了任何东西；而 resolveTemplate 的第 4 层
-    // （resolver.lookupStore）**本来就**按这个布局解析得到它——两处口径必须一致，
-    // 否则 `template list` 看不见的模板 id 却能被 `sync` 渲染出来。
+    // **本来就**按这个布局解析得到它——两处口径必须一致，否则 `template list` 看不见
+    // 的模板 id 却能被 `sync` 渲染出来（反向的分叉同样有害：manifest 声明的 id 若不落在
+    // `templates/<id>.md`，就会"列得出、解析不到"，见 docs/commands.md 的发布约束）。
     for (const id of await scanTemplatesUnder(ctx.host, sourceRootDir(mgr, source))) {
       items.push({ id, origin: 'source', sourceId: source.id, enabled: enabledSet.has(id) });
     }

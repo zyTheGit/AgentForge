@@ -57,14 +57,15 @@ id 校验（`src/core/generate/resolver.ts:36`）拒绝空串、含反斜杠 `\`
 
 ### 查找优先级
 
-同一个 id 按这个顺序取第一个命中（`src/core/generate/resolver.ts:89`）：
+同一个 id 按这个顺序取第一个命中（`src/core/generate/resolver.ts` 的 `resolveTemplate`）：
 
 1. **内置 `base/default`**（发行包只读骨架）
 2. 项目层 `<项目根>\.agentforge\templates\<id>.md`
 3. 用户层 `%USERPROFILE%\.agentforge\templates\<id>.md`
-4. 源 store `%USERPROFILE%\.agentforge\store\<源>\templates\<id>.md`，多个源命中时按源目录名字典序取首个
+4. **已登记且已启用**的源：`<源根>\templates\<id>.md`（git 源的源根是 `%USERPROFILE%\.agentforge\store\<源 id>`，local 源是登记的 `path`），多个源命中时按源 id 字典序取首个
 
 四处都没有 → `ConfigError` 退出码 2，message `未解析的模板 id: <id>`，hint 指向 `aforge template list`。
+若该 id 只存在于**已禁用**的源里，报的是 `模板 id 只存在于已禁用的源: <id>（来自 <源 id>）`，hint 给出 `aforge source enable <源 id>` 与 `aforge template disable <id>` 两条修复动作（第 4 层只认 `sources.json` 里 `enabled` 的条目：`source disable` 之后缓存留着但不参与渲染，未登记的孤儿 `store\` 目录同样不参与）。
 
 **`base/default` 不可覆盖。** 它在第 1 步就短路返回内置常量，在 `templates/base/default.md` 放同名文件**没有任何效果**（仓库根的 `templates/base/default.md` 只是 `src/assets/templates.ts` 的同步副本，由单测锁定逐字一致，不参与运行时查找）。想改内置那套说法，只能换个 id（如 `my/base`）登记进 `profile.templates`——它会渲染在内置模板**之前**。
 
