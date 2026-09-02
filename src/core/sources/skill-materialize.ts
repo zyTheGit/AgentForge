@@ -27,11 +27,13 @@
  *   frontmatter 表写明 *"skill is hidden from system prompt. Users must use
  *   `/skill:name`"*。codex 的等价开关不在 frontmatter 而在 sidecar
  *   `agents\openai.yaml` 的 `policy.allow_implicit_invocation: false`，由 codex
- *   projector 额外产出一个 write 项。opencode 的公开文档只列
- *   `name` / `description` / `license` / `compatibility` / `metadata`，**未见**它对
- *   未知 frontmatter 键的处理有明确说明，AgentForge 也未实机验证：若它一律忽略，
- *   注入就是空操作（技能仍可用，只是仍进模型清单）；若它做严格校验，注入可能让
- *   该技能在 opencode 侧加载失败。这一不确定性由 `aforge doctor` 的
+ *   projector 额外产出一个 write 项（实测 codex 0.147.0，口径见该文件的
+ *   `CODEX_SKILL_AGENTS_DIRNAME`）。opencode **没有**等价开关：实测 opencode
+ *   1.15.13 的技能加载器只做 duck-type 校验（`name` 必须是字符串、`description`
+ *   可选字符串），未知 frontmatter 键既不校验也不读取，`disable-model-invocation`
+ *   在其实现里零引用——`opencode debug skill` 下三个探针技能（无额外键 / 带本键 /
+ *   带随机未知键）全部正常列出。故注入对 opencode 是**真正的空操作**：技能照常
+ *   加载，但仍进模型清单。这一降级由 `aforge doctor` 的
  *   `skills-on-demand/opencode-unsupported` 显式告警，不静默。
  *
  * ## 缺失语义（与 `always` 刻意不同）

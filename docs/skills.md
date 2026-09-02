@@ -98,7 +98,14 @@ skills:
 | codex | sidecar `agents\openai.yaml` 的 `policy.allow_implicit_invocation: false` | 不隐式调用，`$<name>` 仍可用 |
 | opencode | **无对应开关** | 未知 frontmatter 键被忽略：技能可用，但仍进模型清单 |
 
-opencode 这一档是明确的降级：`aforge doctor` 会报 `skills-on-demand/opencode-unsupported`（warn，不影响退出码），提示在 `opencode.json` 里配 `permission.skill.<name>: "ask"` 或 `"deny"` 自己挡一道。注入那一行对 opencode 是安全的空操作，不会让技能失效。
+codex 与 opencode 这两行是**实机验证过的**（验证方法与观察到的现象见下）：
+
+- **codex 0.147.0**：隔离 `CODEX_HOME`、CWD 放在与家目录不相干的位置，用 `codex debug prompt-input`（"Render the model-visible prompt input list as JSON"）读模型真正看到的技能清单。只有 `SKILL.md` 的技能在清单里；加上 sidecar 后从清单消失；只写 frontmatter `disable-model-invocation: true` 而不给 sidecar 的技能**仍在清单里**——codex 确实不认这个 frontmatter 键，但也不会因为多这个键而拒绝加载技能。sidecar 里多写一个 codex 不认识的字段仍然生效；sidecar 写成非法 YAML 则整份被忽略、技能退回「和 always 一样」，不会加载失败。
+- **opencode 1.15.13**：`opencode debug skill`（列出加载到的全部技能）在隔离 HOME / XDG 目录下跑，三个探针技能——不带额外键、带 `disable-model-invocation: true`、带一个随机未知键——**全部正常列出且都带 description**（即都会进模型清单）。其技能加载器只做 duck-type 校验（`name` 必须是字符串、`description` 可选字符串），`disable-model-invocation` 在其实现里零引用。
+
+opencode 这一档是明确的降级：`aforge doctor` 会报 `skills-on-demand/opencode-unsupported`（warn，不影响退出码），提示在 `opencode.json` 里配 `permission.skill.<name>: "ask"` 或 `"deny"` 自己挡一道。注入那一行对 opencode 是**空操作**——不会让技能失效，也不会关掉自动路由。
+
+还没验证的一条：codex 侧 on_demand 技能的**显式 `$<name>` 调用**。`codex debug prompt-input` 只渲染提示词，不做技能正文展开（`$name` 在这一层不被替换），要确认得开一次真会话。上游文档（codex 自带的 skill-creator 说明）写的是 "When false, the skill is not injected into the model context by default, but can still be invoked explicitly via `$skill`"。
 
 ### 缺失与冲突的处理
 

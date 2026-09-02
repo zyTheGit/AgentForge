@@ -153,8 +153,10 @@ describe('checkSkillsOnDemand', () => {
     });
     const warn = byItem(results, 'skills-on-demand/opencode-unsupported');
     expect(warn?.level).toBe('warn');
-    // 不再断言「一律忽略」——那条行为未实机验证
-    expect(warn?.detail).toContain('未实机验证');
+    // 实测 opencode 1.15.13：未知 frontmatter 键既不校验也不读取 → 注入是空操作，
+    // 技能照常加载但仍进模型清单。两点都要说清楚，别只说其中一半
+    expect(warn?.detail).toContain('仍会进模型的技能清单');
+    expect(warn?.detail).toContain('不会让技能加载失败');
   });
 
   it('没有生效的名字时不产出 opencode 降级 warn（无从降级）', async () => {
