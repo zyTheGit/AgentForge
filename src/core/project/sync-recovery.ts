@@ -18,7 +18,7 @@ import {
   SYNC_BACKUP_DIRNAME,
   SYNC_BACKUP_JOURNAL_FILE,
 } from './sync-artifacts';
-import { machineIdOf, userIdOf } from './sync-lock';
+import { machineIdOf, userIdOf } from './sync-identity';
 import {
   removeBackupArtifacts,
   rollbackWrites,
