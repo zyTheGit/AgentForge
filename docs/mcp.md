@@ -71,6 +71,34 @@ pi 本体不内建 MCP，先装适配扩展才生效：`pi install npm:pi-mcp-ad
 
 > 升级提示：早期版本把 pi 的 MCP 写在 `.pi\settings.json`（user 级 `~\.pi\agent\settings.json`）。现在落点是同目录的 `mcp.json`，旧文件**不会被自动迁移或删除**——确认新 `mcp.json` 生效后请手工删掉旧文件里的 `mcpServers` 键（整份文件没有你自己的 pi 设置时可直接删除）。`aforge doctor` 会把它报为 `residual/pi-legacy-mcp` warning。
 
+## 投影落点（user scope）
+
+`--scope user` 的声明投影到三家，**claude 不在其中**：
+
+- opencode → `~\.config\opencode\opencode.json` 的 `mcp` 键
+- codex → `~\.codex\config.toml` 的标记段（认 `CODEX_HOME`）
+- pi → `<Pi agent dir>\mcp.json`（认 `PI_CODING_AGENT_DIR`，缺省 `~\.pi\agent`）
+- claude → **不投影**，`aforge sync` 会打一条 `[claude] mcp skipped: ...`，`aforge doctor` 报一条 `mcp-scope/claude-user` warn
+
+为什么不投影 claude 的 user 级 MCP：上游只认 `~\.claude.json` 的顶层 `mcpServers`（实测 Claude Code 2.1.220：`~\.claude\settings.json` 里的 `mcpServers` 不被读取，`~\.mcp.json` 也不是 user 级来源），而那个文件同时是 claude 的**运行时状态转储**——会话历史、成本与 token 统计、项目信任标记、`--scope local` 加的 MCP 声明都在里面，claude 每次启动/结束都重写它。AgentForge 的 merge_json 是整文件读改写，与正在运行的 claude 抢写会把它那次写入整份丢掉。没有共享锁协议能关掉这个窗口，所以宁可不写。
+
+要让 MCP 在 claude 的所有项目里生效，两条路：
+
+```powershell
+# 1) 交给 claude 自己写（推荐）
+claude mcp add --scope user jenkins-config -- npx -y @zythegit/jenkins-config-mcp
+
+# 2) 或者把声明放到项目层，走 .mcp.json 投影（可入库共享）
+'{"name":"jenkins-config","transport":"stdio","command":"npx","args":["-y","@zythegit/jenkins-config-mcp"]}' |
+  aforge mcp add --from-json --scope project
+aforge sync
+```
+
+`--scope local`（落在 `~\.claude.json` 的 `projects.<路径>.mcpServers`）不进 AgentForge 的 scope 模型，理由同上——同一个文件、同样的风险。
+
+> 升级提示：早期版本的 user scope claude MCP 写在 `~\.mcp.json`（claude 从不把它当 user 级配置读，所以那轮投影对 claude 一直是无效的）。现在整项不再投影，旧文件**不会被自动迁移或删除**：`sync` 的 §7.6 prune 也碰不到它（merge_json 的文件不进 `artifacts` 记账，而 server 键的差集摘除只遍历本轮 planned 的 merge_json 项）。`aforge doctor` 会把含 `mcpServers` 的 `~\.mcp.json` 报为 `residual/claude-legacy-user-mcp` warning，请据它手工删掉那个 `mcpServers` 键（整份文件没有你自己的配置时可直接删除）。
+
+
 ## transport × target 支持矩阵
 
 你只写一份声明，四个客户端的 MCP schema 各不相同，翻译由投影层的归一化表（`src\core\project\projectors\mcp-transport.ts`）统一负责。**上游能力不同，同一个 `transport` 在不同 target 上的结局也不同：**

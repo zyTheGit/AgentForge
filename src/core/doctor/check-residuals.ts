@@ -10,6 +10,7 @@
 import type { Host } from '../../infra/host';
 import type { OsContext } from '../paths';
 import {
+  inspectClaudeLegacyUserMcp,
   inspectPiLegacyMcp,
   inspectSyncResiduals,
   type SyncResidual,
@@ -56,6 +57,8 @@ function residualHint(residual: SyncResidual): string | undefined {
       return '这是上次回滚未能恢复的文件的唯一备份副本：请先与当前投影文件逐一核对，确认无需恢复后再自行删除该目录';
     case 'pi-legacy-mcp':
       return '升级前的旧落点：确认同目录 mcp.json 已生效后，手工删除这份 settings.json 里的 mcpServers 键（或整个文件，若其中没有你自己的 pi 设置）';
+    case 'claude-legacy-user-mcp':
+      return 'claude 从不读它当 user 级配置，aforge 也不再投影这里：确认不需要后手工删除这份文件里的 mcpServers 键（整份文件没有你自己的配置时可直接删除）。要让 MCP 在 claude 的所有项目里生效，请用 claude mcp add --scope user <name> -- <command>';
   }
 }
 
@@ -71,7 +74,27 @@ export async function piLegacyMcpResults(
   userProfile: string | undefined,
   os: OsContext,
 ): Promise<DoctorCheckResult[]> {
-  const residuals = await inspectPiLegacyMcp(host, projectRoot, userProfile, os);
+  return legacyMcpResults(await inspectPiLegacyMcp(host, projectRoot, userProfile, os));
+}
+
+/**
+ * claude 的 user scope MCP 历史落点残留 → 诊断结果（issue #52；只诊断不删）。
+ *
+ * 级别同 pi 那条取 warn：这份文件不影响任何现行落点，但它里面躺着 AgentForge 曾经
+ * 认领的 server 键、而 §7.6 的 prune 再也碰不到那个路径（理由见
+ * `inspectClaudeLegacyUserMcp`）——不报出来就是永久孤儿且 doctor 全绿。
+ */
+export async function claudeLegacyUserMcpResults(
+  host: Host,
+  projectRoot: string,
+  userProfile: string | undefined,
+  os: OsContext,
+): Promise<DoctorCheckResult[]> {
+  return legacyMcpResults(await inspectClaudeLegacyUserMcp(host, projectRoot, userProfile, os));
+}
+
+/** 历史落点残留 → warn 结果（两个来源共用一份映射，级别 / 形状不会分叉）。 */
+function legacyMcpResults(residuals: readonly SyncResidual[]): DoctorCheckResult[] {
   return residuals.map((residual) => ({
     section: 'consistency' as const,
     level: 'warn' as const,

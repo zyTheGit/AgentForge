@@ -766,9 +766,15 @@ interface Projector {
 | 主规则 | `CLAUDE.md` | `%USERPROFILE%\.claude\CLAUDE.md` |
 | Skills | `.claude\skills\<name>\SKILL.md` | `%USERPROFILE%\.claude\skills\` |
 | Commands（§8.8） | `.claude\commands\<name>.md` | `%USERPROFILE%\.claude\commands\<name>.md` |
-| MCP | `.mcp.json`（`mcpServers`） | 对应全局配置 |
+| MCP | `.mcp.json`（`mcpServers`） | **不投影**（见下） |
 
 **命名空间分隔符是 `:`（实测 Claude Code 2.1.238）**：`commands\ns\foo.md` → `/ns:foo`（与 opencode 的 `/` 不同）。`SKILL.md` 正文里的 `$ARGUMENTS` 同样会被替换，因此 claude 侧"skill 直接当命令用"已能带参数。
+
+**user scope 的 MCP 不投影（issue #52）。** 实测 Claude Code 2.1.220（临时目录重定向 `USERPROFILE`+`HOME` 后跑 `claude mcp add` / `claude mcp list` / `claude mcp get`）：`--scope user` 写 `%USERPROFILE%\.claude.json` 的**顶层** `mcpServers`；`--scope local` 写同一文件的 `projects.<绝对路径>.mcpServers`；`%USERPROFILE%\.claude\settings.json` 里的 `mcpServers` **不被读取**；`%USERPROFILE%\.mcp.json` 也**不是** user 级来源（cwd 在用户目录之下时只是被 `.mcp.json` 的逐层向上查找当成 *project* 配置捞到）。
+
+`~\.claude.json` 是 claude 的**运行时状态转储**而非配置文件——实测 42 个顶层键里只有 `mcpServers` 属于配置，其余是启动计数、通知/提示状态，以及 `projects.<路径>` 下的会话历史、成本与 token 统计、信任标记、`--scope local` 的 MCP 声明；claude 每次启动 / 结束都重写它，且写前自建 `~\.claude\backups\.claude.json.backup.<epoch>`。§8.2 的 merge_json 是**整文件**读 → 解析 → 序列化 → 原子改名，只要在读与写之间 claude 写过一次，那次写入就被整份丢弃（丢的是用户的会话状态、信任标记与 local scope MCP 声明），而 AgentForge 与 claude 之间没有共享锁协议，这个窗口在投影层关不掉。因此 AgentForge **拒绝写它**，如实降级：`aforge sync` 报一条 `mcp skipped`、`aforge doctor` 报一条 `mcp-scope/claude-user` warn，并给出手工指引 `claude mcp add --scope user <name> -- <command>`。project scope 的 `.mcp.json` 与上游完全一致、照常投影。`local` scope 同理不进 AgentForge 的 scope 模型（落在同一个文件里，风险相同）。
+
+**升级说明（旧落点 `%USERPROFILE%\.mcp.json`）**：早期版本的 user scope claude MCP 沿用 `rootDir` 基准写在这里。§7.6 的 prune 清不掉它——`artifacts` 记账只收 `write` 项（merge_json 的文件永不入表），而 `mcpServers` 的差集摘键只遍历**本轮 planned 的 merge_json 项**，该路径从此不再产出。旧文件里认领过的 server 键会永久留存，所以 `aforge doctor` 把「含 `mcpServers` 键的 `%USERPROFILE%\.mcp.json`」报为一条 `residual/claude-legacy-user-mcp` warning（只诊断不删，§9；`cwd` 恰为用户目录时不报——那份文件就是 project scope 的正常落点），请据它手工删除该文件里的 `mcpServers` 键（整份文件没有你自己的配置时可直接删除）。
 
 ### 8.6 Pi
 
