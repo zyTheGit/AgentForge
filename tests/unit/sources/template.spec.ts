@@ -33,6 +33,7 @@ function envFor(): EnvSnapshot {
     lineEnding: undefined,
     ci: false,
     codexHome: undefined,
+    piCodingAgentDir: undefined,
     userProfile: abs('user'),
   };
 }

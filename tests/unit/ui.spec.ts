@@ -90,7 +90,7 @@ describe('detectUiCapabilities：Unicode 判定', () => {
   });
 
   it('Windows 已知 UTF-8 宿主 → Unicode', () => {
-    const hosts = [
+    const hosts: readonly Readonly<Record<string, string>>[] = [
       { WT_SESSION: 'x' },
       { TERM_PROGRAM: 'vscode' },
       { TERMINAL_EMULATOR: 'JetBrains-JediTerm' },

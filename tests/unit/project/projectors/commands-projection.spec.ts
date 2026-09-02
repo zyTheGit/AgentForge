@@ -177,6 +177,7 @@ describe('codex commands（§8.4 / §8.8.4：只有 user scope 产出）', () =>
         agfHome: undefined,
         agfScope: undefined,
         offline: false,
+        lineEnding: undefined,
         ci: false,
         codexHome: 'D:\\codex',
         piCodingAgentDir: undefined,

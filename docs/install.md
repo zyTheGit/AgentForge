@@ -66,10 +66,14 @@ fnm env --shell power-shell | Out-String -Stream | Invoke-Expression
 fnm use 22
 npm install
 npm test           # 全量测试（vitest）
-npm run typecheck  # tsc --noEmit
-npm run lint       # biome + 文件行数卡口（单个 src/*.ts <= 500 行）
+npm run typecheck  # tsc --noEmit，覆盖 src/ 与 tests/（tsconfig.json 的 include）
+npm run lint       # biome（--error-on-warnings：warn 也算失败）+ 文件行数卡口（单个 src/*.ts <= 500 行）
 npm run build      # 双轨构建（node + bun）
 ```
+
+`typecheck` 的范围包含 `tests/`：测试里的类型错误（夹具缺字段、接口新增必填项没跟上）必须在 tsc 阶段就挡住，而不是等 vitest 运行时才炸。`lint` 带 `--error-on-warnings`，因为 Biome 把 `noUnusedImports` 这类「代码里有死东西」的规则默认报成 warning、退出码仍是 0——不加这个开关等于没卡。
+
+改了 `src/schema/*` 后跑 `npm run emit-schema` 重新生成 `schemas/*.json`：该脚本自带 `biome check --write schemas/`，一次跑完即最终形态，不需要再手工补格式化。
 
 验收清单见 [tests/e2e/ACCEPTANCE.md](../tests/e2e/ACCEPTANCE.md)；协作流程（分支 + PR、提交前三项全绿）见 [AGENTS.md](../AGENTS.md)。
 

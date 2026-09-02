@@ -32,6 +32,7 @@ const envOf = (patch: Partial<EnvSnapshot> = {}): EnvSnapshot => ({
   lineEnding: undefined,
   ci: false,
   codexHome: undefined,
+  piCodingAgentDir: undefined,
   userProfile: 'C:\\Users\\tester',
   ...patch,
 });

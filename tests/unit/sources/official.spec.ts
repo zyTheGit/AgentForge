@@ -68,6 +68,7 @@ function envFor(overrides: Partial<EnvSnapshot> = {}): EnvSnapshot {
     lineEnding: undefined,
     ci: false,
     codexHome: undefined,
+    piCodingAgentDir: undefined,
     userProfile: abs('user'),
     ...overrides,
   };
@@ -90,11 +91,16 @@ function tplCtx(host: DirAwareHost, envOverrides: Partial<EnvSnapshot> = {}) {
 }
 
 /** 取官方源登记项（缺失 → 显式失败，失败信息可读）。 */
-async function officialEntry(ctx: SourceManagerContext): Promise<Source> {
+async function officialEntry(ctx: SourceManagerContext): Promise<Extract<Source, { type: 'git' }>> {
   const found = (await listSources(ctx)).find((s) => s.id === OFFICIAL_TEMPLATES_SOURCE_ID);
   expect(found).toBeDefined();
   if (found === undefined) {
     throw new Error('sources.json 应登记官方模板源');
+  }
+  // 官方源恒为 git 源（DEFAULT_SOURCES 首项）。Source 是按 type 判别的联合，
+  // 不在这里收窄，调用方读 ref / commit 就只能看到 local 分支上不存在的属性。
+  if (found.type !== 'git') {
+    throw new Error(`官方模板源应登记为 git 源，实得 ${found.type}`);
   }
   return found;
 }

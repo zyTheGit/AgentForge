@@ -42,6 +42,8 @@ function fakeProjector(id: string, writesSessionHooks: boolean): Projector {
     id,
     skillInvokePrefix: '/',
     writesSessionHooks,
+    skillDir: (ctx) => `${ctx.rootDir}\\.${id}\\skills`,
+    skillPath: (ctx, name) => `${ctx.rootDir}\\.${id}\\skills\\${name}\\SKILL.md`,
     plan(): ProjectionPlan {
       return { targetId: id, items: [] };
     },

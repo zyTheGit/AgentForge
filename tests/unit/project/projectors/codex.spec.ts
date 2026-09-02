@@ -122,6 +122,7 @@ describe('codexProjector.plan（Spec §8.4 主规则 / MCP 标记段 / skills）
         lineEnding: undefined,
         ci: false,
         codexHome: 'C:\\codexhome',
+        piCodingAgentDir: undefined,
         userProfile: 'C:\\Users\\u',
       },
     });
@@ -164,6 +165,7 @@ describe('codexProjector.plan（Spec §8.4 主规则 / MCP 标记段 / skills）
         lineEnding: undefined,
         ci: false,
         codexHome: 'C:\\codexhome',
+        piCodingAgentDir: undefined,
         userProfile: 'C:\\Users\\u',
       },
       skillsToMaterialize: [{ name: 's1', content: 'x' }],
@@ -300,6 +302,7 @@ describe('codex 路径函数（status/init 打印共用）', () => {
       lineEnding: undefined,
       ci: false,
       codexHome: 'C:\\codexhome',
+      piCodingAgentDir: undefined,
       userProfile: 'C:\\Users\\u',
     };
     expect(codexMainRulePath(buildCtx({ scope: 'user', rootDir: 'C:\\Users\\u' }))).toBe(
@@ -361,6 +364,7 @@ describe('会话钩子项（§7.4 learning.auto_capture: hook / §12 Phase 3）'
         lineEnding: undefined,
         ci: false,
         codexHome: 'C:\\codexhome',
+        piCodingAgentDir: undefined,
         userProfile: 'C:\\Users\\u',
       },
     });
@@ -384,6 +388,7 @@ describe('会话钩子项（§7.4 learning.auto_capture: hook / §12 Phase 3）'
       lineEnding: undefined,
       ci: true,
       codexHome: undefined,
+      piCodingAgentDir: undefined,
       userProfile: undefined,
     };
     expect(codexProjector.plan(buildCtxWithAutoCapture('hook', { env }))).toEqual(

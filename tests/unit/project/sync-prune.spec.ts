@@ -68,7 +68,7 @@ describe('accountMcpServers（口径与 merge_json 载荷同源）', () => {
   it('enabled=false 不算投影过（与 enabledMcpServerNames 同一判据）', () => {
     const names = accountMcpServers(
       ctxWith([
-        { name: 'ctx7', transport: 'stdio', command: 'npx' },
+        { name: 'ctx7', transport: 'stdio', command: 'npx', enabled: true },
         { name: 'off', transport: 'stdio', command: 'npx', enabled: false },
       ]),
     );

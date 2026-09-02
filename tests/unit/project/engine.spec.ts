@@ -137,6 +137,7 @@ describe('syncOnce — 前置检查', () => {
       lineEnding: undefined,
       ci: false,
       codexHome: undefined,
+      piCodingAgentDir: undefined,
       userProfile: undefined,
     };
     const err = await syncOnce(syncOptions(host, { env })).catch((e: unknown) => e);
