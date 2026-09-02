@@ -14,6 +14,7 @@ import {
   codexMainRulePath,
   codexProjector,
   codexSkillPath,
+  codexTomlHasInlineHooks,
   serializeMcpServersToml,
   tomlBasicString,
 } from '../../../../src/core/project/projectors/codex';
@@ -365,5 +366,28 @@ describe('会话钩子项（§7.4 learning.auto_capture: hook / §12 Phase 3）'
     expect(content).not.toContain('C:\\');
     expect(content).not.toContain('proj');
     expect(content).not.toContain(process.execPath);
+  });
+});
+
+describe('codexTomlHasInlineHooks（doctor 的同层并存判定，§7.4）', () => {
+  it.each([
+    '[hooks]\n',
+    '  [hooks]\n',
+    '[hooks.SessionStart]\nmatcher = "startup"\n',
+    '[[hooks.SessionStart]]\n',
+    'model = "gpt-5"\n\n[hooks]\n',
+  ])('命中表头：%j', (toml) => {
+    expect(codexTomlHasInlineHooks(toml)).toBe(true);
+  });
+
+  it.each([
+    '',
+    'model = "gpt-5"\n',
+    '# [hooks] 之前配过，现已注释掉\n',
+    '  # [hooks.SessionStart]\n',
+    '[hooks_legacy]\n', // 前缀相同但不是 hooks 表
+    'description = "see [hooks] docs"\n', // 值里出现方括号不算表头
+  ])('不命中：%j', (toml) => {
+    expect(codexTomlHasInlineHooks(toml)).toBe(false);
   });
 });

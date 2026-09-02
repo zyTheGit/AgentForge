@@ -47,6 +47,9 @@
  * 首次 sync（无记录）不检查。contentHash 基准同步统一为 marker 区间形态
  * （markers.renderedSectionHash，见其 M6→M7 调整说明）。损坏的 sync-meta
  * 在预检查阶段 fail-fast（ConfigError(2)，sync-meta.ts 契约：不静默丢基准）。
+ * 同一时机还有整文件 `write` 项的预检查（assertNoWriteConflicts）：落点在上一轮
+ * §7.6 `artifacts` 记账里没有、磁盘上却已有内容不同的文件 → ConflictError(3)，
+ * 避免 `write` 的整文件替换静默吞掉用户既有文件（判据与存量用户豁免见 sync-verify）。
  *
  * 后续里程碑边界：
  * - sync 不刷新 habits.detected（渲染只消费声明字段；重新探测走 aforge detect）；
@@ -117,6 +120,7 @@ import {
 } from './sync-types';
 import {
   assertNoMarkerConflicts,
+  assertNoWriteConflicts,
   readBackSectionHash,
   readSyncMetaBaseline,
   writeSyncMetaOnSuccess,
@@ -171,7 +175,8 @@ export {
  * @throws ConfigError(2) 未初始化 / --targets 非法 / 模板解析失败 / 配置损坏 /
  *         sync-meta.json 损坏（冲突预检查阶段 fail-fast）；
  * @throws PermissionError(4) 目录创建失败（§7.3-7）/ 备份读取失败 / 投影写入失败；
- * @throws ConflictError(3) marker 区间被手动修改（§8.2-4，--force 跳过）/
+ * @throws ConflictError(3) marker 区间被手动修改（§8.2-4，--force 跳过）/ 整文件
+ *         write 落点已有未记账的用户文件（§7.6，--force 跳过）/
  *         merge_json 目标损坏（writer 层映射）/ 同一 SoT 已有 sync 在写入
  *         （`<sotRoot>/.sync.lock/` 被占用，心跳停摆且持有者进程消失才可抢占）；
  *         投影失败时先回滚全部已写文件再 rethrow 原始错误（类型与退出码不变，
@@ -250,20 +255,22 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   const advisories = collectSyncAdvisories({
     profile: config.profile,
     scope: ctx.scope,
-    commandsToExpose,
+    hasCommandsToExpose: commandsToExpose.length > 0,
     targetIds: planned.map((t) => t.targetId),
     projectors: projectorRegistry.list(),
     mcpServers: ctx.mcpServers,
   });
 
-  const sotRoot = config.effectiveScope === 'project' ? projectSoTRoot : userSoTRoot;
+  // ctx 建好之后一律用 ctx.scope（与 config.effectiveScope 同值——ctx 就是由它赋的；
+  // 同一段代码两种写法会让读者以为二者可能不同）
+  const sotRoot = ctx.scope === 'project' ? projectSoTRoot : userSoTRoot;
 
   // ---- 阶段 1.4：.gitignore 项（§4.2 gitignore_generated；判定见 sync-gitignore）----
   const gitignoreItem = planGitignoreItem(config.profile, ctx.scope, planned, cwd, sotRoot, os);
 
   // 两条返回路径共享的本轮事实（装配见 sync-result：字段加漏一处即 TS 报错）
   const resultBase: SyncResultBase = {
-    scope: config.effectiveScope,
+    scope: ctx.scope,
     userSoTRoot,
     projectSoTRoot,
     sotRoot,
@@ -272,11 +279,13 @@ export async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     advisories,
   };
 
-  // ---- 阶段 1.5：marker 区间冲突预检查（§8.2-4；--force 跳过；此刻零写入）----
-  // 上一轮记账在此读一次，冲突预检查与阶段 5.4 的 prune 共用（--force 下损坏容忍）
+  // ---- 阶段 1.5：写入冲突预检查（§8.2-4 / §7.6；--force 跳过；此刻零写入）----
+  // 上一轮记账在此读一次，两道预检查与阶段 5.4 的 prune 共用（--force 下损坏容忍）
   const previousMeta = await readSyncMetaBaseline(host, sotRoot, opts.force === true);
   if (opts.force !== true) {
     await assertNoMarkerConflicts(host, planned, previousMeta, ctx);
+    // 整文件 write 项：只查「本轮新进记账、磁盘上却已存在」的落点（判据见 sync-verify）
+    await assertNoWriteConflicts(host, planned, previousMeta);
   }
 
   // ---- dry-run：返回完整计划，不 mkdirp / 不备份 / 不 apply / 不写 sync-meta ----

@@ -8,7 +8,9 @@
  *    §7.6 的 prune 从此清不掉它的产物（这条断言就是那道回归护栏）；
  * 3. 改回 `off` → 下一轮 sync 把钩子文件整个 prune 掉（独占文件 + `write` 动作
  *    直接落进 artifacts 记账，不需要任何专用清理路径）；
- * 4. `--dry-run` 能看到钩子写入项，且磁盘上不产生任何文件。
+ * 4. 但**手工改过的那份不静默吞**：内容与记账不一致 → 进 `pruneSkipped` 并保留文件
+ *    （§7.6 硬约束 2，也是 docs/learning.md 对这一档的核心安全承诺）；
+ * 5. `--dry-run` 能看到钩子写入项，且磁盘上不产生任何文件。
  *
  * **不真的注册钩子、也不执行任何外部命令**：钩子文件只是数据，本测试只读它的内容；
  * `aforge learn --print-protocol` 的行为由 `tests/unit/learning/hook-capture.spec.ts`
@@ -169,6 +171,26 @@ describe('会话钩子投影（§7.4 hook 档 / §12 Phase 3）', () => {
     expect(result.pruneSkipped.some((entry) => entry.path === ws.hooksJson)).toBe(false);
     // 降级提示随档位一起消失
     expect(result.sessionHookNotices).toEqual([]);
+  }, 60_000);
+
+  it('hook → 手工改过 hooks.json → 改回 off：不静默吞掉，进 pruneSkipped 并保留文件', async () => {
+    await runInit(ctx());
+    await setAutoCapture('hook');
+    await runSync({ ...ctx(), agentforgeVersion: VERSION });
+
+    // 用户手工编辑了这份钩子文件（改了状态提示、加了自己的一条钩子……形态不重要）
+    const edited = codexSessionHooksJson().replace('AgentForge:', 'AgentForge (edited):');
+    await writeFile(ws.hooksJson, edited, 'utf8');
+
+    await setAutoCapture('off');
+    const result = await runSync({ ...ctx(), agentforgeVersion: VERSION });
+
+    // §7.6 硬约束 2「改过的不删」：宁可残留也不静默吞（docs/learning.md 的核心承诺）
+    expect(await readFile(ws.hooksJson, 'utf8')).toBe(edited);
+    expect(result.pruned.some((entry) => entry.path === ws.hooksJson)).toBe(false);
+    const skip = result.pruneSkipped.find((entry) => entry.path === ws.hooksJson);
+    expect(skip?.kind).toBe('artifact');
+    expect(skip?.reason).toContain('疑似手工修改');
   }, 60_000);
 
   it('--dry-run：能看到钩子写入项与降级提示，磁盘上什么都不产生', async () => {

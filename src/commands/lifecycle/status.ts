@@ -285,10 +285,13 @@ export async function runStatus(ctx: StatusCommandContext): Promise<StatusResult
   };
 
   const autoCapture = resolveAutoCapture(config.profile, env);
-  // §7.4 hook 档的支持度按 target 粒度报（能力声明在各 projector 上，不做环境探测）
+  // §7.4 hook 档的支持度按 target 粒度报（能力声明在各 projector 上，不做环境探测）。
+  // 名单取**注册表命中**的那批（即上面 targets 的 targetId），与 sync 侧
+  // engine 传 planned 的口径一致：profile.targets 里写了注册表没有的名字时（skipped
+  // 那批）根本不会被投影，替它报「没有钩子落点」是错的。
   const hookSplit = partitionSessionHookTargets(
     writesSessionHooks(autoCapture.effective),
-    config.profile.targets,
+    targets.map((t) => t.targetId),
     projectorRegistry.list(),
   );
 

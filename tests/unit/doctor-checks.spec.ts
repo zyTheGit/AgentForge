@@ -9,7 +9,11 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { EffectiveConfig } from '../../src/core/config/defaults';
-import { checkCommandsExposure } from '../../src/core/doctor/check-consistency';
+import {
+  checkCommandsExposure,
+  checkLearningAutoCapture,
+  SESSION_HOOK_INLINE_ITEM,
+} from '../../src/core/doctor/check-consistency';
 import {
   type DoctorCheckResult,
   type DoctorReport,
@@ -20,7 +24,8 @@ import { readEnv } from '../../src/core/env';
 import { ExitCode } from '../../src/core/errors';
 import { currentOs } from '../../src/core/paths';
 import { syncOnce } from '../../src/core/project/engine';
-import { HabitsSchema, ProfileSchema } from '../../src/schema';
+import { projectorRegistry } from '../../src/core/project/projectors/registry';
+import { HabitsSchema, type Profile, ProfileSchema, TargetEnum } from '../../src/schema';
 import { createFakeHost, errnoError, type FakeHost } from './test-utils';
 
 const OS = currentOs();
@@ -847,5 +852,100 @@ describe('skills.expose_as_command 诊断（§8.8）', () => {
     expect(results[0]?.level).toBe('error');
     expect(results[0]?.code).toBe(ExitCode.Config);
     expect(results[0]?.detail).toContain('目录树之外');
+  });
+});
+
+describe('runDoctorChecks — codex 同层并存 inline [hooks]（§7.4 / §9 第 12 条）', () => {
+  const CODEX_CONFIG = path.join(CWD, '.codex', 'config.toml');
+  const CODEX_HOOKS = path.join(CWD, '.codex', 'hooks.json');
+  const codexProfile = (autoCapture: string) =>
+    `version: 1\nscope: project\ntargets: [codex]\nlearning:\n  auto_capture: ${autoCapture}\n`;
+
+  it('hook + codex + config.toml 里有 [hooks] → warn，点名两个落点，不抬升退出码', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host, codexProfile('hook'));
+    await host.writeFile(CODEX_CONFIG, 'model = "gpt-5"\n\n[hooks]\n');
+    const report = await runDoctorChecks(doctorOpts(host));
+    const r = resultOf(report, SESSION_HOOK_INLINE_ITEM);
+    expect(r.level).toBe('warn');
+    expect(r.detail).toContain(CODEX_CONFIG);
+    expect(r.detail).toContain(CODEX_HOOKS);
+    expect(r.hint).toContain('[hooks]');
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('hook + codex + config.toml 无 [hooks] → 不报（不能对着正常配置刷噪音）', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host, codexProfile('hook'));
+    await host.writeFile(CODEX_CONFIG, 'model = "gpt-5"\n# [hooks] 早先注释掉了\n');
+    const report = await runDoctorChecks(doctorOpts(host));
+    expect(report.results.some((r) => r.item === SESSION_HOOK_INLINE_ITEM)).toBe(false);
+  });
+
+  it('hook + codex + config.toml 不存在 → 不报（首次 sync 会新建，无从并存）', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host, codexProfile('hook'));
+    const report = await runDoctorChecks(doctorOpts(host));
+    expect(report.results.some((r) => r.item === SESSION_HOOK_INLINE_ITEM)).toBe(false);
+  });
+
+  it('off 档 + 有 [hooks] → 不报（本档不投 hooks.json，并存不是我们造成的）', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(host, codexProfile('off'));
+    await host.writeFile(CODEX_CONFIG, '[hooks]\n');
+    const report = await runDoctorChecks(doctorOpts(host));
+    expect(report.results.some((r) => r.item === SESSION_HOOK_INLINE_ITEM)).toBe(false);
+  });
+
+  it('hook 档但没启用 codex → 不报（钩子不落 codex 层）', async () => {
+    const host = createDoctorHost();
+    await seedProjectSoT(
+      host,
+      'version: 1\nscope: project\ntargets: [claude]\nlearning:\n  auto_capture: hook\n',
+    );
+    await host.writeFile(CODEX_CONFIG, '[hooks]\n');
+    const report = await runDoctorChecks(doctorOpts(host));
+    expect(report.results.some((r) => r.item === SESSION_HOOK_INLINE_ITEM)).toBe(false);
+  });
+});
+
+describe('checkLearningAutoCapture — 支持度切分只看注册表命中的 target', () => {
+  function hookConfig(targets: readonly string[]): EffectiveConfig {
+    const profile = ProfileSchema.parse({
+      version: 1,
+      targets: ['claude'],
+      learning: { auto_capture: 'hook' },
+    });
+    return {
+      // 绕过 schema 造出「注册表没有该 id」的 profile：TargetEnum 是闭集，正常配置进不来，
+      // 但注册表与 enum 是两套清单（enum 先加名字、projector 后落地时二者就会分叉）
+      profile: { ...profile, targets: targets as unknown as Profile['targets'] },
+      habits: HabitsSchema.parse({ version: 1 }),
+      userSoTRoot: USER_SOT,
+      projectSoTRoot: PROJECT_SOT,
+      effectiveScope: 'project',
+    };
+  }
+
+  it('注册表没有的 target 不进降级 warn（它连产物都没有，替它报"没钩子落点"是错的）', () => {
+    const results: DoctorCheckResult[] = [];
+    checkLearningAutoCapture(results, hookConfig(['claude', 'ghost']), readEnv(createDoctorHost()));
+    const warn = results.find((r) => r.item === 'learning-auto-capture-hook');
+    expect(warn?.level).toBe('warn');
+    expect(warn?.detail).toContain('claude');
+    expect(warn?.detail).not.toContain('ghost');
+  });
+
+  it('只有注册表外的 target → 完全不报降级 warn', () => {
+    const results: DoctorCheckResult[] = [];
+    checkLearningAutoCapture(results, hookConfig(['ghost']), readEnv(createDoctorHost()));
+    expect(results.some((r) => r.item === 'learning-auto-capture-hook')).toBe(false);
+  });
+
+  it('TargetEnum 四个取值当前都在注册表里（因此该过滤对合法配置是恒等的）', () => {
+    const registered = projectorRegistry.list().map((p) => p.id);
+    for (const id of TargetEnum.options) {
+      expect(registered).toContain(id);
+    }
   });
 });

@@ -18,6 +18,8 @@
  *     已启用 target → warn（对它们等同 off，§7.4 / §12 Phase 3）；CI 为真时补一句
  *     "本次不会写入 learnings"（§7.4 护栏 3 / §10；投影正文不受 CI 影响）；
  *     `prompt` 与 `auto_promote: true` 并存 → warn（会与人工 sync 争 `.sync.lock`）；
+ *     `hook` 档 + codex 的 config.toml 里另有 inline `[hooks]` → warn（同层两种钩子
+ *     表示会让 codex 每次启动告警，`checkCodexInlineHooks`，只报不拦）；
  * 13. profile.skills.expose_as_command：名单不是 `skills.always` 子集 → error(2)（sync 将失败）；
  *     project scope 且启用 codex → warn（codex 只读 `$CODEX_HOME\prompts\`，该项跳过，§8.8）；
  * 14. MCP transport × target 能力落差（Phase 2 MCP 对齐）：某家上游表达不了某种
@@ -60,6 +62,7 @@ import {
   resolveDoctorRoots,
 } from './check-config';
 import {
+  checkCodexInlineHooks,
   checkCommandsExposure,
   checkLearningAutoCapture,
   checkMergeJson,
@@ -213,6 +216,9 @@ async function runConfigDependentChecks(
 
     // ---- §9 第 3 条：当前渲染 hash vs 投影 marker 区间 hash（三方比对）----
     await checkProjectionHashes(host, results, ctx, rendered, syncMeta);
+
+    // ---- hook 档 + codex：同层并存 inline [hooks] → warn（§7.4；只报不拦）----
+    await checkCodexInlineHooks(host, results, ctx, config);
 
     // ---- 有效 scope 启用 target 的投影计划（merge_json 检查与目标目录可写性共用）----
     const enabledPlans = collectEnabledPlans(ctx, config);

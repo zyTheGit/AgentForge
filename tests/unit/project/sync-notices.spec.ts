@@ -135,7 +135,6 @@ describe('collectSessionHookNotices（降级提示条目）', () => {
 });
 
 describe('collectSyncAdvisories（三类提示汇总，dry-run 与实际写入同一份结论）', () => {
-  const command = { name: 'x', namespace: [] as readonly string[] };
   /** 只有 codex 表达不了的 transport（矩阵判 unsupported；opencode 判 degraded）。 */
   const SSE_SERVER: McpServer = McpServerSchema.parse({
     name: 'remote-sse',
@@ -148,7 +147,7 @@ describe('collectSyncAdvisories（三类提示汇总，dry-run 与实际写入�
     return {
       profile: profileWith('off', ['codex']),
       scope: 'project',
-      commandsToExpose: [],
+      hasCommandsToExpose: false,
       targetIds: ['codex'],
       projectors: PROJECTORS,
       mcpServers: [],
@@ -178,7 +177,7 @@ describe('collectSyncAdvisories（三类提示汇总，dry-run 与实际写入�
   });
 
   it('§8.8.4：project scope + codex + 有命令 → 命令薄壳整项跳过', () => {
-    const advisories = collectSyncAdvisories(input({ commandsToExpose: [command] }));
+    const advisories = collectSyncAdvisories(input({ hasCommandsToExpose: true }));
     expect(advisories.commandSkips).toEqual([
       { targetId: 'codex', reason: CODEX_PROJECT_COMMANDS_SKIP_REASON },
     ]);
@@ -186,9 +185,9 @@ describe('collectSyncAdvisories（三类提示汇总，dry-run 与实际写入�
 
   it('user scope 的 codex 命令不跳过；没有命令时也不跳过', () => {
     expect(
-      collectSyncAdvisories(input({ scope: 'user', commandsToExpose: [command] })).commandSkips,
+      collectSyncAdvisories(input({ scope: 'user', hasCommandsToExpose: true })).commandSkips,
     ).toEqual([]);
-    expect(collectSyncAdvisories(input({ commandsToExpose: [] })).commandSkips).toEqual([]);
+    expect(collectSyncAdvisories(input({ hasCommandsToExpose: false })).commandSkips).toEqual([]);
   });
 
   it('codex 未参与本轮（--targets 过滤掉）→ 不报它的命令跳过', () => {
@@ -196,7 +195,7 @@ describe('collectSyncAdvisories（三类提示汇总，dry-run 与实际写入�
       collectSyncAdvisories(
         input({
           profile: profileWith('off', ['codex', 'claude']),
-          commandsToExpose: [command],
+          hasCommandsToExpose: true,
           targetIds: ['claude'],
         }),
       ).commandSkips,
@@ -242,7 +241,7 @@ describe('collectSyncAdvisories（三类提示汇总，dry-run 与实际写入�
     const advisories = collectSyncAdvisories(
       input({
         profile: profileWith('hook', ['codex', 'claude']),
-        commandsToExpose: [command],
+        hasCommandsToExpose: true,
         targetIds: ['codex', 'claude'],
         mcpServers: [SSE_SERVER],
       }),
@@ -255,7 +254,7 @@ describe('collectSyncAdvisories（三类提示汇总，dry-run 与实际写入�
   it('三类都是 plan 派生结论：同一份入参重复调用结果稳定（dry-run 与实写同源）', () => {
     const shared = input({
       profile: profileWith('hook', ['codex', 'claude']),
-      commandsToExpose: [command],
+      hasCommandsToExpose: true,
       targetIds: ['codex', 'claude'],
       mcpServers: [SSE_SERVER],
     });

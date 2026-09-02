@@ -45,7 +45,12 @@ import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
 import { getUi, type Ui } from '../../infra/ui';
 import type { LearningCategory, Profile } from '../../schema';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
-import { parseConfidenceOption, parseScopeOption, resolveJsonFlag } from '../_shared/flags';
+import {
+  assertPrintProtocolAlone,
+  parseConfidenceOption,
+  parseScopeOption,
+  resolveJsonFlag,
+} from '../_shared/flags';
 import { isInteractiveStdin, readStdinText } from '../_shared/stdin';
 import { confidenceKvLine, learningQualityJson, similarityHintLine } from './confidence-view';
 
@@ -291,6 +296,7 @@ export function registerLearnCommand(program: Command): void {
         // core/learning/hook-capture.ts 的约束 2）。--json 不影响它：钩子要的是
         // 能直接进上下文的纯文本，包一层 JSON 反而要 target 侧再解一次。
         if (options.printProtocol === true) {
+          assertPrintProtocolAlone(options);
           console.log(sessionHookProtocolText());
           return;
         }

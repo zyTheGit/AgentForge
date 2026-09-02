@@ -46,9 +46,18 @@ import { LEARNING_PROTOCOL_SECTION } from './auto-capture';
 /**
  * 钩子进程执行的命令行（**常量**，不含任何本机路径 / 用户数据）。
  *
- * 裸 `aforge` 而非绝对路径：见文件头约束 1。用户若没把 `aforge` 放进 PATH，
- * 钩子会静默失败（target 侧把非零退出当作"该钩子没产出上下文"），不影响会话——
- * 这比硬编码一个会在版本切换后失效的路径要好。
+ * 裸 `aforge` 而非绝对路径，两条理由：
+ * 1. 产物稳定（见文件头约束 1）：写 `process.execPath` 或安装目录会让同一份 SoT 在两台
+ *    机器上产出不同的钩子文件，contentHash 与 diff 全都跟着环境变；
+ * 2. **PATH 劫持不构成新增攻击面**：能往 PATH 目录里放一个恶意 `aforge` 的攻击者，本来
+ *    就有权限直接改 `hooks.json` 的 `command` 字段（两者都是当前用户可写的文件），写绝对
+ *    路径挡不住他，只是把入口从「PATH 里放假 aforge」换成「改钩子文件」。因此这里不为
+ *    「防劫持」付出产物不稳定的代价。可溯源性另有两处兜底：钩子文件自带
+ *    `SESSION_HOOK_DESCRIPTION` 自述行（打开文件即知是谁写的、怎么关），`aforge status`
+ *    也会打印钩子的落点路径。
+ *
+ * 用户若没把 `aforge` 放进 PATH，钩子会静默失败（target 侧把非零退出当作"该钩子没产出
+ * 上下文"），不影响会话——这比硬编码一个会在版本切换后失效的路径要好。
  */
 export const SESSION_HOOK_COMMAND = 'aforge learn --print-protocol';
 

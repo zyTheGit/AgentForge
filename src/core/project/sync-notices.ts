@@ -121,8 +121,14 @@ export function collectSessionHookNotices(
 export interface SyncAdvisoryInput {
   readonly profile: Profile;
   readonly scope: Scope;
-  /** §8.8 本轮要产出的命令薄壳名单（空 → 无从跳过；只看条数，故不约束元素形状）。 */
-  readonly commandsToExpose: readonly unknown[];
+  /**
+   * §8.8 本轮是否有要产出的命令薄壳。
+   *
+   * 取 boolean 而非数组：判据只关心「有没有」，而入参里另有 `targetIds` /
+   * `mcpServers` 两个数组——收 `readonly unknown[]` 时把它们中的任一个误传进来 TS 不
+   * 会拦，条数还刚好能让判定"看起来成立"。调用方写 `commandsToExpose.length > 0`。
+   */
+  readonly hasCommandsToExpose: boolean;
   /** 本轮实际参与投影的 target id（`--targets` 过滤且注册表命中之后）。 */
   readonly targetIds: readonly string[];
   readonly projectors: readonly Projector[];
@@ -137,9 +143,7 @@ export interface SyncAdvisoryInput {
  */
 export function collectCommandSkips(input: SyncAdvisoryInput): SyncCommandSkip[] {
   const hit =
-    input.commandsToExpose.length > 0 &&
-    input.scope === 'project' &&
-    input.targetIds.includes('codex');
+    input.hasCommandsToExpose && input.scope === 'project' && input.targetIds.includes('codex');
   return hit ? [{ targetId: 'codex', reason: CODEX_PROJECT_COMMANDS_SKIP_REASON }] : [];
 }
 

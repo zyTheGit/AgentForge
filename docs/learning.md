@@ -156,7 +156,8 @@ learning:
 - **不写本机路径**：裸 `aforge` 交给 PATH 解析，钩子文件在任何机器上逐字节相同 → 产物不随宿主漂移。代价是没把 `aforge` 放进 PATH 时钩子会静默失败（codex 把非零退出当作"该钩子没产出上下文"，会话照常），这比硬编码一个版本切换后就失效的绝对路径要好；
 - **写入前看得见**：`aforge sync` 会打印这一项，`--dry-run` 同样能看到（且不落盘）；
 - **`hooks.json` 由 AgentForge 独占**：因此用整文件 `write` 动作，直接落进 §7.6 的 artifacts 记账。把 `auto_capture` 改回 `off` / `prompt` 再 sync，这个文件被 prune 整个删掉（你手工改过它则跳过删除并提示，不会静默吞掉改动）；
-- **一层一种表示**：codex 在同一 config 层同时读 `hooks.json` 与 `config.toml` 里的 inline `[hooks]`，两者并存会在启动时告警（上游建议 "prefer one representation per layer"）。如果你已经手写了 inline `[hooks]`，把它挪进 `hooks.json` 之外的层，或不要用这一档。
+- **一层一种表示**：codex 在同一 config 层同时读 `hooks.json` 与 `config.toml` 里的 inline `[hooks]`，两者并存会在启动时告警（上游建议 "prefer one representation per layer"）。如果你已经手写了 inline `[hooks]`，把它挪进 `hooks.json` 之外的层，或不要用这一档。`aforge doctor` 会实际读一遍 `config.toml`，检测到并存时报 `learning-auto-capture-hook-inline` warn（只提示，不阻断 sync）；
+- **不覆盖没记账过的文件**：落点上已经有一个 AgentForge 没记过账的 `hooks.json` 时，首次 sync 以 ConflictError（退出码 3）停下并列出路径，确认可以丢弃后用 `aforge sync --force` 覆盖。手写过 `hooks.json` 的用户不会在开启这一档时被静默清掉。
 
 **声明驱动，不做探测**：写不写钩子只看 `profile.targets` 与各 target 的能力声明，不看本机装没装 codex、装在哪。同一份 SoT 在两台机器上产出同样的投影产物与同一个 `contentHash`。
 

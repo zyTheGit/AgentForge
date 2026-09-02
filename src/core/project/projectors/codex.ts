@@ -64,7 +64,9 @@ export const CODEX_CONFIG_FILENAME = 'config.toml';
  * 改回 `off` / `prompt` 时被 prune 整文件删掉，不需要任何新的清理路径。
  *
  * 代价：codex 在同一层同时存在 `hooks.json` 与 inline `[hooks]` 时会启动告警
- * （上游文档："Prefer one representation per layer"）。已在 docs/learning.md 写明。
+ * （上游文档："Prefer one representation per layer"）。除 docs/learning.md 写明外，
+ * doctor 的 `learning-auto-capture-hook-inline` 会在真的撞上时报 warn
+ * （判定用本文件的 `codexTomlHasInlineHooks`；sync 侧不拦——plan 是纯函数，不读目标文件）。
  */
 export const CODEX_HOOKS_FILENAME = 'hooks.json';
 
@@ -245,6 +247,22 @@ export function codexHooksPath(ctx: ProjectContext): string {
 function codexConfigDir(ctx: ProjectContext): string {
   const api = pathApiFor(ctx.os);
   return ctx.scope === 'project' ? api.join(ctx.rootDir, CODEX_DIRNAME) : codexUserDir(ctx);
+}
+
+/**
+ * config.toml 文本里是否有 inline `[hooks]` 表（纯函数；调用方负责读文件）。
+ *
+ * 判定只认**表头行**：`[hooks]` / `[hooks.X]` / `[[hooks.X]]`，行首允许缩进，
+ * `#` 开头的注释行不算。不引 TOML parser：这里只需要一个「有没有」的判断，
+ * 而 config.toml 可能因用户的其他语法错误解析失败——那种情况下报不出这条提示
+ * 反而更糟（解析失败另有 codex 自己的报错）。
+ *
+ * 用途：hook 档投出 `hooks.json` 后，codex 在同一 config 层同时看到两种钩子表示
+ * 会每次启动告警；由 doctor 读文件后调本函数出 warn（sync 侧的 plan 是纯函数，
+ * 不能看目标文件内容）。
+ */
+export function codexTomlHasInlineHooks(toml: string): boolean {
+  return toml.split('\n').some((line) => /^\s*\[\[?hooks(\]|\.)/.test(line) && !/^\s*#/.test(line));
 }
 
 /** Codex projector 实例（纯函数 plan；apply 由引擎统一执行）。 */

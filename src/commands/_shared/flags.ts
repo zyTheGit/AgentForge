@@ -18,6 +18,9 @@
  * `init` 的运行模式（交互 / 静默）同样是一次纯标志判定，故与上几者同列（见
  * resolveInitMode）——放在 action 里内联会让「四个输入的优先级」这一条契约既不可
  * 单测也没有单一出处。
+ *
+ * `learn --print-protocol` 的互斥校验（assertPrintProtocolAlone）同理：它回答的是
+ * 「这组标志能不能同时给」，与业务无关，且必须可单测。
  */
 import type { Command } from 'commander';
 import type { Scope } from '../../core/env';
@@ -132,4 +135,45 @@ export function resolveInitMode(input: InitModeInput): InitMode {
     return 'silent';
   }
   return input.isTty ? 'interactive' : 'silent';
+}
+
+/**
+ * `aforge learn --print-protocol` 是**会话钩子专用的只读旁路**，与采集类选项互斥
+ * （Spec §7.4 hook 档）。
+ *
+ * 不静默忽略：`aforge learn --print-protocol --file notes.md --scope user` 会打印协议
+ * 就退出，用户以为条目写进去了，实际 `--file` / `--scope` / `--id` / `--confidence`
+ * 全被丢掉，且没有任何提示。
+ *
+ * `--json` 刻意**不在**此列：它对该分支恒被忽略是设计如此（钩子要的是能直接进上下文
+ * 的纯文本，包一层 JSON 反而要 target 侧再解一次），且它常来自 program 级全局标志而
+ * 非用户为这条命令显式所加，拦下来会误伤 `aforge --json learn --print-protocol`。
+ *
+ * @throws ConfigError(2) 同时给了任一采集类选项。
+ */
+export function assertPrintProtocolAlone(options: {
+  readonly scope?: string;
+  readonly file?: string;
+  readonly id?: string;
+  readonly confidence?: string;
+}): void {
+  const conflicting = (
+    [
+      ['--file', options.file],
+      ['--scope', options.scope],
+      ['--id', options.id],
+      ['--confidence', options.confidence],
+    ] as const
+  )
+    .filter(([, value]) => value !== undefined)
+    .map(([flag]) => flag);
+  if (conflicting.length === 0) {
+    return;
+  }
+  throw new ConfigError(
+    `--print-protocol 不能与 ${conflicting.join(' / ')} 同用（这些选项在该分支下不会生效）`,
+    {
+      hint: '--print-protocol 只把学习协议正文打到 stdout（会话钩子专用），不采集、不写 SoT；要写条目请去掉 --print-protocol',
+    },
+  );
 }

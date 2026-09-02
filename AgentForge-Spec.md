@@ -583,8 +583,8 @@ mcp:
 
 `hook` 档的落点与限制：
 
-- claude → `settings.json` 的 `hooks`（`SessionEnd` / `Stop`）；codex → `config.toml` 的钩子段（上游事件含 `SessionStart` / `SessionEnd` / `UserPromptSubmit` / `SubagentStart` / `SubagentStop` / `Stop`）。这两家可落地；
-- opencode 需 plugin、pi 需 extension，两者都要求在 target 侧先装扩展；**MVP 未实现任何 target 侧钩子写入**，声明 `hook` 时由 doctor 的 `learning-auto-capture` 统一报一条 warn（§9），`status` 只打「hook 未实现、行为等同 off」，不做 per-target 标注。hook 真正落地后再按 target 细分 soft 处理（不写、在 `aforge status` 标注 "hook not supported - install adapter"，与 §8.6 pi MCP 的 soft 口径一致）；
+- codex → config 层旁的 `hooks.json`（**已实现**）：`SessionStart` 事件、matcher `startup|resume`，命令固定为 `aforge learn --print-protocol`（只读、不写 SoT、不取 `.sync.lock`）。该文件由 AgentForge **整文件独占**（`write` 动作 + §7.6 `artifacts` 记账），档位改回 `off` / `prompt` 后由 prune 整文件删除；文件被手工改过则进 `pruneSkipped` 保留。codex 在同一 config 层同时看到 `hooks.json` 与 inline `[hooks]` 段时每次启动都会告警，该并存由 doctor 的 `learning-auto-capture-hook-inline` 报 warn（§9），sync 侧不拦（`Projector.plan` 不做 IO）；
+- claude 的 `settings.json`（`SessionEnd` / `Stop`）、opencode 的 plugin、pi 的 extension **均未实现**：这些 target 在 `hook` 档下等同 `off`，由 doctor 的 `learning-auto-capture-hook` 与 `aforge sync` / `aforge status` 的 `sessionHookNotices` 按 target 逐个标注（不是整档一条笼统 warn）。claude 落地时须走 §8.2 的 `merge_json`（见下条）；
 - **claude 的 `settings.json` 可能存有明文凭据**（`env.ANTHROPIC_AUTH_TOKEN` 等）。写入必须走 §8.2 的 `merge_json`（未知键一律保留），且失败信息与 `--json` 输出**不得回显文件内容**，只报路径与键名。
 
 四条护栏（三档共用）：
@@ -870,7 +870,7 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 - `profile.skills.copy_mode` 声明 `symlink` 时告警（该取值恒被忽略且不计划实现，见 §4.2 → warn）。
 - 报告未解析的 template id、损坏的 YAML。
 - `skills.expose_as_command` 里的名字（条目最后一段）不在 `skills.always` 中 → 与"点名未装"同口径报错（§4.2）；条目本身非法（空段、`.` / `..`、含 `\ : * ? " < > |`）→ 同样退出码 2；project scope 且 target 含 codex 时报 `commands/codex-project-unsupported` warning（§8.8.4 → warn）；带命名空间的条目遇到目录平铺的 target（pi / codex）时报 `commands/namespace-flattened` warning，列出 `ns/name → ns-name` 的改名结果（§8.8.2 → warn）。
-- `learning.auto_capture`（§7.4）报一条 `learning-auto-capture`：声明 `hook` → warn（**MVP 未实现任何 target 侧钩子写入**，行为等同 `off`；等 hook 落地后再按 target 细分成 `learning/hook-unsupported`）；`prompt` → `ok` 并说明投影正文含 `## Learning Protocol` 段；`CI` 为真 → 仍报 `ok`，附一句"本次运行不会写入任何 learnings"（护栏 3 只约束**写入**，不改变生效档位与渲染正文——否则同一份 SoT 在 CI 与本机的 `contentHash` 不同，跨环境 hash 比对全部失真）。
+- `learning.auto_capture`（§7.4）报一条 `learning-auto-capture`：如实报生效档位并点名钩子落在哪些 target（`hook` 档且 codex 启用时会写 `hooks.json`）；`prompt` → `ok` 并说明投影正文含 `## Learning Protocol` 段；`CI` 为真 → 仍报 `ok`，附一句"本次运行不会写入任何 learnings"（护栏 3 只约束**写入**，不改变生效档位与渲染正文——否则同一份 SoT 在 CI 与本机的 `contentHash` 不同，跨环境 hash 比对全部失真）。`hook` 档下另有两条按需 warn：`learning-auto-capture-hook`（已启用但没有钩子落点的 target，对它们等同 `off`；判定只覆盖**注册表命中**的 target，口径同 sync 的 planned 名单）与 `learning-auto-capture-hook-inline`（codex 同层已有 inline `[hooks]` 段，与我们投出的 `hooks.json` 并存会让 codex 每次启动告警）。两条都不抬升退出码。
 
 ---
 
@@ -911,7 +911,8 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 13. `aforge import` 从 AGENTS.md 导入工具链声明，映射到 habits detected 字段。
 14. `skills.expose_as_command` 点名一个已装技能后 sync，opencode / claude / pi 各落一份命令文件、codex 报 skip；从名单摘掉后再 sync，三份产物被 prune 删除，手工改过的那份保留并进 `prune skipped`（§8.8.3）。
 15. `learning.auto_capture: prompt` 时投影正文含 `## Learning Protocol` 段且位置固定；置 `off` 后该段消失，marker 外内容不受影响（§5.2）。
-16. `CI=1` 环境下 `auto_capture` 任意取值都不写 `learnings/`：`sync` / 投影链路不受影响、照常成功退出（渲染正文与环境无关，§7.4 护栏 3），显式 `aforge learn` 由唯一写入口的守卫拒掉并退出码 2（§10）。
+16. `learning.auto_capture: hook` + 启用 codex：sync 后 config 层旁出现 `hooks.json`（`SessionStart` / `aforge learn --print-protocol`）并进 `artifacts` 记账；档位改回 `off` 后再 sync 该文件被 prune 删除，手工改过则保留并进 `prune skipped`（§7.6）。落点已有非我方文件时首次 sync 报退出码 3，`--force` 才覆盖（§8.2-4）。
+17. `CI=1` 环境下 `auto_capture` 任意取值都不写 `learnings/`：`sync` / 投影链路不受影响、照常成功退出（渲染正文与环境无关，§7.4 护栏 3），显式 `aforge learn` 由唯一写入口的守卫拒掉并退出码 2（§10）。
 
 ---
 
@@ -929,7 +930,7 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 |------|------|
 | Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、`learning.auto_capture: prompt`（§7.4）、Commands 投影（§8.8）、Windows 门禁 |
 | Phase 2 | MCP 对齐、import 增强、更多模板；其中 Commands 的命名空间与 `$1..$9` 归一化（§8.8.2）已提前落地。**不含 `skills.copy_mode: symlink`**——已决定不实现，理由见 §4.2 |
-| Phase 3 | Learning 启发式、`auto_capture: hook`（含 opencode plugin / pi extension 适配）、适配器插件化、WSL 说明 |
+| Phase 3 | Learning 启发式、`auto_capture: hook` 的其余 target（claude `settings.json`、opencode plugin / pi extension 适配；codex 的 `hooks.json` 已落地，§7.4）、适配器插件化、WSL 说明 |
 
 ---
 

@@ -16,6 +16,7 @@ import type { EnvSnapshot } from '../env';
 import { ExitCode } from '../errors';
 import { resolveTemplate } from '../generate/resolver';
 import {
+  effectiveAutoCapture,
   LEARNING_PROTOCOL_HEADING,
   rendersLearningProtocol,
   resolveAutoCapture,
@@ -29,6 +30,11 @@ import {
   flattenCommandName,
   parseCommandEntry,
 } from '../project/commands';
+import {
+  codexConfigPath,
+  codexHooksPath,
+  codexTomlHasInlineHooks,
+} from '../project/projectors/codex';
 import { projectorRegistry } from '../project/projectors/registry';
 import { readSyncMeta, SYNC_META_FILE } from '../project/sync-meta';
 import {
@@ -37,9 +43,13 @@ import {
   SESSION_HOOK_NOTICE_ITEM,
 } from '../project/sync-notices';
 import { renderRulesMd } from '../project/sync-prepare';
+import type { ProjectContext } from '../project/types';
 import type { DoctorRoots } from './check-config';
 import type { EnabledPlan } from './check-paths';
 import { type DoctorCheckResult, errHint, errMessage, toDoctorCode } from './check-types';
+
+/** hook 档下 codex 同层并存两种钩子表示时的 doctor item（与 sync 侧那条同前缀）。 */
+export const SESSION_HOOK_INLINE_ITEM = 'learning-auto-capture-hook-inline';
 
 /**
  * 当前 SoT 渲染（hash 基准；与 sync 共用 sync-prepare.renderRulesMd）。失败 → error 并返回 undefined。
@@ -196,6 +206,9 @@ export function checkSkillsCopyMode(results: DoctorCheckResult[], config: Effect
  *   `hook` 档不需要同款 warn：钩子执行的是只读命令（`aforge learn --print-protocol`），
  *   既不写 SoT 也不取 `.sync.lock`（见 learning/hook-capture.ts）。
  *
+ * 本函数只看声明（纯函数、不碰 IO）。需要读目标文件才能判定的那条 —— hook 档下
+ * codex 同层并存 inline `[hooks]` —— 在 `checkCodexInlineHooks`（同文件，做 IO）。
+ *
  * 恒不影响退出码：投影结果本身是自洽的，只是与声明不符。
  */
 export function checkLearningAutoCapture(
@@ -211,7 +224,10 @@ export function checkLearningAutoCapture(
     : '';
   const hooks = partitionSessionHookTargets(
     writesSessionHooks(state.effective),
-    config.profile.targets,
+    // 只看**注册表命中**的 target（口径同 sync 的 engine：传的是已过 filterTargets 的
+    // planned 名单）。profile.targets 里写了注册表没有的名字时那个 target 根本不会被
+    // 投影，替它报「没有钩子落点」是错的——它连产物都没有
+    registeredTargetIds(config),
     projectorRegistry.list(),
   );
   const projected = rendersLearningProtocol(state.effective)
@@ -251,6 +267,57 @@ export function checkLearningAutoCapture(
       hint: '让 agent 改用 aforge learn --no-auto-promote，或把 learning.auto_promote 置回 false（晋升仍可人工 aforge promote）',
     });
   }
+}
+
+/** profile.targets 里注册表命中的那批（未命中的不会被投影，谈其能力无意义）。 */
+function registeredTargetIds(config: EffectiveConfig): string[] {
+  return config.profile.targets.filter((id) => projectorRegistry.get(id) !== undefined);
+}
+
+/**
+ * hook 档下 codex 同层并存 `hooks.json` 与 inline `[hooks]` → warn（§7.4 / §9）。
+ *
+ * 为什么必须由 doctor 出这条、而不是 sync 侧拒绝写入：codex 在同一 config 层同时
+ * 发现两种钩子表示时**每次启动都告警**（上游："Prefer one representation per layer"），
+ * 而 AgentForge 投出 `hooks.json` 正是那个告警的直接成因——只写在 docs 里等于让读不到
+ * 文档的用户长期对着一个自己找不到源头的告警。反过来，让 sync 去看目标文件内容会破坏
+ * `Projector.plan` 的纯函数契约（plan 不做 IO，§8.4），所以这条只能落在本来就做 IO 的
+ * doctor 侧，且只报不拦。
+ *
+ * 恒 warn 不影响退出码：钩子仍然生效，只是多一条上游告警。
+ */
+export async function checkCodexInlineHooks(
+  host: Host,
+  results: DoctorCheckResult[],
+  ctx: ProjectContext,
+  config: EffectiveConfig,
+): Promise<void> {
+  if (!writesSessionHooks(effectiveAutoCapture(config.profile))) {
+    return;
+  }
+  if (!registeredTargetIds(config).includes('codex')) {
+    return;
+  }
+  const configPath = codexConfigPath(ctx);
+  if (!(await host.exists(configPath))) {
+    return;
+  }
+  let toml: string;
+  try {
+    toml = await host.readFile(configPath);
+  } catch {
+    return; // 读不出（权限）：可写性 / merge_toml 的检查项会另行报，这里不重复
+  }
+  if (!codexTomlHasInlineHooks(toml)) {
+    return;
+  }
+  results.push({
+    section: 'config',
+    level: 'warn',
+    item: SESSION_HOOK_INLINE_ITEM,
+    detail: `${configPath} 里有 inline [hooks] 段，而 auto_capture: hook 会在同一层投出 ${codexHooksPath(ctx)}：codex 在同一 config 层同时发现两种钩子表示时每次启动都会告警`,
+    hint: '把 config.toml 里的 [hooks] 段挪走（或合并进你自己的另一层配置）；hooks.json 由 AgentForge 独占管理，auto_capture 改回 off / prompt 后会被 aforge sync 整文件清理',
+  });
 }
 
 /**

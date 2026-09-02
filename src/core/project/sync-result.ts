@@ -2,11 +2,21 @@
  * `SyncResult` 的装配（Spec §7.3 输出契约）。
  *
  * 为什么从 engine.ts 拆出来：syncOnce 有**两条**返回路径（dry-run 提前返回、apply
- * 成功返回），两者的 15 个字段完全相同、只有 5 个字段（`dryRun` / 逐项 status /
- * `warnings` / `transactionWarnings` / prune 与 recovered）不同。两份字面量并排写在
- * engine 里，加字段时漏改一处就会让 dry-run 与实写的输出形态悄悄分叉——`SyncResult`
- * 是命令层唯一的数据来源，分叉直接表现为「--dry-run 看不到某类提示」。集中到这里之后
- * engine.ts 只留阶段编排，新增字段由 TS 在两个 builder 上同时强制。
+ * 成功返回）。`SyncResult` 共 17 个字段，其中 8 个两条路径取值不同（`dryRun` / 逐项
+ * `targets` status / `warnings` / `transactionWarnings` / `gitignore` / `recovered` /
+ * `pruned` / `pruneSkipped`），剩下 9 个完全相同。两份字面量并排写在 engine 里，加字段
+ * 时漏改一处就会让 dry-run 与实写的输出形态悄悄分叉——`SyncResult` 是命令层唯一的数据
+ * 来源，分叉直接表现为「--dry-run 看不到某类提示」。集中到这里之后 engine.ts 只留阶段
+ * 编排。
+ *
+ * **类型能卡住什么、卡不住什么**（别高估 `spreadBase` 的 `Omit`）：
+ * - 给 `SyncResult` 加一个**两条路径取值不同**的字段（即同时加进 `Omit` 列表）→ 两个
+ *   builder 的字面量都缺字段，两处同时报错。这是主要护栏；
+ * - 给 `SyncResult` 加一个**共享**字段（不进 `Omit` 列表）→ 只有 `spreadBase` 的返回
+ *   字面量报错一处；两个 builder 因为 `...spreadBase(base)` 在类型上已声明含该字段而
+ *   不报错。这恰好是想要的结果（共享字段只该在一处赋值），但**不是**「两个 builder
+ *   同时被强制」；
+ * - `SyncAdvisories` 加一类提示 → 由 `flattenAdvisories` 的 `satisfies` 报错（见该函数）。
  *
  * 全部纯函数、不碰 IO。
  */
@@ -49,6 +59,27 @@ export interface AppliedSyncFacts {
   readonly prune: SyncPruneResult;
 }
 
+/**
+ * `SyncAdvisories` 的三类提示摊平进 `SyncResult` 的顶层字段。
+ *
+ * `satisfies` 把两边的键集绑在一起：给 `SyncAdvisories` 新增一类提示而忘了在这里摊平
+ * → 本对象缺键 → TS 立刻报错。手写摊平且**没有**这道断言时，新增的那类会被
+ * `collectSyncAdvisories` 算出来后无声丢弃，命令层永远看不到它，且零编译提示。
+ *
+ * 为什么不让 `SyncResult` 直接持有 `advisories: SyncAdvisories`：那要把命令层与
+ * doctor 的全部读取点改成 `result.advisories.x`（连既有测试断言一起动），diff 远大于
+ * 本文件这一处断言换来的等价保证。
+ */
+function flattenAdvisories(advisories: SyncAdvisories): {
+  readonly [K in keyof SyncAdvisories]: SyncAdvisories[K];
+} {
+  return {
+    commandSkips: advisories.commandSkips,
+    mcpTransportNotices: advisories.mcpTransportNotices,
+    sessionHookNotices: advisories.sessionHookNotices,
+  } satisfies { readonly [K in keyof SyncAdvisories]: SyncAdvisories[K] };
+}
+
 /** 把 base 的共享字段摊平进结果对象（两个 builder 唯一的公共来源）。 */
 function spreadBase(
   base: SyncResultBase,
@@ -70,9 +101,7 @@ function spreadBase(
     sotRoot: base.sotRoot,
     contentHash: base.contentHash,
     skippedTargets: base.skippedTargets,
-    commandSkips: base.advisories.commandSkips,
-    mcpTransportNotices: base.advisories.mcpTransportNotices,
-    sessionHookNotices: base.advisories.sessionHookNotices,
+    ...flattenAdvisories(base.advisories),
   };
 }
 
