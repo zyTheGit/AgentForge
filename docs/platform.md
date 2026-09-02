@@ -11,7 +11,7 @@
   - *颜色*：默认只在 TTY 下开启；`NO_COLOR` 关闭（优先级最高）、`FORCE_COLOR` 强制开启（便于 `| less -R` 与 CI 日志）、`TERM=dumb` 关闭。此外所有命令都接受位置无关的 `--no-color` / `--color`。
   - `--json` 输出不经过呈现层，恒为无色纯 ASCII，逐字节稳定。
 - **交互 UI**：`init` 的交互流程需要真实终端（TTY），非 TTY 下自动退回静默默认值（等价 `init --yes`）。
-- **OneDrive**：`AGF_HOME` 或项目目录落在 OneDrive 下时 `aforge doctor` 会 warn（文件锁 / 占位符状态可能导致投影写入失败）。
+- **OneDrive**：用户目录、用户级 SoT 根（`AGF_HOME` 置位时即它）、项目目录三者任一落在 OneDrive 下时 `aforge doctor` 会 warn（文件锁 / 占位符状态可能导致投影写入失败）。
 - **会话钩子里的 `aforge`（`learning.auto_capture: hook`）**：钩子文件写的是**裸命令** `aforge learn --print-protocol`，由 codex 起进程时按 `PATH` 解析——刻意不写绝对路径，产物才能跨机器逐字节一致（见 [learning](learning.md#auto_capture-hook会话钩子投递协议)）。因此：
   - `aforge` 必须在**启动 agent 的那个 shell** 的 `PATH` 里。npm 全局安装在 Windows 上落 `%APPDATA%\npm\aforge.cmd`；如果你用 fnm / nvm 之类的版本管理器，切换 Node 版本会换掉全局 bin 目录，钩子可能突然找不到命令；
   - 找不到时钩子静默失败（非零退出被 codex 当作"该钩子没产出上下文"），会话照常继续，只是协议没注入。想确认，在同一个 shell 里跑一次 `aforge learn --print-protocol`，能打印出协议正文即为正常；
@@ -26,16 +26,18 @@
 
 **推荐用法：SoT 与项目留在同一侧，不要跨 Windows / WSL 边界共享。** 两侧各跑一次 `aforge init`，各自管自己那一侧的项目；跨边界共享的收益（少维护一份 SoT）远小于下面几条的代价。
 
-### AgentForge 不检测 WSL
+### AgentForge 几乎不检测 WSL
 
-- 环境快照只读这几个变量：`AGF_HOME` / `AGF_SCOPE` / `AGF_OFFLINE` / `AGF_LINE_ENDING` / `CI` / `CODEX_HOME` / `PI_CODING_AGENT_DIR`，加上家目录解析用的 `USERPROFILE` / `HOME`（`src/core/env.ts:93`）。**没有** `WSL_DISTRO_NAME` / `WSL_INTEROP` / `/proc/version` 之类判据；平台上下文只有 `win32` / `darwin` / `linux` 三值（`src/core/paths.ts:16`）。因此 **WSL 内的 aforge 就是一个普通 Linux 进程**，行为与原生 Linux 完全一致，没有任何 WSL 专属分支。
-- 唯一一处**已经**针对 WSL 互操作做过的处理：家目录解析按平台决定优先级——win32 上 `USERPROFILE` 优先，类 Unix 上 `HOME` 优先（`src/core/env.ts:75`）。理由就写在那段注释里：WSL 互操作会把 Windows 侧的 `USERPROFILE`（`C:\Users\x`）带进 Linux 进程，若固定 `USERPROFILE ?? HOME`，WSL 里的用户级 SoT 会落到一个不存在的盘符路径下。所以 WSL 里 SoT 稳定落在 `$HOME/.agentforge`。
+- 环境快照只读这几个变量：`AGF_HOME` / `AGF_SCOPE` / `AGF_OFFLINE` / `AGF_LINE_ENDING` / `CI` / `CODEX_HOME` / `PI_CODING_AGENT_DIR`，加上家目录解析用的 `USERPROFILE` / `HOME`（`src/core/env.ts:93`）。平台上下文只有 `win32` / `darwin` / `linux` 三值（`src/core/paths.ts` 的 `OsContext`）。**渲染与投影里没有任何 WSL 专属分支**——WSL 内的 aforge 就是一个普通 Linux 进程。
+- 例外只有一处，且不影响任何产物：事务锁的持有者信息会记一条 **pid 空间标识**，判据读 `WSL_DISTRO_NAME` / `WSL_INTEROP`（`src/core/project/sync-lock.ts` 的 `pidSpaceIdOf`）。原因是 WSL 的 hostname 默认就是 Windows 计算机名、两侧用户名也常相同，光靠「同机器 + 同用户」区分不出两个互不相干的 pid 空间，`kill(pid, 0)` 探针会探到本侧一个碰巧同号的无关进程。读不到发行版名时判据给出"未知"，调用方按**不同** pid 空间处理（不做 pid 探针，只走心跳超时），宁可多等一个 stale 窗口。
+- 另一处**已经**针对 WSL 互操作做过的处理：家目录解析按平台决定优先级——win32 上 `USERPROFILE` 优先，类 Unix 上 `HOME` 优先（`src/core/env.ts:75`）。理由就写在那段注释里：WSL 互操作会把 Windows 侧的 `USERPROFILE`（`C:\Users\x`）带进 Linux 进程，若固定 `USERPROFILE ?? HOME`，WSL 里的用户级 SoT 会落到一个不存在的盘符路径下。所以 WSL 里 SoT 稳定落在 `$HOME/.agentforge`。
 
 ### SoT 放置策略
 
-- **Windows 侧不能把 SoT 放进 WSL 文件系统。** `\\wsl$\<distro>\...` 与 `\\wsl.localhost\<distro>\...` 都是 UNC 形态；`AGF_HOME` 以 `\\` 或 `//` 开头时，win32 上直接 `GenericError` 退出码 1（`src/core/paths.ts:120`，判据就是这两个前缀）。这条属于「不予实现」，见 [路线图](roadmap.md#不予实现)。
-- 反方向（WSL 侧把 SoT 放在 `/mnt/c/...`）不会被拒：UNC 判据只在 win32 分支生效，posix 上 `//foo` 是合法绝对路径（`src/core/paths.ts:121` 的注释说明了为什么不能在 posix 上拦）。技术上可行，但要一并接受下面「锁与原子写」「大小写」两节的代价。**未实测**。
-- `aforge doctor` 的 `user-sot-root` 条目会把 UNC `AGF_HOME` 报成 error（`src/core/doctor/check-config.ts:27` 调 `resolveUserSoT`）——看到这条就是撞上了上面那条拒绝。
+- **Windows 侧不能把 SoT 放进 WSL 文件系统。** `\\wsl$\<distro>\...` 与 `\\wsl.localhost\<distro>\...` 都是 UNC 形态；win32 上以 `\\` 或 `//` 开头的**外部路径入口**（`AGF_HOME` / `CODEX_HOME` / `PI_CODING_AGENT_DIR` / 项目目录）一律 `GenericError` 退出码 1（判据在 `src/core/paths.ts` 的 `validatePath`，四个入口共用它）。这条属于「不予实现」，见 [路线图](roadmap.md#不予实现)。
+- 同一个守卫还拒绝**Windows 上的无盘符绝对路径**（`CODEX_HOME=/home/x/.codex` 这类照抄 WSL 侧配置的写法）：`path.win32.resolve` 会把它静默补成 `C:\home\x\.codex`，落点与用户写的完全不是一回事，所以报 `ConfigError` 退出码 2 而不是猜一个盘符。`~` 会先展开成家目录再校验，写 `~/.codex` 不会造出字面名为 `~` 的目录。
+- 反方向（WSL 侧把 SoT 放在 `/mnt/c/...`）不会被拒：UNC 判据只在 win32 分支生效，posix 上 `//foo` 是合法绝对路径（`validatePath` 里的注释说明了为什么不能在 posix 上拦）。技术上可行，但要一并接受下面「锁与原子写」「大小写」两节的代价。**未实测**。
+- `aforge doctor` 的 `user-sot-root` 条目会把 UNC `AGF_HOME` 报成 error（`src/core/doctor/check-config.ts:27` 调 `resolveUserSoT`）；`CODEX_HOME` / `PI_CODING_AGENT_DIR` 的同类问题由 `codex-home` / `pi-coding-agent-dir` 两条报出——看到这些就是撞上了上面那两条拒绝。
 
 ### user scope 是两份，不会自动合并
 
@@ -68,8 +70,9 @@
 
 - `path/<target>`：恒为 ok 的信息项，打印 project 与 user 两个 scope 的实际落点（`src/core/doctor/check-paths.ts:61`）。跨环境时**先看这条**确认到底写到哪。
 - `writable`：会真的 mkdirp + 写探针文件 + 删除（`src/core/doctor/check-writable.ts:33`）。跨边界目录（`/mnt/c` 上被 Windows 进程占用、或 UNC 位置）探测失败会报 error(4)——这**不是误报**，`sync` 在同一位置同样会失败。
-- `onedrive`：判据只看 `env.userProfile`，不看项目目录、也不看 `AGF_HOME`（`src/core/doctor/check-environment.ts:70` → `src/core/paths.ts:193`），而 `OneDrive` 环境变量默认不会通过 `WSLENV` 传进 WSL。因此在 WSL 侧对 `/mnt/c/Users/x/OneDrive/...` 下的项目**不会**告警——别把这条 ok 当成「不在 OneDrive 上」的证明。
-- `residual/lock-live` / `residual/lock-stale`：新鲜度判据与 sync 同源（`src/core/project/sync-lock.ts:46`），但元数据里的 `pid` / `machine` / `user` 是持有者那一侧的口径，跨环境共享 SoT 时不可直接解读。
+- `onedrive`：判据看三条路径——`env.userProfile`、用户级 SoT 根（`AGF_HOME` 置位时即它）、项目目录（`src/core/doctor/check-environment.ts` 的 `checkOneDrive`）。但 `OneDrive` 环境变量默认不会通过 `WSLENV` 传进 WSL，而 `detectOneDrive` 的第二条判据依赖它；因此在 WSL 侧对 `/mnt/c/Users/x/OneDrive/...` 下的项目，只有路径里带 `OneDrive` 目录段时才命中第一条判据。别把这条 ok 当成「不在 OneDrive 上」的证明。
+- `codex-home` / `pi-coding-agent-dir`：置位时报出「原值 → 解析后」的落点。相对取值报 warn（落点随 cwd 漂移）；UNC / Windows 上的无盘符绝对路径 / `~user` 报 error——那是 `sync` 会撞上的同一个守卫（`src/core/paths.ts` 的 `validatePath`）。报 error 之后 doctor 会把该取值**摘掉再跑完剩下的检查**（`path/<target>` 等依赖投影计划的条目按默认落点解析）：否则同一个守卫会在最需要诊断的时候把整份报告一起抛掉。退出码仍是 2。
+- `residual/lock-live` / `residual/lock-stale`：新鲜度判据与 sync 同源（`src/core/project/sync-lock.ts:46`），「持有者进程是否还活着」这一问也与 sync 共用 `sameProcessSpace`（机器 + 用户 + pid 空间三者全部非空且相等才做 pid 探针）。元数据里的 `pid` / `machine` / `user` 是持有者那一侧的口径，跨环境共享 SoT 时不可直接解读；**旧版本写下的锁文件没有 pid 空间字段**，一律按"不同 pid 空间"处理，于是只会按心跳静默时长判定新鲜/陈旧。
 
 ## 已知限制
 

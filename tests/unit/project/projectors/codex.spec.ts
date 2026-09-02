@@ -4,6 +4,7 @@
  * inline table / 数组 / enabled 过滤）、skills write 项、§7.4 hook 档的钩子项。
  */
 import { describe, expect, it } from 'vitest';
+import { ConfigError, GenericError } from '../../../../src/core/errors';
 import { codexSessionHooksJson } from '../../../../src/core/learning/hook-capture';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END } from '../../../../src/core/markers';
 import {
@@ -129,6 +130,62 @@ describe('codexProjector.plan（Spec §8.4 主规则 / MCP 标记段 / skills）
     const plan = codexProjector.plan(ctx);
     expect(plan.items[0]?.path).toBe('C:\\codexhome\\AGENTS.md');
     expect(plan.items[1]?.path).toBe('C:\\codexhome\\config.toml');
+  });
+
+  it('CODEX_HOME 过统一守卫：UNC 直接拒绝（Issue #51 第 1 条）', () => {
+    // PR #50 之后 hooks.json 与 config.toml 共用 codexConfigDir，而 hooks.json 是整文件
+    // write——未校验的 CODEX_HOME 等于把一次整文件覆盖导向任意目录
+    const ctx = buildCtx({
+      scope: 'user',
+      rootDir: 'C:\\Users\\u',
+      env: {
+        agfHome: undefined,
+        agfScope: undefined,
+        offline: false,
+        lineEnding: undefined,
+        ci: false,
+        codexHome: '\\\\wsl.localhost\\Ubuntu\\home\\x\\.codex',
+        piCodingAgentDir: undefined,
+        userProfile: 'C:\\Users\\u',
+      },
+    });
+    expect(() => codexProjector.plan(ctx)).toThrow(GenericError);
+  });
+
+  it('CODEX_HOME 写 posix 绝对路径（win32）→ ConfigError(2)，不静默补盘符', () => {
+    const ctx = buildCtx({
+      scope: 'user',
+      rootDir: 'C:\\Users\\u',
+      env: {
+        agfHome: undefined,
+        agfScope: undefined,
+        offline: false,
+        lineEnding: undefined,
+        ci: false,
+        codexHome: '/home/x/.codex',
+        piCodingAgentDir: undefined,
+        userProfile: 'C:\\Users\\u',
+      },
+    });
+    expect(() => codexProjector.plan(ctx)).toThrow(ConfigError);
+  });
+
+  it('CODEX_HOME 的 `~` 展开（此前会落出字面名为 `~` 的目录）', () => {
+    const ctx = buildCtx({
+      scope: 'user',
+      rootDir: 'C:\\Users\\u',
+      env: {
+        agfHome: undefined,
+        agfScope: undefined,
+        offline: false,
+        lineEnding: undefined,
+        ci: false,
+        codexHome: '~/codex-alt',
+        piCodingAgentDir: undefined,
+        userProfile: 'C:\\Users\\u',
+      },
+    });
+    expect(codexProjector.plan(ctx).items[0]?.path).toBe('C:\\Users\\u\\codex-alt\\AGENTS.md');
   });
 
   it('posix os：分隔符为 /（Spec §2.1 路径随平台）', () => {

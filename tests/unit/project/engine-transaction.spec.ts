@@ -37,6 +37,7 @@ import {
   type SyncOptions,
   syncOnce,
 } from '../../../src/core/project/engine';
+import { pidSpaceIdOf } from '../../../src/core/project/sync-identity';
 import { withSotLock } from '../../../src/core/project/sync-lock';
 import { syncMetaPath } from '../../../src/core/project/sync-meta';
 import { inspectPiLegacyMcp } from '../../../src/core/project/sync-residuals';
@@ -498,6 +499,7 @@ const JOURNAL_FILE = path.join(PROJECT_SOT, SYNC_BACKUP_DIRNAME, SYNC_BACKUP_JOU
  *
  * machine 默认写成另一台机器：抢占陈旧锁时本进程无法对跨机器 pid 判活，
  * 判据退回「心跳停摆」——否则测试机上恰好存在同号 pid 会让结果不确定。
+ * pidSpace 同理默认写成另一个 pid 命名空间（Issue #51：判活还要求同命名空间）。
  */
 async function seedLock(
   host: FakeHost,
@@ -505,6 +507,7 @@ async function seedLock(
   pid = 4242,
   machine = 'another-machine',
   user = 'someone',
+  pidSpace = 'wsl:another-distro',
 ): Promise<void> {
   await host.writeFile(
     LOCK_META,
@@ -514,6 +517,7 @@ async function seedLock(
       token: 'other-process-token',
       machine,
       user,
+      pidSpace,
     }),
   );
 }
@@ -551,16 +555,33 @@ describe('syncOnce — 事务排他锁（并发）', () => {
     expect(host.dirs.has(LOCK_DIR)).toBe(false);
   });
 
-  it('陈旧但持有者进程仍存活（同机器同用户）→ 报冲突而非抢占（慢 sync 不被误杀）', async () => {
-    const host = createSyncHost();
+  it('陈旧但持有者进程仍存活（同机器同用户同 pid 命名空间）→ 报冲突而非抢占（慢 sync 不被误杀）', async () => {
+    const base = createSyncHost();
+    // machine/user 必须可解析且与锁记录一致（空串两边相等不再算同机器），
+    // pidSpace 取本进程所在命名空间，pid 取本进程 → 必然判活
+    const host: FakeHost = { ...base, hostname: () => 'linux-box', username: () => 'dev' };
     await seed(host, PROFILE_ALL);
-    // machine/user 与 fake host 的 env 一致（均为空串），pid 取本进程 → 必然存活
-    await seedLock(host, 60, process.pid, '', '');
+    await seedLock(host, 60, process.pid, 'linux-box', 'dev', pidSpaceIdOf(host, OS));
 
     const err = await syncOnce(syncOptions(host)).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ConflictError);
     expect(host.files.get(LOCK_META)).toContain('other-process-token');
     expect(host.files.has(AGENTS_MD)).toBe(false);
+  });
+
+  it('老锁文件缺 pidSpace 字段 → 不判活、走超时抢占（Issue #51 保守降级）', async () => {
+    const base = createSyncHost();
+    const host: FakeHost = { ...base, hostname: () => 'linux-box', username: () => 'dev' };
+    await seed(host, PROFILE_ALL);
+    // 升级前写下的锁记录没有 pidSpace：即便 pid 在本命名空间里存活，也不得据此判活，
+    // 否则 WSL/Windows 跨边界的同号 pid 会把陈旧锁误判成活锁而永久卡住 sync
+    await seedLock(host, 60, process.pid, 'linux-box', 'dev', '');
+
+    const result = await syncOnce(syncOptions(host));
+
+    expect(result.targets).toHaveLength(4);
+    expect(host.files.has(AGENTS_MD)).toBe(true);
+    expect(host.files.has(LOCK_META)).toBe(false);
   });
 
   it('原子创建即互斥：并发两次取锁只有一个成功（mkdirExclusive 第二次 EEXIST）', async () => {

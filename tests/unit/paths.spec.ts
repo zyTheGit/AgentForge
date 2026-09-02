@@ -6,10 +6,13 @@ import { describe, expect, it } from 'vitest';
 import type { EnvSnapshot } from '../../src/core/env';
 import { ConfigError, GenericError } from '../../src/core/errors';
 import {
+  CODEX_HOME_ENV,
   currentOs,
   detectOneDrive,
+  hasFixedRoot,
   isWithinAnyRoot,
   longPathAware,
+  PI_AGENT_DIR_ENV,
   resolveProjectSoT,
   resolveTargetUserDirs,
   resolveUserSoT,
@@ -147,6 +150,115 @@ describe('validatePath（Spec §2.1.1 UNC 拒绝）', () => {
     expect(validatePath('C:\\Users\\u\\.agentforge\\', WIN)).toBe('C:\\Users\\u\\.agentforge');
     const rel = validatePath('rel/path', WIN);
     expect(path.win32.isAbsolute(rel)).toBe(true);
+  });
+});
+
+describe('validatePath — 统一守卫（Issue #51：`~` 展开 + 入口名 + 无盘符绝对路径）', () => {
+  const guard = { origin: CODEX_HOME_ENV, home: 'C:\\Users\\tester' };
+
+  it('`~` 在校验与绝对化之前展开（否则会落出字面名为 `~` 的目录）', () => {
+    expect(validatePath('~', WIN, guard)).toBe('C:\\Users\\tester');
+    expect(validatePath('~/.codex', WIN, guard)).toBe('C:\\Users\\tester\\.codex');
+    expect(validatePath('~\\.codex', WIN, guard)).toBe('C:\\Users\\tester\\.codex');
+    expect(validatePath('~/.codex', POSIX, { origin: CODEX_HOME_ENV, home: '/home/u' })).toBe(
+      '/home/u/.codex',
+    );
+  });
+
+  it('`~` 但无家目录 → ConfigError(2)（不落成字面 `~`）', () => {
+    try {
+      validatePath('~/.codex', WIN, { origin: CODEX_HOME_ENV });
+      expect.unreachable('should throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigError);
+      expect((err as ConfigError).code).toBe(2);
+    }
+  });
+
+  it('`~user` 形态 → ConfigError(2)（三平台语义不同，不猜）', () => {
+    expect(() => validatePath('~alice/.codex', WIN, guard)).toThrow(ConfigError);
+    expect(() =>
+      validatePath('~alice/.codex', POSIX, { origin: CODEX_HOME_ENV, home: '/home/u' }),
+    ).toThrow(ConfigError);
+  });
+
+  it('win32 上的无盘符绝对路径 → ConfigError(2)（不静默补 cwd 的盘符）', () => {
+    // path.win32.resolve('/home/x/.codex') 会给出 C:\home\x\.codex，落点与用户写的完全不同
+    for (const raw of ['/home/x/.codex', '\\opt\\codex']) {
+      try {
+        validatePath(raw, WIN, guard);
+        expect.unreachable(`should throw for ${raw}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigError);
+        expect((err as ConfigError).message).toContain('CODEX_HOME');
+      }
+    }
+    // posix 上同一取值完全合法
+    expect(validatePath('/home/x/.codex', POSIX, guard)).toBe('/home/x/.codex');
+  });
+
+  it('错误消息带入口名（不再一律写 AGF_HOME）', () => {
+    try {
+      validatePath('\\\\wsl.localhost\\Ubuntu\\home\\x', WIN, {
+        origin: PI_AGENT_DIR_ENV,
+        home: 'C:\\Users\\tester',
+      });
+      expect.unreachable('should throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(GenericError);
+      expect((err as GenericError).message).toContain('PI_CODING_AGENT_DIR');
+    }
+  });
+
+  it('相对路径仍放过（历史语义），由 hasFixedRoot 供 doctor 报 warn', () => {
+    expect(path.win32.isAbsolute(validatePath('codex-home', WIN, guard))).toBe(true);
+    expect(hasFixedRoot('codex-home', WIN)).toBe(false);
+    expect(hasFixedRoot('~/x', WIN)).toBe(true);
+    expect(hasFixedRoot('C:\\x', WIN)).toBe(true);
+    expect(hasFixedRoot('/x', POSIX)).toBe(true);
+    expect(hasFixedRoot('x/y', POSIX)).toBe(false);
+  });
+});
+
+describe('外部路径入口全覆盖（Issue #51：AGF_HOME 之外的三个入口）', () => {
+  it('CODEX_HOME 为 UNC → GenericError(1)', () => {
+    expect(() =>
+      resolveTargetUserDirs(
+        envOf({ codexHome: '\\\\wsl.localhost\\Ubuntu\\home\\x\\.codex' }),
+        WIN,
+      ),
+    ).toThrow(GenericError);
+  });
+
+  it('PI_CODING_AGENT_DIR 为 UNC → GenericError(1)', () => {
+    expect(() =>
+      resolveTargetUserDirs(envOf({ piCodingAgentDir: '//server/share/pi' }), WIN),
+    ).toThrow(GenericError);
+  });
+
+  it('projectRoot 为 UNC → GenericError(1)（resolveProjectSoT 同样过守卫）', () => {
+    expect(() => resolveProjectSoT('\\\\server\\share\\proj', WIN)).toThrow(GenericError);
+    // posix 上不拦
+    expect(resolveProjectSoT('//srv/proj', POSIX)).toBe('/srv/proj/.agentforge');
+  });
+
+  it('CODEX_HOME / PI_CODING_AGENT_DIR 的 `~` 会展开', () => {
+    const dirs = resolveTargetUserDirs(
+      envOf({ codexHome: '~/codex-alt', piCodingAgentDir: '~/pi-alt' }),
+      WIN,
+    );
+    expect(dirs.codex).toBe('C:\\Users\\tester\\codex-alt');
+    expect(dirs.pi).toBe('C:\\Users\\tester\\pi-alt');
+  });
+
+  it('win32 上 CODEX_HOME 写 posix 绝对路径 → ConfigError(2)', () => {
+    expect(() => resolveTargetUserDirs(envOf({ codexHome: '/home/x/.codex' }), WIN)).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('AGF_HOME 的 `~` 同样展开（此前会落出字面 `~` 目录）', () => {
+    expect(resolveUserSoT(envOf({ agfHome: '~/af-home' }), WIN)).toBe('C:\\Users\\tester\\af-home');
   });
 });
 

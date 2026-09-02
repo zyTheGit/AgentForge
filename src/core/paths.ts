@@ -5,6 +5,8 @@
  * - Windows 比较大小写不敏感（samePath）；
  * - 长路径（>240）加 `\\?\` 前缀（Spec §2.1.1）；
  * - UNC 不支持（Spec §2.1.1，退出码 1）；
+ * - **全部外部路径入口**（AGF_HOME / CODEX_HOME / PI_CODING_AGENT_DIR / 项目目录）
+ *   共用 validatePath 这一个守卫：`~` 展开 + UNC / 无盘符绝对路径的拒绝；
  * - node:path 为纯计算模块，允许直接使用；文件 IO 一律经 Host。
  */
 import path from 'node:path';
@@ -71,20 +73,25 @@ function requireUserProfile(env: EnvSnapshot): string {
 
 /**
  * 用户级 SoT 根目录（Spec §2.1）：AGF_HOME 覆盖，否则 `<userProfile>/.agentforge`。
- * 返回规范化绝对路径；AGF_HOME 本身先过 UNC 校验。
+ * 返回规范化绝对路径；AGF_HOME 本身先过统一守卫（validatePath）。
  */
 export function resolveUserSoT(env: EnvSnapshot, os: OsContext = currentOs()): string {
   if (env.agfHome !== undefined && env.agfHome !== '') {
-    return validatePath(env.agfHome, os);
+    return validatePath(env.agfHome, os, { origin: AGF_HOME_ENV, home: env.userProfile });
   }
   const api = pathApiFor(os);
   return api.resolve(requireUserProfile(env), '.agentforge');
 }
 
-/** 项目级 SoT 根目录（Spec §2.1）：`<projectRoot>/.agentforge`（绝对化）。 */
+/**
+ * 项目级 SoT 根目录（Spec §2.1）：`<projectRoot>/.agentforge`（绝对化）。
+ *
+ * projectRoot 同样过统一守卫：它来自 `--cwd` / 进程 cwd，是与 AGF_HOME 同类的
+ * **外部**取值，UNC 形态在这里放过去等于把 §2.1.1 的拒绝只落实了一半。
+ */
 export function resolveProjectSoT(projectRoot: string, os: OsContext = currentOs()): string {
   const api = pathApiFor(os);
-  return api.resolve(projectRoot, '.agentforge');
+  return api.resolve(validatePath(projectRoot, os, { origin: PROJECT_DIR_ORIGIN }), '.agentforge');
 }
 
 /**
@@ -100,30 +107,154 @@ export function resolveTargetUserDirs(env: EnvSnapshot, os: OsContext): TargetUs
   const home = requireUserProfile(env);
   return {
     opencode: api.resolve(home, '.config', 'opencode'),
-    codex: env.codexHome ? api.resolve(env.codexHome) : api.resolve(home, '.codex'),
+    codex: resolveOverridableDir(
+      env.codexHome,
+      api.resolve(home, '.codex'),
+      CODEX_HOME_ENV,
+      home,
+      os,
+    ),
     claude: api.resolve(home, '.claude'),
-    pi: env.piCodingAgentDir
-      ? api.resolve(env.piCodingAgentDir)
-      : api.resolve(home, '.pi', 'agent'),
+    pi: resolveOverridableDir(
+      env.piCodingAgentDir,
+      api.resolve(home, '.pi', 'agent'),
+      PI_AGENT_DIR_ENV,
+      home,
+      os,
+    ),
   };
 }
 
+// ---------------------------------------------------------------------------
+// 外部路径入口的统一守卫（Spec §2.1 / §2.1.1）
+// ---------------------------------------------------------------------------
+
+/** 统一守卫覆盖的环境变量名（错误消息与 doctor 条目共用同一字面量）。 */
+export const AGF_HOME_ENV = 'AGF_HOME';
+export const CODEX_HOME_ENV = 'CODEX_HOME';
+export const PI_AGENT_DIR_ENV = 'PI_CODING_AGENT_DIR';
+
+/** 非环境变量的入口名：`--cwd` / 进程 cwd 推导出的项目根。 */
+export const PROJECT_DIR_ORIGIN = '项目目录';
+
+/** 外部路径入口的校验上下文。 */
+export interface PathGuardContext {
+  /** 入口名（环境变量名 / PROJECT_DIR_ORIGIN）：出现在错误消息与 hint 里。 */
+  readonly origin: string;
+  /**
+   * `~` 展开的基准目录。缺省（或空串）时输入以 `~` 开头即报 ConfigError——
+   * 绝不放过去：`path.resolve` 会把它当成一个普通相对段，造出字面名为 `~` 的目录。
+   */
+  readonly home?: string | undefined;
+}
+
+/** 前导 `~` 段：`~` 自身或 `~/x` / `~\x`；`~user` 形态不在其中（见 expandTilde）。 */
+const LEADING_TILDE = /^~(?=$|[\\/])/;
+
 /**
- * 校验路径并返回规范化绝对路径。
- * UNC 网络路径（`\\server\share` 或 `//server/share`）→ GenericError(1)（Spec §2.1.1）。
+ * `~` 展开。**必须在任何校验与绝对化之前**发生，否则字面 `~` 会被当成合法相对段
+ * （落出一个真的名为 `~` 的目录，用户在文件管理器里根本认不出那是自己的配置）。
  *
- * UNC 是 Windows 概念，故只在 win32 上拦：posix 上 `\` 是合法文件名字符，
- * `//foo` 是合法绝对路径（`path.posix.resolve` 折叠为 `/foo`），拦掉即误伤。
+ * 只展开前导的 `~` 段。`~user`（展开成"另一个用户的家目录"）在三大平台上语义不同、
+ * 且需要读 passwd，这里不猜——直接报错比落到错误的目录下安全。
+ */
+function expandTilde(p: string, os: OsContext, ctx: PathGuardContext): string {
+  if (!LEADING_TILDE.test(p)) {
+    if (p.startsWith('~')) {
+      throw new ConfigError(`${ctx.origin} 不支持 \`~user\` 形态的路径: ${p}`, {
+        hint: `写完整路径，或用 \`~/\` 开头表示当前用户的家目录（当前 ${ctx.origin}=${p}）`,
+      });
+    }
+    return p;
+  }
+  if (ctx.home === undefined || ctx.home === '') {
+    throw new ConfigError(`${ctx.origin} 以 \`~\` 开头但无法确定家目录: ${p}`, {
+      hint: '设置 USERPROFILE（Windows）或 HOME（类 Unix），或把该取值改成完整绝对路径',
+    });
+  }
+  const rest = p.slice(1).replace(/^[\\/]+/, '');
+  return rest === '' ? ctx.home : pathApiFor(os).join(ctx.home, rest);
+}
+
+/**
+ * 外部路径入口的统一守卫：`~` 展开 → 形态校验 → 规范化绝对路径。
+ *
+ * 覆盖 AGF_HOME / CODEX_HOME / PI_CODING_AGENT_DIR / 项目目录四个入口（调用点见
+ * resolveUserSoT、resolveProjectSoT、resolveOverridableDir）。四者是同一类取值——
+ * "由用户从进程外部指定的落盘根"——只给其中一个上守卫等于没上：codex 的
+ * `hooks.json` 是整文件 `write`，落点由 CODEX_HOME 决定，漏掉它就等于把一次整文件
+ * 覆盖导向任意目录。
+ *
+ * 两档处置：
+ * - **拒绝**：UNC（`\\` / `//` 开头）→ GenericError(1)，与 Spec §2.1.1 一致；
+ *   win32 上的无盘符绝对路径（`/home/x`、`\opt\x`）与 `~user` / 无家目录的 `~`
+ *   → ConfigError(2)（取值本身写错了，属于配置错误）。
+ * - **放过但可诊断**：相对路径仍按 `path.resolve` 语义绝对化（历史行为，AGF_HOME
+ *   一直如此），由 doctor 的 `hasFixedRoot` 判据报 warn——它只是落点随 cwd 漂移，
+ *   不像上面几种会写到一个用户完全没预期的位置。
+ *
+ * UNC 只在 win32 上拦：posix 上 `\` 是合法文件名字符，`//foo` 是合法绝对路径
+ * （`path.posix.resolve` 折叠为 `/foo`），拦掉即误伤。
  * 绝对化同样按注入 os 走 pathApiFor，否则在 posix 宿主上算 win32 路径会退化为
  * "拼到 cwd 后面"。
  */
-export function validatePath(p: string, os: OsContext = currentOs()): string {
-  if (os.platform === 'win32' && (p.startsWith('\\\\') || p.startsWith('//'))) {
-    throw new GenericError(`AGF_HOME 不支持网络路径（UNC）: ${p}`, {
-      hint: '改用本地磁盘路径（如 C:\\agentforge），或将网络位置先同步到本地再使用',
-    });
+export function validatePath(
+  p: string,
+  os: OsContext = currentOs(),
+  ctx: PathGuardContext = { origin: AGF_HOME_ENV },
+): string {
+  const expanded = expandTilde(p, os, ctx);
+  if (os.platform === 'win32') {
+    if (expanded.startsWith('\\\\') || expanded.startsWith('//')) {
+      throw new GenericError(`${ctx.origin} 不支持网络路径（UNC）: ${expanded}`, {
+        hint: '改用本地磁盘路径（如 C:\\agentforge），或将网络位置先同步到本地再使用',
+      });
+    }
+    // `/home/x` / `\opt\x`：win32.resolve 会静默补上 cwd 的盘符，落点与用户写的完全不是
+    // 一回事（典型是在 Windows 上照抄了一份 WSL 侧的配置），不猜盘符，直接报错。
+    if (/^[\\/]/.test(expanded)) {
+      throw new ConfigError(`${ctx.origin} 在 Windows 上必须带盘符: ${expanded}`, {
+        hint: `写成 \`C:\\...\` 形态（当前取值会被静默解析到当前盘符下）；WSL 侧的 posix 路径不能直接用于 Windows 侧的 ${ctx.origin}`,
+      });
+    }
   }
-  return pathApiFor(os).resolve(p);
+  return pathApiFor(os).resolve(expanded);
+}
+
+/**
+ * 可被环境变量覆盖的 target 用户级目录（CODEX_HOME / PI_CODING_AGENT_DIR）。
+ *
+ * 为什么要有这一层而不是各调用点自己写三元：这两个变量的解析点有三处
+ * （本文件的 resolveTargetUserDirs、projectors/codex 的 codexUserDir、
+ * projectors/pi 的 piUserAgentDir），必须给出同一结论。缺省值由调用方各自拼好传进来
+ * ——codex 用 `<rootDir>/.codex`、pi 用 `<rootDir>/.pi/agent`，段定义在各 projector 里。
+ *
+ * @param override 环境变量原值（undefined / 空串 → 用 fallback，不做任何校验）。
+ * @param fallback 未置位时的缺省目录（调用方已算好，不再过守卫）。
+ * @param home `~` 展开基准（通常即 user scope 的基准根）。
+ */
+export function resolveOverridableDir(
+  override: string | undefined,
+  fallback: string,
+  origin: string,
+  home: string | undefined,
+  os: OsContext,
+): string {
+  if (override === undefined || override === '') {
+    return fallback;
+  }
+  return validatePath(override, os, { origin, home });
+}
+
+/**
+ * 取值是否给定了**确定**的落点（`~` 打头或绝对路径）。
+ *
+ * doctor 用它把"能解析但落点随进程 cwd 漂移"的相对取值报成 warn：
+ * `CODEX_HOME=codex-home` 在不同目录下跑 sync 会投影到不同地方，而 validatePath
+ * 按历史语义放过它（AGF_HOME 一直允许相对值），只报不拦。
+ */
+export function hasFixedRoot(p: string, os: OsContext): boolean {
+  return p.startsWith('~') || pathApiFor(os).isAbsolute(p);
 }
 
 /** 路径等价比较：win32 先 normalize 再大小写不敏感；posix 精确比较（Spec §2.1）。 */

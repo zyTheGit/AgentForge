@@ -13,16 +13,14 @@ import {
   SYNC_BACKUP_FAILED_PREFIX,
   SYNC_BACKUP_JOURNAL_FILE,
 } from './sync-artifacts';
+import { isProcessAlive, sameProcessSpace } from './sync-identity';
 import {
   isLockFresh,
-  isProcessAlive,
   lockAgeMs,
-  machineIdOf,
   readSyncLockRecord,
   SYNC_LOCK_DIRNAME,
   SYNC_LOCK_META_FILE,
   syncLockDir,
-  userIdOf,
 } from './sync-lock';
 import { readBackupJournal } from './sync-recovery';
 
@@ -73,9 +71,9 @@ export async function inspectSyncResiduals(
   if (names.includes(SYNC_LOCK_DIRNAME)) {
     const holder = await readSyncLockRecord(host, api.join(lockDir, SYNC_LOCK_META_FILE));
     const ageMs = await lockAgeMs(host, lockDir, holder);
-    const sameHost =
-      holder !== null && holder.machine === machineIdOf(host) && holder.user === userIdOf(host);
-    const alive = sameHost && isProcessAlive(holder.pid);
+    // 与 acquireSyncLock 共用同一判据（机器 + 用户 + pid 空间），否则同一把锁会得到
+    // 「doctor 说陈旧可清理 / sync 说还活着」两个矛盾结论
+    const alive = sameProcessSpace(holder, host, os) && isProcessAlive(holder.pid);
     const fresh = isLockFresh(ageMs);
     const who =
       holder === null ? '持有者未知（元数据不可读）' : `pid ${holder.pid} @ ${holder.acquiredAt}`;

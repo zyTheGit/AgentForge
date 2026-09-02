@@ -6,9 +6,9 @@
 |------|------|
 | `aforge init [-i]` | 初始化。**终端里默认走交互五步**（scope → 探测 → 确认 → 选 target → 写入）；`-i` 强制交互——压过 `--yes` / `--json`，且非 TTY 下报退出码 2 而非静默降级 |
 | `aforge init --yes` / `aforge init --json` | 静默初始化（探测快照 + 骨架落盘）：scope 默认 `project`、target 默认全部四个。非 TTY（CI / 管道）自动走这条；`--scope project\|user` 可单独指定层 |
-| `aforge detect [--json]` | 探测本机工具链（node/python/java/dotnet/包管理器/rust/go/monorepo/CI/shell/已有规则文件），无副作用 |
+| `aforge detect [--json]` | 探测本机工具链（node/python/java/dotnet/包管理器/rust/go/monorepo/CI/shell/已有规则文件），无副作用；**只打印不写盘**，各项的候选优先级与判据见 [habits.yaml](habits.md#detected-快照结构) |
 | `aforge sync [--targets a,b] [--dry-run] [--force] [--json]` | 渲染 SoT 并投影到目标 Agent（规则 marker 区间 + 技能 / MCP / [命令薄壳](skills.md#额外投影成命令expose_as_command)整文件产物） |
-| `aforge learn [--scope s] [--file f\|'-'] [--id id] [--no-auto-promote]` | 记录一条 learning（不投影；`learning.auto_promote: true` 时顺手 promote，`--no-auto-promote` 单次关掉） |
+| `aforge learn [--scope s] [--file f\|'-'] [--id id] [--confidence 0-1] [--no-auto-promote]` | 记录一条 learning（不投影；`--confidence` 省略即按内容[自动打分](learning.md#自动打分)，越界或非数字 → 退出码 2；`learning.auto_promote: true` 时顺手 promote，`--no-auto-promote` 单次关掉） |
 | `aforge learn --print-protocol` | 只把 `## Learning Protocol` 正文打到 stdout 就退出。`learning.auto_capture: hook` 的会话钩子调的就是它：只读，不解析配置、不读 SoT、不写盘、不取锁 |
 | `aforge promote <id> [--to user] [--yes]` | 将 learning 升级为 custom 规则或 skill |
 | `aforge learnings list [--json]` / `show <id>` / `edit <id>` / `rm <id>` | 管理两层 SoT 的 learning 条目（`edit` 在交互终端拉起 `$EDITOR` 改条目 yaml，退出后重校验；非交互或 `--json` 时只打印路径与正文） |
@@ -67,14 +67,16 @@
 |------|------|
 | 装完会联网吗 | 不会。`init` 只写登记表，一条 git 命令都不发；禁用态下它**不联网、不进 `aforge template list`、不参与渲染**（`status` 与 `doctor` 仍会把它列出来——"登记了但不生效"必须可见） |
 | 怎么用起来 | `aforge source enable official`，然后 `aforge template list` —— 内容在**首次真正用到时**才拉取 |
-| 怎么关掉 | `aforge source disable official`（留缓存，随时再开）或 `aforge source remove official`（连 `store\official` 缓存一起回收） |
-| `disable` 之后就一定不渲染了吗 | **有一个已知限制**：如果这个源此前已经拉取过、并且你把它的某个模板 id 显式写进了 `profile.templates`，那么 `disable` 之后 `sync` 仍会渲染那份缓存内容（模板解析的 store 层按目录扫描，不读 `enabled`）。要彻底断开用 `aforge source remove official` |
+| 怎么关掉 | `aforge source disable official`（**立即停止参与渲染**，缓存留着随时再开）或 `aforge source remove official`（连 `store\official` 缓存一起回收） |
+| `disable` 之后就一定不渲染了吗 | 是。模板解析只认**已登记且已启用**的源，禁用后它的模板一律解析不到，缓存只是"再开时不必联网"的资产。如果 `profile.templates` 里还留着只有该源才有的模板 id，`sync` 会以 `ConfigError(2)` 失败并点名是哪个源——照提示二选一：`aforge source enable <id>` 或 `aforge template disable <模板 id>`（`aforge doctor` 的 `template/<id>` 项会提前把这条报出来） |
 | 删了会自己回来吗 | 不会。登记表一旦存在就不再播种，此后任何 `init`（含其他项目里的 `init`，它们共享同一张 user 层登记表）都不会把它加回来。**限定语**：墓碑就是 `sources.json` 这个文件本身——如果手工把它删掉（哪怕保留了 `store\official`），下次 `init` 会重新播种 |
 | pin 是什么 | 固定 tag，**不用浮动 `main`**——同一份 SoT 在任何机器上渲染出同样的规则。想换版本就直接改 `sources.json` 的 `ref`，升级 CLI 不会覆盖本机改写 |
 | 老 SoT（本特性之前 init 的）怎么拿到 | 跑一次 `aforge source enable official`：源不在登记表里时，`enable` 会按内置声明补登记并启用 |
 | 离线 / CI 里呢 | `AGF_OFFLINE=1` 或 `CI` 为真时**不自动拉取**；`aforge template list` 照常列出其余来源，并附一行说明与 `aforge source update official` 的下一步。拉取失败也只降级成说明，不影响命令退出码 |
 | 会覆盖内置 `base/default` 吗 | 不会。内置模板恒优先（见 [规则正文装配](rules.md)），启用官方源只**新增**它独有的模板 id（同名 id 会在 `template list` 里各列一行，渲染时仍取内置那份） |
-| 它的模板清单从哪来 | 优先读源根的 `manifest.yaml`（§4.5）；源里没有 manifest 时回落扫描 `store\<id>\templates\**.md`，与模板解析的第 4 层口径一致。官方仓库当前**没有** `manifest.yaml`，走的就是回落路径 |
+| 它的模板清单从哪来 | 优先读源根的 `manifest.yaml`（§4.5）；源里没有 manifest 时回落扫描源根的 `templates\**.md`，与模板解析的口径一致。官方仓库当前**没有** `manifest.yaml`，走的就是回落路径 |
+| 发布 `manifest.yaml` 有什么约束 | 模板**解析**固定按 `<源根>\templates\<模板 id>.md` 找文件，`manifest.templates[].path` 目前只是说明性字段、不参与解析。因此登记的 `id` 必须与 `templates/<id>.md` 的相对路径对应（例如 `id: team/review` ↔ `templates/team/review.md`），否则该 id 会"在 `template list` 里列得出、`sync` 却解析不到" |
+| 源里的模板从哪个目录读 | git 源读缓存 `store\<id>`，local 源读登记的 `path`；两类都只认 `<源根>\templates\` 下的 `.md`。`store\` 下有目录但登记表里没有对应源（手工残留的孤儿缓存）时**不参与**解析 |
 
 `aforge source list` 的 `ENABLED` 列、`aforge status` 的 `sources` 一节、`aforge doctor` 的 `sources/default/official` 检查项都会如实反映上述状态（doctor 对它只报 `ok` / `warn`，不会把体检判失败）。
 

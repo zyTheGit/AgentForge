@@ -25,14 +25,17 @@
  * git 调用全部经 infra/shell.gitExec（测试可 mock host.exec）。
  *
  * 模块划分（本文件只留 CRUD 流程编排与 manifest 解析）：
- * - `store`：sources.json 登记表读写、`<userSoT>\store\<id>` 路径推导，以及
- *   §10 的 id / url / ref / store 边界守卫（决定"往哪写盘、给 git 传什么参数"）。
+ * - `store`：sources.json 登记表读写、`<userSoT>\store\<id>` 与源根（`sourceRootDir`）
+ *   的路径推导，以及 §10 的 id / url / ref / store 边界守卫（决定"往哪写盘、给 git
+ *   传什么参数"）。
  * - `git-pin`：远端传输层——离线闸门、git 命令的错误映射，以及 clone→fetch→
  *   checkout→rev-parse 的 pin 序列（决定"怎么把 ref 变成落定的 commit"）。
  *   本文件保留的是登记表事务编排，两者变化速率不同。
  * - `official`：默认注册项常量表与其播种 / 启停（`enabled` 位的唯一写入方）。
  *   它单向依赖 `store`，与本文件同级、互不 import——"官方源是哪几条、什么时候进
  *   登记表"与"怎么 clone / pin"是两种变化速率不同的关注点。
+ * - `render-scope`：把登记表翻译成"渲染时哪些源根参与解析"（`enabled` 的读取方之一），
+ *   供 generate/resolver 的第 4 层注入。
  *
  * 这些符号在此 re-export：既有调用方（commands/assets/source.ts、sources/skill.ts、
  * sources/template.ts 与测试）继续从 `./manager` 单点 import，拆分不改变对外导出面。
@@ -57,6 +60,7 @@ import {
   loadSources,
   type SourceManagerContext,
   saveSources,
+  sourceRootDir,
   sourceStoreDir,
   sourcesFilePath,
 } from './store';
@@ -69,7 +73,9 @@ export {
   assertWithinStore,
   deriveSourceId,
   type SourceManagerContext,
+  type SourceRegistryContext,
   STORE_DIR,
+  sourceRootDir,
   sourceStoreDir,
   sourcesFilePath,
 } from './store';
@@ -358,13 +364,7 @@ export async function removeSource(
 // manifest（§4.5）
 // ---------------------------------------------------------------------------
 
-/** 源根目录：local → 登记的 path；git → store\<id\>。 */
-export function sourceRootDir(ctx: SourceManagerContext, source: Source): string {
-  return source.type === 'local' ? source.path : sourceStoreDir(ctx, source.id);
-}
-
-/**
- * 解析源的 manifest.yaml（§4.5：模板 / skills 清单）。
+/** 解析源的 manifest.yaml（§4.5：模板 / skills 清单）。
  *
  * @returns null 表示源无 manifest（不是错误——目录型源可只放 skills/ 等）；
  * @throws ConfigError(2) YAML 语法错误 / schema 校验失败（含文件路径）。
