@@ -62,6 +62,8 @@ learning:
 
 注意 `profile.yaml` 这一侧目前仍**只接受四个内置 id**——第三方 target 能不能写进本文件，取决于外部适配器加载方案（roadmap Phase 3「适配器插件化」第二层）如何落地。
 
+`templates` 里能填哪些 id，取决于 user 层 `sources.json` 中登记且**已启用**的源（`sources.json` 与 `store\` 恒在 user 层）。`aforge init` 默认注册的官方模板源是**禁用**态，启用方式、pin 策略与离线行为见 [命令速查](commands.md#官方模板源默认注册默认禁用)。
+
 ## mcp
 
 ```yaml

@@ -12,6 +12,8 @@
  * - update：OfflineError 检查同上（§7.8 source update 失败码 5）；
  *   git fetch ref + checkout FETCH_HEAD + rev-parse 回写 commit（前进语义：
  *   分支 / 标签 ref 会前移，ref 为 sha 时 FETCH_HEAD 恒等于该 sha 故不动）；
+ * - materializeGitSource：**已登记但无缓存**的 git 源首次拉取（默认注册的官方源
+ *   走这条，见 `./official`）；已有缓存时零网络返回；
  * - remove：删登记 + **删除 store\<id\> 缓存**（M8 决策：缓存随登记回收，
  *   避免孤儿目录；重新 add 即可恢复）；
  * - manifest.yaml 解析（§4.5）供 template/skill 清单消费。
@@ -25,6 +27,9 @@
  * 模块划分（本文件只留 CRUD 流程编排与 manifest 解析）：
  * - `store`：sources.json 登记表读写、`<userSoT>\store\<id>` 路径推导，以及
  *   §10 的 id / url / ref / store 边界守卫（决定"往哪写盘、给 git 传什么参数"）。
+ * - `official`：默认注册项常量表与其播种 / 启停（`enabled` 位的唯一写入方）。
+ *   它单向依赖 `store`，与本文件同级、互不 import——"官方源是哪几条、什么时候进
+ *   登记表"与"怎么 clone / pin"是两种变化速率不同的关注点。
  *
  * 这些符号在此 re-export：既有调用方（commands/assets/source.ts、sources/skill.ts、
  * sources/template.ts 与测试）继续从 `./manager` 单点 import，拆分不改变对外导出面。
@@ -52,6 +57,7 @@ import {
   type SourceManagerContext,
   saveSources,
   sourceStoreDir,
+  sourcesFilePath,
 } from './store';
 
 export {
@@ -64,6 +70,7 @@ export {
   type SourceManagerContext,
   STORE_DIR,
   sourceStoreDir,
+  sourcesFilePath,
 } from './store';
 
 /** add 结果。 */
@@ -120,6 +127,58 @@ function assertNotOffline(env: EnvSnapshot, operation: string): void {
   }
 }
 
+/**
+ * clone 到 store 并 pin 到 ref，返回落定的 commit（§7.6 pin 流程的单一实现）。
+ *
+ * 序列：clone --depth 1（默认分支）→ fetch --depth 1 origin \<ref\> →
+ * checkout --detach FETCH_HEAD → rev-parse HEAD。
+ * （分支 / 标签 / commit sha 统一走 fetch+FETCH_HEAD 路径；sha 依赖远端
+ * allowReachableSHA1InWant，GitHub 支持。）
+ *
+ * addGitSource 与 materializeGitSource 共用：前者是"登记同时拉取"，后者是
+ * "登记在先、内容后补"（默认注册的官方源走这条）。两处若各写一遍 git 序列，
+ * pin 语义就会有两个事实源。
+ *
+ * 调用方须已校验 url / ref / id（本函数只做 store 边界的纵深防御断言）。
+ *
+ * **中途失败必清目录**：clone 成功而后续任一步失败时，`store\<id>` 里留下的是
+ * **远端默认分支**的内容且 commit 未落定；凡以「目录存在」判"已就绪"的调用点都会
+ * 零网络返回这份未 pin 的内容，且不会自愈。清理是 best-effort（原错误优先）。
+ */
+async function clonePinned(
+  ctx: SourceManagerContext,
+  args: { url: string; ref: string; storeDir: string },
+): Promise<string> {
+  assertWithinStore(ctx, args.storeDir);
+  await mkdirp(ctx.host, path.dirname(args.storeDir));
+  // 孤儿缓存（登记已删但目录残留 / 上次 clone 中断）清掉重 clone
+  if (await ctx.host.exists(args.storeDir)) {
+    await ctx.host.rm(args.storeDir);
+  }
+
+  try {
+    await gitMust(ctx, ['clone', '--depth', '1', '--', args.url, args.storeDir], { what: 'clone' });
+    await gitMust(ctx, ['fetch', '--depth', '1', 'origin', args.ref], {
+      cwd: args.storeDir,
+      what: 'fetch',
+    });
+    await gitMust(ctx, ['checkout', '--detach', 'FETCH_HEAD'], {
+      cwd: args.storeDir,
+      what: 'checkout',
+    });
+    return (
+      await gitMust(ctx, ['rev-parse', 'HEAD'], { cwd: args.storeDir, what: 'rev-parse' })
+    ).trim();
+  } catch (err) {
+    try {
+      await ctx.host.rm(args.storeDir);
+    } catch {
+      // best-effort：清理失败最多留下与修复前等同的残骸，原错误优先
+    }
+    throw err;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // CRUD
 // ---------------------------------------------------------------------------
@@ -163,10 +222,8 @@ export async function addLocalSource(
  * 登记并 clone git 源（§7.6 / §4.4）：
  * OfflineError(5) → ConfigError(2)（缺 --ref / url·ref·id 非法）→ GenericError(1)（git 失败）。
  *
- * pin 流程：clone --depth 1（默认分支）→ fetch --depth 1 origin \<ref\> →
- * checkout --detach FETCH_HEAD → rev-parse HEAD 记录 commit。
- * （分支 / 标签 / commit sha 统一走 fetch+FETCH_HEAD 路径；sha 依赖远端
- * allowReachableSHA1InWant，GitHub 支持。）
+ * pin 流程见 clonePinned（clone --depth 1 → fetch ref → checkout FETCH_HEAD →
+ * rev-parse 记录 commit），与 materializeGitSource 共用同一实现。
  *
  * 参数注入防护（§10）：url/ref/id 一律拒绝以 `-` 开头，ref 另过白名单；
  * clone 的位置参数前加 `--` 作纵深防御。
@@ -200,19 +257,7 @@ export async function addGitSource(
   }
 
   const storeDir = sourceStoreDir(ctx, id);
-  assertWithinStore(ctx, storeDir);
-  await mkdirp(ctx.host, path.dirname(storeDir));
-  // 孤儿缓存（登记已删但目录残留）清掉重 clone
-  if (await ctx.host.exists(storeDir)) {
-    await ctx.host.rm(storeDir);
-  }
-
-  await gitMust(ctx, ['clone', '--depth', '1', '--', input.url, storeDir], { what: 'clone' });
-  await gitMust(ctx, ['fetch', '--depth', '1', 'origin', ref], { cwd: storeDir, what: 'fetch' });
-  await gitMust(ctx, ['checkout', '--detach', 'FETCH_HEAD'], { cwd: storeDir, what: 'checkout' });
-  const commit = (
-    await gitMust(ctx, ['rev-parse', 'HEAD'], { cwd: storeDir, what: 'rev-parse' })
-  ).trim();
+  const commit = await clonePinned(ctx, { url: input.url, ref, storeDir });
 
   const source: GitSource = {
     id,
@@ -230,6 +275,73 @@ export async function addGitSource(
 /** 列出全部登记的源。 */
 export async function listSources(ctx: SourceManagerContext): Promise<Source[]> {
   return loadSources(ctx);
+}
+
+/**
+ * 为**已登记但尚无缓存**的 git 源补齐内容（首次拉取），并回写 pin 的 commit。
+ *
+ * 存在的理由：默认注册的官方源（见 `./official`）在 `init` 时**只登记不拉取**——
+ * init 必须零网络，否则离线安装的第一条命令就会挂在 clone 上。于是登记表里会出现
+ * 「有 url/ref、无 commit、store 下无目录」的条目，本函数就是把它补成可用状态的那一步。
+ *
+ * 与 updateSource 的分工：update 是"已有缓存，前进到 ref 当前指向"；本函数是
+ * "还没有缓存，按 ref 拉一份"。两者共用 clonePinned 的 pin 序列，故 commit 语义一致。
+ * **已就绪**时本函数不做任何网络操作直接返回（幂等），调用方无需先判存在性；判据是
+ * 「store 目录存在 **且** 登记项有 commit」而非只判目录存在（见下方注释）。
+ *
+ * @throws ConfigError(2) id 不存在 / local 源 / 缺 url 或 ref/commit / ref 非法。
+ * @throws OfflineError(5) AGF_OFFLINE=1（§7.8）。
+ * @throws GenericError(1) git 调用失败（网络 / 凭证 / ref 不存在）。
+ */
+export async function materializeGitSource(
+  ctx: SourceManagerContext,
+  id: string,
+): Promise<UpdateSourceResult> {
+  const sources = await loadSources(ctx);
+  const source = sources.find((s) => s.id === id);
+  if (source === undefined) {
+    throw new ConfigError(`源不存在: ${id}`, {
+      hint: '运行 aforge source list 查看已登记的源',
+      details: { id },
+    });
+  }
+  if (source.type === 'local') {
+    throw new ConfigError(`local 源无需拉取: ${id}（path: ${source.path}）`, {
+      hint: 'local 源直接读路径实时生效',
+      details: { id, path: source.path },
+    });
+  }
+
+  const storeDir = sourceStoreDir(ctx, id);
+  assertWithinStore(ctx, storeDir);
+  // 「已就绪」＝ 目录存在 **且** 登记项有 commit。只判目录存在会把一次中途失败的
+  // clone 残留（内容为远端默认分支、commit 为空）永久当成缓存：此后每次调用都零网络
+  // 返回，doctor 也照报"缓存就绪"，而它渲染出来的规则与 pin 无关。commit 缺失时
+  // 落到下方的完整 pin 序列（clonePinned 会先清掉残留目录）。
+  const cached = source.commit;
+  if (cached !== undefined && cached.trim() !== '' && (await ctx.host.exists(storeDir))) {
+    return { source, commit: cached, file: sourcesFilePath(ctx), storeDir };
+  }
+
+  assertNotOffline(ctx.env, `拉取源 ${id}`);
+  // sources.json 可被手工编辑：url / ref 同样要过守卫，避免注入 git 选项
+  assertGitUrl(source.url);
+  const ref = source.ref ?? source.commit;
+  if (ref === undefined || ref.trim() === '') {
+    throw new ConfigError(`git 源缺少 ref/commit，无法拉取: ${id}`, {
+      hint: 'sources.json 手工编辑损伤；请 aforge source remove 后重新 add（--ref 指定）',
+      details: { id, source },
+    });
+  }
+  assertGitRef(ref);
+
+  const commit = await clonePinned(ctx, { url: source.url, ref, storeDir });
+  const updated: GitSource = { ...source, commit };
+  const file = await saveSources(
+    ctx,
+    sources.map((s) => (s.id === id ? updated : s)),
+  );
+  return { source: updated, commit, file, storeDir };
 }
 
 /**

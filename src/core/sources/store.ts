@@ -42,7 +42,15 @@ export interface SourceManagerContext {
 // 基础设施：sources.json 读写 / id 派生
 // ---------------------------------------------------------------------------
 
-function sourcesFilePath(ctx: SourceManagerContext): string {
+/**
+ * sources.json 的绝对路径（`<userSoT>\sources.json`）。
+ *
+ * 导出而非文件私有：`./official` 的默认注册要判断"这张登记表是否**存在过**"
+ * （见 seedDefaultSources 的 seed 语义），而 setSourceEnabled 要在不写盘的
+ * no-op 分支里也回报文件路径。两处都只该拿到同一个口径的路径，不该各自
+ * `path.join(userSoTRoot, 'sources.json')`。
+ */
+export function sourcesFilePath(ctx: SourceManagerContext): string {
   return path.join(ctx.userSoTRoot, SOURCES_FILE);
 }
 

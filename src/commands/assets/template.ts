@@ -3,8 +3,11 @@
  *
  * `aforge template list | enable <id> | disable <id>`（三条子命令均支持 `--json`，§6.2）：
  * - list：内置 base/default（恒可用，§3.4；渲染层第 4 层恒渲染）+ 两层 SoT
- *   templates\ + 各源 manifest.templates 清单；enabled = 是否在生效
- *   profile.templates（resolveEffectiveConfig 两层合并后）中；
+ *   templates\ + 各源清单（manifest.templates，无 manifest 时回落扫描源根
+ *   `templates\**.md`）；enabled = 是否在生效 profile.templates
+ *   （resolveEffectiveConfig 两层合并后）中。**注意 list 不是纯只读命令**：已启用但
+ *   尚无可用缓存的 git 源会在此按需首次拉取（离线 / CI / 拉取失败一律降级为 note 行，
+ *   不影响其余清单）；`--json` 输出 `{ items, warnings }`，降级说明对脚本同样可见；
  * - enable/disable：**只改 profile.templates 数组**（§7.6），编辑目标层
  *   （AGF_SCOPE > project 在用 > user 在用）自己的 profile.yaml。
  */
@@ -19,6 +22,7 @@ import {
   setTemplateEnabled,
   type TemplateContext,
   type TemplateListItem,
+  type TemplateListResult,
 } from '../../core/sources/template';
 import { getUi, type Ui } from '../../infra/ui';
 import { type CommandContext, defaultCommandContext, printJson } from '../_shared/context';
@@ -52,7 +56,7 @@ async function buildTemplateContext(ctx: TemplateCommandContext): Promise<Templa
 }
 
 /** list 核心逻辑（可注入、不打印）。 */
-export async function runTemplateList(ctx: TemplateCommandContext): Promise<TemplateListItem[]> {
+export async function runTemplateList(ctx: TemplateCommandContext): Promise<TemplateListResult> {
   return listTemplates(await buildTemplateContext(ctx));
 }
 
@@ -83,14 +87,20 @@ export function registerTemplateCommand(program: Command): void {
     .description('list builtin + SoT + source templates with enabled state')
     .option('--json', 'machine-readable output (Spec 6.2)')
     .action(async (options: { json?: boolean }, command: Command) => {
-      const items = await runTemplateList(defaultCommandContext());
+      const result = await runTemplateList(defaultCommandContext());
       if (resolveJsonFlag(command, options.json)) {
-        printJson(items);
+        // `{ items, warnings }` 而非裸数组：list 会为已启用但无缓存的 git 源发起 clone
+        // （不限官方源），warnings 是"本次清单缺了谁、为什么"的唯一出口。只输出 items
+        // 的话，脚本化调用既看不出清单被降级，也不知道自己刚触发了一次网络访问
+        printJson({ items: result.items, warnings: result.warnings });
         return;
       }
       const ui = getUi();
-      const lines = items.map((item) => templateLine(item, ui));
-      lines.push('', ui.dim(`${items.length} template(s)`));
+      const lines = result.items.map((item) => templateLine(item, ui));
+      lines.push('', ui.dim(`${result.items.length} template(s)`));
+      for (const warning of result.warnings) {
+        lines.push(ui.yellow(`note: ${warning}`));
+      }
       console.log(lines.join('\n'));
     });
 

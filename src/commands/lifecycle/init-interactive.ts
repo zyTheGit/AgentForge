@@ -48,6 +48,7 @@ import {
   resolveFreshSoTRoot,
   rollbackMaterialized,
   type SoTFile,
+  seedDefaultSourcesForInit,
   sotSubdirPaths,
 } from './init-scaffold';
 import { printSyncResult } from './sync';
@@ -73,6 +74,10 @@ export interface InitInteractiveResult {
   readonly cancelled: boolean;
   /** 第⑤步末尾是否执行了 sync（cancelled 恒为 false）。 */
   readonly synced: boolean;
+  /** 播种进 user 层 sources.json 的默认注册源 id（取消时恒为空——未 commit 不播种）。 */
+  readonly registeredSources: readonly string[];
+  /** 播种失败原因（成功 / 跳过 / 取消 → null）。 */
+  readonly sourcesWarning: string | null;
 }
 
 /** 探测确认的三种动作（Spec §7.1.1-3）。 */
@@ -308,6 +313,8 @@ async function runInitInteractiveFlow(
       detection,
       cancelled: true,
       synced: false,
+      registeredSources: [],
+      sourcesWarning: null,
     };
   }
 
@@ -328,6 +335,10 @@ async function runInitInteractiveFlow(
   recordCreated(created, { createdFiles, createdDirs });
   // 过了这一行 SoT 才算有效初始化：此后的取消（「立即 sync？」处 Ctrl-C）不得回滚
   created.committed = true;
+
+  // 官方模板源播种（零网络、best-effort，与静默 runInit 同一实现）。刻意放在
+  // committed 之后：写入确认处选 n 时不该在 user 层留下任何东西
+  const seeded = await seedDefaultSourcesForInit(ctx, env);
 
   // ---- ⑤末：可选立即 sync（Spec §7.1-4）----
   const doSync = await ctx.prompt.confirm('立即执行 aforge sync 投影到目标 Agent？');
@@ -354,6 +365,8 @@ async function runInitInteractiveFlow(
     detection,
     cancelled: false,
     synced,
+    registeredSources: seeded.registeredSources,
+    sourcesWarning: seeded.sourcesWarning,
   };
 }
 
