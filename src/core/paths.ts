@@ -359,6 +359,49 @@ export function stripLongPathPrefix(p: string): string {
 }
 
 /**
+ * 记账路径的比较键：剥长路径前缀 + 分隔符统一为 `/` + **无条件**折叠大小写。
+ *
+ * 与 samePath 的区别：samePath 按 `os.platform` 决定是否折叠大小写，而 sync-meta 里的
+ * 路径是**上一轮进程**写下的，写它的进程未必与当前进程处在同一路径语义下：
+ * - WSL 里 `/mnt/c` 报 `process.platform === 'linux'`，但底层 drvfs 大小写不敏感；
+ * - Windows 上 `process.cwd()` 的盘符大小写随启动方式漂移（`c:\x` 与 `C:\x` 同一文件）。
+ *
+ * 于是"按平台决定折不折"这件事本身不可靠——差集比对一律折叠。
+ *
+ * 代价：POSIX 上仅大小写不同的两个真实文件会被判成同一项，prune 会漏删其中之一。
+ * 失败方向因此从「误删活产物」（数据丢失，issue #67）变成「漏删残留」（由调用方报成
+ * skip，用户可见可手删）。这个不对称是刻意的。
+ */
+export function pathIdentityKey(p: string): string {
+  return stripLongPathPrefix(p)
+    .replace(/[\\/]+/g, '/')
+    .toLowerCase();
+}
+
+/** 绝对路径的书写形态。`other` = 相对路径等无法判定归属的取值。 */
+export type PathFlavor = 'win32' | 'posix' | 'other';
+
+/**
+ * 路径的书写形态：盘符 / UNC → `win32`；`/` 打头 → `posix`；其余 → `other`。
+ *
+ * 用来识别「这条记账是另一平台写下的」：同一个 SoT 被 Windows 与 WSL 交替 sync 时，
+ * 两侧记下的绝对路径形态不同（`C:\...` vs `/mnt/c/...`），当前进程对另一侧的路径
+ * 既 stat 不到也不该删——必须与「用户手删了产物」区分开（issue #68）。
+ */
+export function pathFlavorOf(p: string): PathFlavor {
+  const bare = stripLongPathPrefix(p);
+  if (/^[a-zA-Z]:[\\/]/.test(bare) || bare.startsWith('\\\\')) {
+    return 'win32';
+  }
+  return bare.startsWith('/') ? 'posix' : 'other';
+}
+
+/** 当前平台写出的绝对路径应有的形态。 */
+export function nativePathFlavor(os: OsContext): PathFlavor {
+  return os.platform === 'win32' ? 'win32' : 'posix';
+}
+
+/**
  * 目标路径是否落在任一白名单根内（win32 大小写不敏感）。
  *
  * 用 `relative` 而不是字符串前缀：前缀比较会把 `C:\a-b` 判成在 `C:\a` 内。

@@ -14,6 +14,9 @@
  *    手工编辑过的产物宁可残留，也不能静默吞掉；
  * 3. **子集 sync 只管本次的 target**：`--targets claude` 不该清理 opencode 的
  *    产物（它们本轮没重写，差集算出来必然"多余"）。未参与的 target 记账原样保留。
+ * 4. **路径身份不按字节比**：记账是上一轮进程写下的，拼写可能与本轮不同（盘符大小写
+ *    漂移、WSL 与 Windows 交替 sync）。差集比对走 pathIdentityKey，形态不属于本平台的
+ *    记账既不删也不丢弃——详见 pruneArtifacts 的 JSDoc（issue #67 / #68）。
  *
  * `artifacts` / `mcpServers` 字段缺席（老版本写的 sync-meta）→ 本轮只记账不删，
  * 首次升级不会把一批没有记录的既有产物当成"不该存在"。
@@ -26,6 +29,7 @@
  */
 import { atomicWrite, normalizeLineEnding, sha256Hex } from '../../infra/fsutil';
 import type { SyncArtifact, SyncMeta } from '../../schema';
+import { nativePathFlavor, type OsContext, pathFlavorOf, pathIdentityKey } from '../paths';
 import { enabledMcpServerNames } from './projectors/mcp-transport';
 import type { PlannedTarget } from './sync-prepare';
 import { backupTarget, recordDelete, recordWrite, type SyncTransaction } from './sync-transaction';
@@ -113,14 +117,18 @@ export async function pruneStaleProjections(
 
   const pruned: SyncPrunedEntry[] = [];
   const skipped: SyncPruneSkip[] = [];
+  // 另一平台写下的记账：本进程既寻址不到也不该删，但记录必须留着（详见 pruneArtifacts）
+  const retained: SyncArtifact[] = [];
 
   await pruneArtifacts(
     tx,
     previous?.artifacts,
     currentArtifacts,
     plannedTargetIds,
+    ctx.os,
     pruned,
     skipped,
+    retained,
   );
   await pruneMcpServers(tx, previous?.mcpServers, currentServers, planned, ctx, pruned, skipped);
 
@@ -131,6 +139,7 @@ export async function pruneStaleProjections(
     // 否则下一轮全量 sync 会因为"没记过"而永远不清理它们）
     artifacts: [
       ...(previous?.artifacts ?? []).filter((a) => !plannedTargetIds.has(a.targetId)),
+      ...retained,
       ...currentArtifacts,
     ],
     mcpServers: currentServers,
@@ -141,21 +150,53 @@ export async function pruneStaleProjections(
  * 整文件产物的差集删除：记账里有、本轮不再产出的 write 项。
  *
  * `recorded === undefined`（老版本 sync-meta 无该字段）→ 整段跳过，只记账。
+ *
+ * 路径比对一律走 pathIdentityKey（无条件折叠大小写与分隔符），**不是**裸字符串相等：
+ * 上一轮的记账可能由另一个进程在另一种路径拼写下写成（Windows 盘符大小写漂移、
+ * WSL 的 drvfs 大小写不敏感），裸比较会把"本轮刚写出来的产物"判成"上轮遗留"并删掉
+ * （issue #67：磁盘上只剩 SoT，而记账声称产物都在）。
+ *
+ * 折叠命中但拼写不同 → 不删、报 skip：这一轮的记账会以本轮拼写重写，一次自愈。
+ *
+ * @param retained 出参：另一平台写下的记账原样留在 sync-meta 里（issue #68）。
+ *   若跟着「本轮没产出」的口径把它们从记账里抹掉，那些产物就再也没人认领——
+ *   下次在原平台上 sync 时因为"没记过"而永远不清理，成为无声孤儿。
  */
 async function pruneArtifacts(
   tx: SyncTransaction,
   recorded: readonly SyncArtifact[] | undefined,
   current: readonly SyncArtifact[],
   plannedTargetIds: ReadonlySet<string>,
+  os: OsContext,
   pruned: SyncPrunedEntry[],
   skipped: SyncPruneSkip[],
+  retained: SyncArtifact[],
 ): Promise<void> {
   if (recorded === undefined) {
     return;
   }
-  const keep = new Set(current.map((a) => a.path));
+  const keep = new Set(current.map((a) => pathIdentityKey(a.path)));
+  const keepVerbatim = new Set(current.map((a) => a.path));
+  const native = nativePathFlavor(os);
   for (const artifact of recorded) {
-    if (keep.has(artifact.path) || !plannedTargetIds.has(artifact.targetId)) {
+    if (keepVerbatim.has(artifact.path) || !plannedTargetIds.has(artifact.targetId)) {
+      continue;
+    }
+    if (keep.has(pathIdentityKey(artifact.path))) {
+      skipped.push({
+        kind: 'artifact',
+        path: artifact.path,
+        reason: '记账拼写与本轮产物仅大小写 / 分隔符不同，无法确认是否为同一文件，已保留',
+      });
+      continue;
+    }
+    if (pathFlavorOf(artifact.path) !== native) {
+      retained.push(artifact);
+      skipped.push({
+        kind: 'artifact',
+        path: artifact.path,
+        reason: `记账路径是 ${pathFlavorOf(artifact.path)} 形态（当前平台 ${native}），本进程无法寻址，已保留记录待原平台清理`,
+      });
       continue;
     }
     if (!(await tx.host.exists(artifact.path))) {

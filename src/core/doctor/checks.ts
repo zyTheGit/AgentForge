@@ -29,6 +29,8 @@
  * 15. 默认注册源（官方模板源）：登记 / 启用 / 缓存 / pin 状态（只读 fs、零网络，恒 ok|warn）；
  * 16. 声明式适配器（Phase 3 第二层 / issue #53）：已加载的第三方 target、project 层
  *     未授权而被忽略的（warn）、加载失败的（error，退出码按成因分 1/2）。
+ * 17. sync-meta 记账的整文件产物是否还在磁盘上（§7.6 / issue #67：缺失 → warn；
+ *     路径形态不属于本平台 → 单独一条 warn，本进程无法核对）。
  *
  * 设计原则：
  * - 单项失败不中断整体：逐项收集（区分于 sync 的 fail-fast），一次运行报告全部问题。
@@ -55,6 +57,7 @@
  * - `check-environment`：declared vs detected / OneDrive / skills/ 下的 symlink。
  * - `check-sources`：源登记表与默认注册的官方模板源（只读 fs、零网络、恒不抬退出码）；
  * - `check-adapters`：声明式适配器的加载状态（只读进程级报告，零 IO）。
+ * - `check-artifacts`：sync-meta 记账的整文件产物与磁盘的一致性（§7.6）。
  *
  * 类型与 doctorExitCode 在此 re-export：既有调用方（commands/lifecycle/doctor、测试）继续从
  * `./checks` 单点 import，拆分不改变对外导出面。
@@ -66,6 +69,7 @@ import type { EnvSnapshot } from '../env';
 import { ExitCode } from '../errors';
 import type { OsContext } from '../paths';
 import { checkDeclarativeAdapters } from './check-adapters';
+import { checkRecordedArtifacts } from './check-artifacts';
 import {
   checkInitialization,
   checkYamlFiles,
@@ -236,6 +240,9 @@ async function runConfigDependentChecks(
 
   // ---- sync-meta 读取（损坏 → error(2)；不存在 → 信息性 ok）----
   const syncMeta = await readSyncMetaForDoctor(host, results, roots, config);
+
+  // ---- 记账的整文件产物是否还在磁盘上（§7.6：缺失 / 另一平台形态 → warn）----
+  results.push(...(await checkRecordedArtifacts(host, os, syncMeta)));
 
   // ---- 有效 scope 的投影 rootDir（user scope 需要用户目录，§8.5）----
   const rootDir = config.effectiveScope === 'project' ? cwd : env.userProfile;
