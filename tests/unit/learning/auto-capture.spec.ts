@@ -116,4 +116,9 @@ describe('LEARNING_PROTOCOL_SECTION — 固定正文（§5.2 / §7.4 五条护�
     // biome-ignore lint/suspicious/noControlCharactersInRegex: 断言正文仅含 ASCII，字符类必须显式覆盖控制字符区间（\x00-\x1F）
     expect(LEARNING_PROTOCOL_SECTION).toMatch(/^[\x00-\x7F]*$/);
   });
+
+  it('说明 scope 默认 project、跨项目才用 --scope user（缺了 agent 会猜）', () => {
+    expect(LEARNING_PROTOCOL_SECTION).toContain('--scope user');
+    expect(LEARNING_PROTOCOL_SECTION).toMatch(/project-scoped by default/i);
+  });
 });

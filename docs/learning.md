@@ -212,6 +212,26 @@ learning:
 
 **声明驱动，不做探测**：写不写钩子只看 `profile.targets` 与各 target 的能力声明，不看本机装没装 codex、装在哪。同一份 SoT 在两台机器上产出同样的投影产物与同一个 `contentHash`。
 
+### 手工挂载：把协议塞进没有落点的三家
+
+AgentForge 不替 claude / opencode / pi 装钩子（理由见上表与本页末的前置条件），但那条命令本身是公开的只读旁路，你可以自己挂：
+
+```powershell
+aforge learn --print-protocol                      # 打印协议正文（只读：不解析配置、不写盘、不取锁）
+aforge learn --print-protocol | Set-Clipboard      # 粘进你自己的系统提示 / 会话模板
+aforge learn --print-protocol > .\my-hooks\session-start.txt
+```
+
+按 target 的挂法：
+
+- **claude**：自己写 `.claude\settings.json` 的 `hooks.SessionStart` 调这条命令。AgentForge 不写这个文件，所以你手写的部分不会被 sync 覆盖也不会被 prune 掉——这正是它不自动接管的另一面；
+- **opencode / pi**：会话事件只对 plugin / extension **代码**开放，AgentForge 不投放可执行代码；要挂就在你自己的 plugin / extension 里 exec 这条命令；
+- **任何 target**：最省事的做法是把输出粘到规则文件 marker **之外**的区域（marker 内会被下次 sync 整体替换）。
+
+**但先考虑 `auto_capture: prompt`。** 那一档由 AgentForge 把同一份正文渲染进 marker 区间，一次 sync 覆盖全部 target，无需你维护任何钩子——三家的推荐路径是它，手工挂载只在你已经有自己的钩子体系、且需要「每次会话开头确定性注入」时才值得。
+
+**不要把这条命令的输出喂回 `aforge learn`。** `--print-protocol` 打印的是**给 agent 看的指令**，`aforge learn --file -` 读的是**要沉淀的条目正文**；把前者管道进后者只会把协议本身存成一条 learning。两者的正确衔接是：协议正文里已经写着让 agent 自己去执行 `aforge learn --file -`。
+
 ### 另外三家将来要支持的前置条件
 
 记在这里是为了说明"为什么现在不做"不等于"以后也不做"，以及要做的话先得解决什么。

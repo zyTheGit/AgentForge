@@ -4,11 +4,11 @@
 |----|------|
 | 产品名称 | AgentForge |
 | CLI | `aforge` |
-| 文档版本 | 1.1 |
-| 状态 | 会议审核修订 |
+| 文档版本 | 1.2 |
+| 状态 | 与 PRD 2.0 同 PR 修订（§12 降为阶段→技术项映射） |
 | 平台优先级 | **Windows 一等公民** |
-| 配套文档 | `AgentForge-PRD.md` |
-| 最后更新 | 2026-08-30 |
+| 配套文档 | `AgentForge-PRD.md`（**2.0**） |
+| 最后更新 | 2026-09-03 |
 
 ---
 
@@ -930,13 +930,18 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 
 ---
 
-## 12. 分阶段（技术）
+## 12. 分阶段（技术映射）
 
-| 阶段 | 范围 |
-|------|------|
-| Phase 1 | 本文档 MVP：四投影、源 local/git、learn/promote、`learning.auto_capture: prompt`（§7.4）、Commands 投影（§8.8）、Windows 门禁 |
-| Phase 2 | MCP 对齐、import 增强、更多模板；其中 Commands 的命名空间与 `$1..$9` 归一化（§8.8.2）已提前落地。**不含 `skills.copy_mode: symlink`**——已决定不实现，理由见 §4.2 |
-| Phase 3 | Learning 启发式、`auto_capture: hook` 的其余 target（claude `settings.json`、opencode plugin / pi extension 适配；codex 的 `hooks.json` 已落地，§7.4）、适配器插件化、WSL 说明 |
+> **本节不是阶段划分的权威。** 阶段名与阶段边界的唯一权威是 [PRD §10](AgentForge-PRD.md#10-分阶段路线)；本节只做「PRD 阶段名 → 本 Spec 技术项」的映射。**阶段名或阶段边界变更须与 PRD §10 在同一 PR 内联改**，禁止单侧修改。
+
+| PRD 阶段 | 对应技术项（本 Spec 章节） |
+|----------|---------------------------|
+| Phase 1 — MVP | 四投影、源 local/git、learn/promote、`learning.auto_capture: prompt`（§7.4）、Commands 投影（§8.8）、Windows 门禁（§11.2） |
+| Phase 2 | MCP 对齐（§8.7）、import 增强、更多模板；Commands 命名空间与 `$1..$9` 归一化（§8.8.2）已提前落地。**不含 `skills.copy_mode: symlink`**——已决定不实现，理由见 §4.2 |
+| Phase 3 | Learning 启发式（§7.4）、`auto_capture: hook` 的 codex `hooks.json` 落地（§7.4）、适配器插件化（§4.2 / §8.9）、WSL 说明 |
+| Phase 4 — Learning 捕获 | 捕获路径的可发现性（`learn --print-protocol` 与 `learn --file -` 的衔接、`prompt` 档协议正文）、`scripts/` 计时脚本入库（供 PRD §8 L1 主证据使用）。**claude 侧 hook 落点不在此阶段**：issue #56 已决议不做，重启需先满足 `docs/learning.md` 记录的四条安全前提 |
+| Phase 5 — Skills 主打 | 无新增技术面；准入前置是 codex 显式 `$name` 调用的实机验证（PRD §8 L1 第 6 条）。MCP transport（§8.7）归「交付保障」，只做维护 |
+| Phase 6 — target 扩展 | 条件解冻（PRD §8 L4）；解冻后仅以数据-only 声明式适配器（§4.2 的能力边界）扩 target，不开放可执行代码投放 |
 
 ---
 

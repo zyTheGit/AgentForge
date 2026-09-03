@@ -114,6 +114,9 @@ export function rendersLearningProtocol(effective: AutoCapture): boolean {
  * - 明说命令被拒时不要重试：CI 下 store 守卫会拒掉写入（ConfigError(2)，护栏 3），
  *   而正文与环境无关、照样渲染，不加这一句 agent 可能对着注定失败的命令反复重试；
  * - 纯 ASCII 命令行，Windows 终端可直接粘。
+ *
+ * 另有两条**可用性**约束（不是护栏，但缺了 agent 会问或猜错）：一次调用只记一条；
+ * scope 默认 project，跨项目的约定才提示用 `--scope user`。
  */
 export const LEARNING_PROTOCOL_SECTION = `${LEARNING_PROTOCOL_HEADING}
 
@@ -130,6 +133,9 @@ aforge learn --file -
 Rules for what you write:
 
 - Structured summary only: one convention per entry, phrased as an instruction.
+- One entry per invocation: run the command again for a second convention.
+- Entries are project-scoped by default. Add \`--scope user\` only when the
+  convention holds across all of this user's projects.
 - Never paste raw session transcripts, tool output, secrets or tokens.
 - Recording does not activate the rule. Projection stays a human step
   (\`aforge sync\`), so do not run it yourself.
