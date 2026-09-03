@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |----|------|
 | 文档性质 | 方向评审建议（非决议——§2.3 / §2.3.1 表里的「建议裁决」列是评审意见，须按 §4.2 的流程落地后才生效） |
-| 评审日期 | 2026-09-03（第二轮：§3.1 统计口径、§2.1 事实修正、§2.3.2 表述对齐；第三轮：双评审人会议逐条达成一致，结论并入 §1 / §2.1 / §3.1 / §4） |
+| 评审日期 | 2026-09-03（第二轮：§3.1 统计口径、§2.1 事实修正、§2.3.2 表述对齐；第三轮：双评审人会议逐条达成一致，结论并入 §1 / §2.1 / §3.1 / §4；三评后补：内置补缺模板口径，见 §2.1 / §2.2 / §4.1） |
 | 触发背景 | Phase 1–3 全部完成（见 [roadmap](roadmap.md)），PRD 基线（v1.1）早于实际交付，问题陈述需重审 |
 | 前置动作 | 未做：PRD §8 L1 门禁要求的用户验收测试无执行记录（该门禁的样本量与执行口径本档建议调整，见 §3.1） |
 
@@ -35,6 +35,7 @@ PRD §1.4 差异化中的两项同样不随标准收敛而贬值：
 | MCP transport 可靠性（**交付保障，不作主叙事**） | 三态逐格归一化 + 两格显式降级已实现（`MCP_TRANSPORT_MATRIX`），它保的是「不静默失真」的信任，不是获客叙事 | 只做维护；[#66](https://github.com/zyTheGit/AgentForge/issues/66)（pi × `sse` 实机连接）随时可做。**不与 Skills 合并宣称「均已验证」** |
 | sync 事务化内核（marker 保护、回滚、幂等、`doctor`、两级合并） | 信任基石——用户敢用是因为「不碰我的手写内容」 | 只做维护与打磨，不加新面 |
 | CI 漂移门禁 | 团队/企业故事的入口，成本低收益高 | 已有雏形（[ci](ci.md)），保持跟进上游 CLI 配置变化 |
+| 内置变量补缺模板（`base/tools` / `base/context`） | **探测承诺了但没兑现**：`tools`（shell / git / container）与 `habits.detected` 快照（monorepo / CI 等）进了变量视图，但 `base/default` 只渲染 Toolchain / Style / Verification / Forbidden 四节（[habits](habits.md#核心规则声明字段优先于-detected)）——用户视角是「init 说探测到了，投影规则里却一个字没有」。补 1–2 个**纯变量驱动**的内置模板即可接上循环，成本远低于改探测器，且直接提升新用户首次 sync 的获得感 | ① `base/tools`：渲染 `tools` 块（或并入 `base/default` 成 `base/full`）；② `base/context`：把 `detected` 快照渲染成「项目上下文」参考节（措辞是「检测到，仅供参考」，非规则）。**约束三条**：只做变量渲染、不写死任何个人工具断言（PRD §4.1 规则 1 的「变量渲染除外」边界）；**opt-in**——`init` 默认 `profile.templates` 不自动追加，默认投影保持极薄；**数量封顶 2–3 个**（每个都是发行包常量，改措辞 = 全用户投影变更）。**不带观点的内容包**（TDD 工作流、人格模板等）不在此列——那属 §2.3 已裁决放弃的生态路线。工程量约 2–3 个 PR，排在 §4.1「随时可做」，落地即解除 §2.2 的探测器冻结 |
 
 **本节两条红线（评审双方一致，不随分级调整）**
 
@@ -47,7 +48,7 @@ PRD §1.4 差异化中的两项同样不随标准收敛而贬值：
 |------|----------------|
 | `import` | 迁移是一次性事件；8 种识别规则已覆盖主要场景，停止扩充规则表 |
 | `bundle` | 功能完整即封版 |
-| 探测器扩充 | java/dotnet/monorepo/CI 四类探测自 Phase 2 起只写 `habits.detected`、不参与渲染（见 [roadmap](roadmap.md) Phase 2 与 [habits](habits.md#detected-快照结构)）——在「探测 → 渲染」打通之前，**不再新增任何探测器** |
+| 探测器扩充 | java/dotnet/monorepo/CI 四类探测自 Phase 2 起只写 `habits.detected`、不参与渲染（见 [roadmap](roadmap.md) Phase 2 与 [habits](habits.md#detected-快照结构)）——在「探测 → 渲染」打通之前，**不再新增任何探测器**。**解锁条件已明确化**：§2.1 的 `base/tools` / `base/context` 渲染模板落地即为「打通」，届时本条冻结自动解除（含补齐 `runtime.java` 等声明侧字段的定义） |
 | 声明式适配器 | 机制保留，能力面不再扩（`merge_toml`、scope 条件产出、自由 MCP 字段映射、会话钩子继续不开放）；是否解冻取决于 §3 的条件判断 |
 | WSL | 实测已完成（含「WSL 侧跑一轮完整 `aforge sync`」，`$HOME` 与 `/mnt/c` 两种落点各一轮，见 [platform](platform.md#wsl-互通)）；剩余一条「未实测」项（带 `metadata` 挂载时的权限行为）留在 platform，不再主动投入 |
 
@@ -114,8 +115,9 @@ PRD §8 L1 那条门禁至今零执行记录，仓库里既无计划书、问卷
 
 **随时可做（不阻塞主线）**
 
-5. [#66](https://github.com/zyTheGit/AgentForge/issues/66)（pi × `sse` 实机连接）、#54 中 WSL 侧完整 sync、CI 漂移门禁跟进；
-6. 并行采集 §3.1 的两条信号（计时脚本入库 + target 请求观察）。
+5. [#66](https://github.com/zyTheGit/AgentForge/issues/66)（pi × `sse` 实机连接。~~#54 中 WSL 侧完整 sync~~ 已实测完成——v0.2.3-rc.3，`$HOME` 与 `/mnt/c` 两种落点各一轮，见 [platform](platform.md#wsl-互通) 与 §2.2，#54 的该半可关闭）、CI 漂移门禁跟进；
+6. §2.1 的内置补缺模板（`base/tools` / `base/context`）：约 2–3 个 PR，落地即解除 §2.2 的探测器冻结；
+7. 并行采集 §3.1 的两条信号（计时脚本入库 + target 请求观察）。
 
 ### 4.2 决议流程（仓库无独立流程文档，照 symlink 先例）
 
