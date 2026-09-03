@@ -31,7 +31,7 @@ PRD §1.4 差异化中的两项同样不随标准收敛而贬值：
 | 投入项 | 理由 | 首要动作 |
 |--------|------|----------|
 | Learning 闭环（`learn` / `learnings` / `promote` / `auto_capture`） | 最深的护城河（另一项见 §1 列表第 2 条）。**待验证假设**：瓶颈在**捕获**不在管理——捕获不顺手，闭环不会跑起来，存储/打分/衰减做得再好都是空的。该假设目前无用户证据（§3.1 的信号尚未采集），因此首要动作只取不依赖上游能力的那几项 | ① 打磨 `prompt` 档协议正文（常量在 `src/core/learning/auto-capture.ts`）；② 提升 `aforge learn` 非 HTTP 通道的**可发现性**——stdin / `--file` / 免交互路径**均已实现**（`learn.ts`：无参数 TTY 交互、`--file <path>\|-`、非 TTY 报 ConfigError(2)），要补的是 README / docs 的管道示例（`--file -` 从 stdin 读的是**条目正文**；`--print-protocol` 输出的是给 agent 看的协议，两者不可对接）；③ 给无钩子能力的三家文档化 `learn --print-protocol` 的手工挂载写法（**文档项，不计入工程投入**）。**不含 claude 侧 hook 落点**——该项已随 issue [#56](https://github.com/zyTheGit/AgentForge/issues/56) 决议不做（理由见 [learning](learning.md#另外三家将来要支持的前置条件)，登记见 [roadmap](roadmap.md) Phase 3）；要重启得先给出「收益 > 风险面」的新证据，learning.md 记录的四条安全条件（白名单键路径、只增不减、条目带标记、用户手改处置）仍是硬门槛 |
-| Skills 跨 CLI 分发（**主叙事**） | 用户感知最强的第二叙事；主路径可用（四家投影、`expose_as_command`、`on_demand` 均已实现）；SKILL.md 输入侧标准化 + 输出侧碎片化的差值即生存空间（§1） | **准入前置**：对外宣称「主打」之前，必须先完成 [#54](https://github.com/zyTheGit/AgentForge/issues/54) 中 codex 显式 `$name` 调用的实机验证。在此之前对外表述维持「主路径可用、待实证」，不先扩能力面 |
+| Skills 跨 CLI 分发（**主叙事**） | 用户感知最强的第二叙事；主路径可用（四家投影、`expose_as_command`、`on_demand` 均已实现）；SKILL.md 输入侧标准化 + 输出侧碎片化的差值即生存空间（§1） | **准入前置已解除**（2026-09-03）：[#54](https://github.com/zyTheGit/AgentForge/issues/54) 中 codex 显式 `$name` 调用已实机验证通过（0.153.0，探针技能回显哨兵串，见 [技能](skills.md#按需装载on_demand)），对外可宣称「主打」。仍不先扩能力面——扩 target 依旧要等 §3.1 的用户信号 |
 | MCP transport 可靠性（**交付保障，不作主叙事**） | 三态逐格归一化 + 两格显式降级已实现（`MCP_TRANSPORT_MATRIX`），它保的是「不静默失真」的信任，不是获客叙事 | 只做维护；[#66](https://github.com/zyTheGit/AgentForge/issues/66)（pi × `sse` 实机连接）随时可做。**不与 Skills 合并宣称「均已验证」** |
 | sync 事务化内核（marker 保护、回滚、幂等、`doctor`、两级合并） | 信任基石——用户敢用是因为「不碰我的手写内容」 | 只做维护与打磨，不加新面 |
 | CI 漂移门禁 | 团队/企业故事的入口，成本低收益高 | 已有雏形（[ci](ci.md)），保持跟进上游 CLI 配置变化 |
@@ -103,9 +103,9 @@ PRD §8 L1 那条门禁至今零执行记录，仓库里既无计划书、问卷
 
 ### 4.1 排序（分层：准入前置 → 主线 → 随时可做）
 
-**准入前置（低成本，必须先做）**
+**准入前置（已完成）**
 
-1. [#54](https://github.com/zyTheGit/AgentForge/issues/54) 中 codex 显式 `$name` 调用的实机验收——开一次真会话即可，它是 §2.1「Skills 主叙事」对外宣称的门票（红线 1），不构成主线级投入。
+1. ~~[#54](https://github.com/zyTheGit/AgentForge/issues/54) 中 codex 显式 `$name` 调用的实机验收~~ —— **2026-09-03 完成**（codex 0.153.0：带 sidecar 的探针技能不在 `codex debug prompt-input` 清单里，真会话输入 `$afg-probe` 后模型原样回出哨兵串）。§2.1「Skills 主叙事」的对外宣称门票（红线 1）已解除，#54 关闭。
 
 **一阶段主线（唯一集中投入的工程项）**
 
@@ -115,7 +115,7 @@ PRD §8 L1 那条门禁至今零执行记录，仓库里既无计划书、问卷
 
 **随时可做（不阻塞主线）**
 
-5. [#66](https://github.com/zyTheGit/AgentForge/issues/66)（pi × `sse` 实机连接。~~#54 中 WSL 侧完整 sync~~ 已实测完成——v0.2.3-rc.3，`$HOME` 与 `/mnt/c` 两种落点各一轮，见 [platform](platform.md#wsl-互通) 与 §2.2，#54 的该半可关闭）、CI 漂移门禁跟进；
+5. [#66](https://github.com/zyTheGit/AgentForge/issues/66)（pi × `sse` 实机连接。~~#54 中 WSL 侧完整 sync~~ 已实测完成——v0.2.3-rc.3，`$HOME` 与 `/mnt/c` 两种落点各一轮，见 [platform](platform.md#wsl-互通) 与 §2.2；**#54 已整体关闭**）、CI 漂移门禁跟进；
 6. ~~§2.1 的内置补缺模板（`base/tools` / `base/context`）~~ —— **2026-09-03 完成**（一个 PR，非预估的 2–3 个）：登记表 + 两个 opt-in 模板 + `detected` 视图收窄，§2.2 的探测器冻结据此解除；
 7. 并行采集 §3.1 的两条信号（计时脚本入库 + target 请求观察）。
 
