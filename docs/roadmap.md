@@ -8,7 +8,7 @@
 
 - `init` / `detect` / `sync` / `status` / `doctor`
 - 四 Projector：opencode、codex、claude、pi
-- 内置 `base/default` 模板 + `custom/` 逐字规则（另有两个 opt-in 内置模板 `base/tools` / `base/context`，2026-09-03 补齐，见 [规则正文装配](rules.md#三个内置模板)）
+- 内置 `base/default` 模板 + `custom/` 逐字规则（另有两个 opt-in 内置模板 `base/tools` / `base/context`，2026-09-03 补齐，见 [templates/ 模板](templates.md#三个内置模板)）
 - `source` / `template` / `skill` 基础命令（local + git pin）
 - `learn` + `promote` 闭环、`learning.auto_capture: prompt`
 - Commands 投影（含命名空间与 `$1..$9`，见 [技能](skills.md#额外投影成命令expose_as_command)）
@@ -42,7 +42,7 @@
 
 - **`skills.copy_mode: symlink`**：schema 保留该取值仅为兼容既有 profile，运行时恒被忽略。三条理由各自独立成立（与 prune 判据冲突、Windows 默认无创建权限、四家客户端读取行为未实测），详见 [Spec §4.2](../AgentForge-Spec.md#42-profileyaml)
 - **template / source 体系深化**（五项：manifest 成为解析事实源、模板组合、供应链信任、registry 发现分发、多源优先级与 enable/disable 语义扩展）：体系**收缩为三档并封顶**——内置模板（**3 个封顶**：`base/default` / `base/tools` / `base/context`）+ 本地 `templates/` + git pin。五条理由各自独立成立，详见 [Spec §4.6](../AgentForge-Spec.md#46-template--source-体系的范围决议2026-09-03)。同一决议把 `init` 播种的 `official` 源从「修」改「裁」（停止播种**已落地**——现在只有 `source enable official` 会补登记；剩余代码下一 major 移除），issue [#55](https://github.com/zyTheGit/AgentForge/issues/55) 据此关闭。唯一条件触发的幸存者是**项目层 pin**，需先有团队用户反馈版本冲突才单独立项
-- **自定义模板 helper / partial**：见 [规则正文装配](rules.md)
+- **自定义模板 helper / partial**：见 [templates/ 模板](templates.md#引擎约束)
 - **`AGF_HOME` 指向 UNC 路径**：明确拒绝，退出码 1
 
 ## 非目标

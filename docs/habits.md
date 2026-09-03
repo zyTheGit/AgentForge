@@ -18,7 +18,7 @@ YAML 语法错误或校验失败时命令直接失败、列出出错字段路径
 `habits.yaml` 里有两类内容：
 
 - **声明字段**（`runtime` / `tools` / `ai` / `notes`）——你手写的意图，是渲染的唯一输入；
-- **`detected`**——探测器写下的只读快照，**默认不参与渲染**，用于 `doctor` 比对和你自己参考；登记内置 `base/context` 后会以「检测到，仅供参考」的措辞渲染成一节参考上下文（见 [规则正文装配](rules.md#三个内置模板)），仍不具规则效力。
+- **`detected`**——探测器写下的只读快照，**默认不参与渲染**，用于 `doctor` 比对和你自己参考；登记内置 `base/context` 后会以「检测到，仅供参考」的措辞渲染成一节参考上下文（见 [templates/ 模板](templates.md#三个内置模板)），仍不具规则效力。
 
 所以「装了 nvm 但想统一用 fnm」这种情况，写 `runtime.node.manager: fnm` 就行，`doctor` 会报一条 `declared-vs-detected/node` warn 提示两者不一致，但投影正文照你声明的走，不影响退出码。
 
@@ -127,7 +127,7 @@ tools:
 | `git.notes` | string | |
 | `container` | `docker` \| `podman` \| `none` \| `other` | `none` 在渲染视图里归一为「未设置」 |
 
-**整个 `tools` 块内置 `base/default` 模板都不渲染**——它只产出 Toolchain / Style / Verification / Forbidden 四节。要让这些值出现在投影正文里，最省事的是登记内置 `base/tools`（`aforge template enable base/tools`，输出 `## Tools` 节）；想改措辞就自己写模板，见 [规则正文装配](rules.md#三个内置模板)。或者干脆把这类约定写进 `notes`。
+**整个 `tools` 块内置 `base/default` 模板都不渲染**——它只产出 Toolchain / Style / Verification / Forbidden 四节。要让这些值出现在投影正文里，最省事的是登记内置 `base/tools`（`aforge template enable base/tools`，输出 `## Tools` 节）；想改措辞就自己写模板，见 [templates/ 模板](templates.md#三个内置模板)。或者干脆把这类约定写进 `notes`。
 
 ## ai
 
@@ -205,4 +205,4 @@ detected:
 ## 校验与编辑器提示
 
 - `npm run emit-schema` 生成的 `schemas/habits.schema.json`（JSON Schema Draft 2020-12，`$id: https://agentforge.dev/schema/habits.json`）可挂到编辑器做补全与校验。
-- 投影正文的完整示例见 [Spec §13.2](../AgentForge-Spec.md)；四层素材如何拼成正文、以及 `templates/` 与 `custom/` 怎么自定义见 [规则正文装配](rules.md)；投影落点与 marker 行为见 [profile.yaml 配置参考](profile.md)。
+- 投影正文的完整示例见 [Spec §13.2](../AgentForge-Spec.md)；四层素材如何拼成正文见 [规则正文装配](rules.md)，两个自定义出口分别是 [custom/ 逐字规则](custom-rules.md) 与 [templates/ 模板](templates.md)；投影落点与 marker 行为见 [profile.yaml 配置参考](profile.md)。

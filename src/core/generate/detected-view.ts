@@ -4,7 +4,7 @@
  * 为什么 detected 能进渲染层：它是**落在 SoT 里的持久快照**（`aforge init` /
  * `aforge detect` 写入 habits.yaml），不是渲染时读环境得到的现场信息。同一份
  * habits.yaml 在 CI 与本机渲染出的正文因此字节一致，`doctor` 的 contentHash 比对
- * 依旧成立——这与「模板拿不到 OS / 环境变量 / CI」那条约束不冲突（见 docs/rules.md）。
+ * 依旧成立——这与「模板拿不到 OS / 环境变量 / CI」那条约束不冲突（见 docs/templates.md）。
  *
  * 为什么单独成文件：composer 已承担装配 + 声明侧视图两件事，detected 的**防御式收窄**
  * （schema 侧是 `z.looseObject({})`，值可以是任意 JSON）自带一批窄化 helper，
