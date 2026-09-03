@@ -22,7 +22,7 @@
 - **已实现** — 更丰富探测器：在 node/python/包管理器/rust/go/shell 之外新增 java（`sdkman` > `jenv` > `jabba` > `mise` > `asdf`）、dotnet（只有 `system` / `none`）、monorepo（`nx` > `turbo` > `lerna` > `rush` > `pnpm-workspace`）、CI（`github-actions` > `gitlab-ci` > `circleci` > `jenkins` > `azure-pipelines`）。**边界**：这四类只写进 `habits.detected`，声明侧字段（`runtime.java` 等）尚未定义，判据见 [habits.yaml](habits.md#detected-快照结构)。**「探测 → 渲染」已于 2026-09-03 打通**：内置 opt-in 模板 `base/context` 把 detected 快照渲染成「仅供参考」的项目上下文节（[Spec §5.1](../AgentForge-Spec.md#51-内置模板3-个封顶)），[direction-review](direction-review.md) §2.2 的探测器冻结据此解除；声明侧字段的定义仍未做
 - **已裁剪** — 可选官方模板仓库：曾由 `init` 往 user 层 `sources.json` 播种一条 `official`（pin 到 tag、默认禁用、零网络）。**播种已移除**（[Spec §4.6](../AgentForge-Spec.md#46-template--source-体系的范围决议2026-09-03) 决议裁剪，下一 major 移除剩余代码）：现在该源只在用户显式 `aforge source enable official` 时补登记入场，已登记条目的解析行为不变。**边界**：官方仓库当前没有 `manifest.yaml`（走目录扫描回落）。~~`disable` 挡不住已拉取缓存被 `resolveTemplate` 渲染~~——已由 PR #61（b723a03）修复：`enabled` 是渲染参与判据（`src/core/sources/render-scope.ts`），禁用源的模板一律解析不到。行为见 [命令速查](commands.md#官方模板源不再默认注册)。issue [#55](https://github.com/zyTheGit/AgentForge/issues/55) 据此关闭
 - **已实现** — `import` 增强：文件识别改为声明式规则表（8 种，含 `.cursor/rules/*.mdc` 与 `.github/copilot-instructions.md` 的目录判据），工具链关键词扩到 9 类且词边界安全，见 [命令速查](commands.md#import-可识别的文件与关键词覆盖)
-- **已实现** — `skills.on_demand` 按需装载：正文照常物化投影，区别是**不进模型的自动路由清单**（claude / pi 注入 frontmatter `disable-model-invocation: true`，codex 写 sidecar `agents\openai.yaml`）。**边界**：opencode 无对应开关——实测确认注入那一行对它是真正的空操作（未知 frontmatter 键被忽略，技能仍进模型清单），`doctor` 显式告警；codex sidecar 的字段路径 `policy.allow_implicit_invocation` 已实机验证正确。仍未验证的只剩 codex 侧 on_demand 技能的显式 `$name` 调用（见下「已知遗留」）。验证方法与观察到的现象见 [技能](skills.md#按需装载on_demand)
+- **已实现** — `skills.on_demand` 按需装载：正文照常物化投影，区别是**不进模型的自动路由清单**（claude / pi 注入 frontmatter `disable-model-invocation: true`，codex 写 sidecar `agents\openai.yaml`）。**边界**：opencode 无对应开关——实测确认注入那一行对它是真正的空操作（未知 frontmatter 键被忽略，技能仍进模型清单），`doctor` 显式告警；codex 侧两条都已实机验证：sidecar 的字段路径 `policy.allow_implicit_invocation` 正确（0.147.0），以及**显式 `$name` 调用仍能完整展开技能正文**（0.153.0，探针技能回显唯一哨兵串，issue [#54](https://github.com/zyTheGit/AgentForge/issues/54) 最后一项已闭环）。验证方法与观察到的现象见 [技能](skills.md#按需装载on_demand)
 
 ## Phase 3（已完成）
 
@@ -35,7 +35,7 @@
 
 不阻塞 Phase 2 / Phase 3 收尾，但会影响特定场景，均已开 issue 跟踪：
 
-- **仍未实机验证的上游行为**（issue [#54](https://github.com/zyTheGit/AgentForge/issues/54)，已再次收窄，只剩一项）：codex 侧 on_demand 技能的**显式 `$name` 调用**（`codex debug prompt-input` 只渲染提示词、不展开技能正文，要确认得开一次真会话）。原先同列的三项已实测通过：codex sidecar 的字段路径 `policy.allow_implicit_invocation` 正确（codex 0.147.0）、opencode 对未知 frontmatter 键一律忽略（1.15.13，注入那一行是真空操作）、**在 WSL 侧跑一轮完整 `aforge sync`**（v0.2.3-rc.3，`$HOME` 与 `/mnt/c` 两种落点各一轮），结论见 [技能](skills.md#按需装载on_demand) 与 [平台注意事项](platform.md#wsl-互通)
+- **上游行为的实机验证已全部完成**（issue [#54](https://github.com/zyTheGit/AgentForge/issues/54) 已闭环）：四项逐个实测通过——codex sidecar 的字段路径 `policy.allow_implicit_invocation` 正确（0.147.0）、codex 侧 on_demand 技能的**显式 `$name` 调用仍能完整展开正文**（0.153.0，探针技能回显唯一哨兵串）、opencode 对未知 frontmatter 键一律忽略（1.15.13，注入那一行是真空操作）、**在 WSL 侧跑一轮完整 `aforge sync`**（v0.2.3-rc.3，`$HOME` 与 `/mnt/c` 两种落点各一轮）。结论见 [技能](skills.md#按需装载on_demand) 与 [平台注意事项](platform.md#wsl-互通)
 - **pi 侧 `httpTransport: "sse"` 依赖的是未公开契约**（issue [#66](https://github.com/zyTheGit/AgentForge/issues/66) 的实机验证已完成，判定不变）：连接行为实测无误（证据见上 Phase 2 与 [MCP](mcp.md#transport--target-支持矩阵)），但该键在 pi-mcp-adapter 的 README 里零提及，只存在于源码与类型定义。因此这格是「已验证但依赖实现细节」——上游若把它收成 Agent Plugin 专用，症状仍是静默回落成 streamable HTTP、只影响**仅支持 SSE** 的 server
 
 ## 不予实现

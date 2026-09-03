@@ -258,10 +258,10 @@ v1.1 把「多工具规则格式碎片化」列为首要问题。AGENTS.md 正�
 - `scripts/` 计时脚本入库（供 §8 L1 主证据使用）
 - **不含** claude 侧 `auto_capture: hook` 落点：已随 issue #56 决议不做，重启需先推翻 `docs/learning.md` 记录的四条安全前提
 
-### Phase 5 — Skills 主打（准入前置：实机验证）
+### Phase 5 — Skills 主打（准入前置已满足）
 
 - 对外叙事从「附属功能」升为主打：Skills 跨 CLI 分发
-- **准入前置**：issue #54 中 codex 显式 `$name` 调用的实机验证完成后才可宣称（§8 L1 第 6 条）
+- **准入前置已完成**（2026-09-03）：issue #54 中 codex 显式 `$name` 调用已实机验证通过（0.153.0，见 docs/skills.md 的按需装载章节），§8 L1 第 6 条「无实证不宣称」的缺口已补齐
 - MCP transport 归属「交付保障」，只做维护，不与 Skills 合并宣称「均已验证」
 
 ### Phase 6 — target 扩展（条件解冻）
