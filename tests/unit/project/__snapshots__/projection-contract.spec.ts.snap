@@ -23,7 +23,7 @@ exports[`投影产物字节级不变（四内置 target × project/user） > pro
     "merge_marker C:\\proj\\AGENTS.md sha256:047e812b294fc882",
     "write C:\\proj\\.pi\\skills\\demo\\SKILL.md sha256:aab47e994e7773d5",
     "write C:\\proj\\.pi\\prompts\\demo.md sha256:753211be67d527b8",
-    "merge_json(soft) C:\\proj\\.pi\\mcp.json sha256:566c349135ab6ee1",
+    "merge_json(soft) C:\\proj\\.pi\\mcp.json sha256:dd80241cf8f46ade",
   ],
 }
 `;
@@ -51,7 +51,7 @@ exports[`投影产物字节级不变（四内置 target × project/user） > use
     "merge_marker C:\\Users\\u\\.pi\\agent\\AGENTS.md sha256:047e812b294fc882",
     "write C:\\Users\\u\\.pi\\agent\\skills\\demo\\SKILL.md sha256:aab47e994e7773d5",
     "write C:\\Users\\u\\.pi\\agent\\prompts\\demo.md sha256:753211be67d527b8",
-    "merge_json(soft) C:\\Users\\u\\.pi\\agent\\mcp.json sha256:566c349135ab6ee1",
+    "merge_json(soft) C:\\Users\\u\\.pi\\agent\\mcp.json sha256:dd80241cf8f46ade",
   ],
 }
 `;
