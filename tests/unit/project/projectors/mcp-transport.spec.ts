@@ -154,9 +154,17 @@ describe('字段形状矩阵（3 transport × 4 target）', () => {
       { name: 'docs', url: 'https://example.com/mcp', httpHeaders: { Authorization: 'Bearer x' } },
     ],
     ['codex', 'sse', undefined], // 不支持 → 整条跳过
-    // pi：无 type 键；sse 用 httpTransport 强制
+    // pi：无 type 键；远端两态都显式写 httpTransport（merge_json 删不掉留空的键，issue #69）
     ['pi', 'stdio', { command: 'npx', args: ['-y', 'server-fs'], env: { KEY: 'v' } }],
-    ['pi', 'http', { url: 'https://example.com/mcp', headers: { Authorization: 'Bearer x' } }],
+    [
+      'pi',
+      'http',
+      {
+        url: 'https://example.com/mcp',
+        headers: { Authorization: 'Bearer x' },
+        httpTransport: 'streamable-http',
+      },
+    ],
     [
       'pi',
       'sse',
@@ -187,9 +195,13 @@ describe('可选字段缺省时不产出该键（载荷最小化）', () => {
     });
   });
 
-  it('pi：stdio 只留 command；http 只留 url（不产 httpTransport）', () => {
+  it('pi：stdio 只留 command；http 留 url + 显式 httpTransport（唯一的例外键）', () => {
     expect(piMcpServersObject([bareStdio]).bare).toEqual({ command: 'npx' });
-    expect(piMcpServersObject([bareHttp]).bare).toEqual({ url: 'https://x/mcp' });
+    // httpTransport 不参与「缺省不产键」：留空会让上一轮的 "sse" 在 merge_json 里活下来
+    expect(piMcpServersObject([bareHttp]).bare).toEqual({
+      url: 'https://x/mcp',
+      httpTransport: 'streamable-http',
+    });
   });
 
   it('opencode：无 env → 无 environment 键；无 headers → 无 headers 键', () => {

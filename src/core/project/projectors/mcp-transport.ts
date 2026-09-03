@@ -12,7 +12,7 @@
  * | transport | claude `.mcp.json` | opencode `opencode.json` | codex `config.toml` | pi `mcp.json` |
  * |-----------|--------------------|--------------------------|---------------------|---------------|
  * | stdio     | `type:"stdio"` + command/args/env | `type:"local"` + command[] / environment | `[mcp_servers.N]` command/args/env | command/args/env |
- * | http      | `type:"http"` + url/headers | `type:"remote"` + url/headers | `url` + `http_headers` | `url` + `headers` |
+ * | http      | `type:"http"` + url/headers | `type:"remote"` + url/headers | `url` + `http_headers` | `url` + `headers` + `httpTransport:"streamable-http"` |
  * | sse       | `type:"sse"` + url/headers | **表达不了** → 按 remote 投，实际走 streamable HTTP | **不支持** → 跳过 | `url` + `headers` + `httpTransport:"sse"` |
  *
  * 三条硬约束：
@@ -224,6 +224,18 @@ export function claudeMcpServersObject(
  * **稳定性风险**：`httpTransport` 在适配器 README 里零提及，只出现在源码与类型定义中
  * （注释写着 "Used by Agent Plugins"），属于**未公开契约**。上游把它改成 Agent Plugin
  * 专用不算 breaking change，届时本行判定要重新验证。
+ *
+ * ## 为什么 `http` 也**显式**写这个键
+ *
+ * 投影走 `merge_json` + `soft`（保留用户手工加的其他 server），而深合并**删不掉**自己
+ * 不再产出的键。若 `http` 分支留空，用户把 `transport` 从 `sse` 改回 `http` 再 sync 后，
+ * 上一轮写下的 `httpTransport: "sse"` 会留在 `.pi\mcp.json` 里——用户改了声明，pi 却仍被
+ * 锁在 SSE 且禁用回退，且 `sync` 报 unchanged、`doctor` 看不出异常（issue #69）。因此两个
+ * 分支都写显式取值，让声明与产物一一对应。
+ *
+ * **代价**：写了该键就关掉适配器的自动回退（回退前置是该键为 `undefined`）。于是
+ * `transport: http` 的端点若只会说 SSE，不再被静默救回，而是连接失败——这与「SoT 是唯一
+ * 事实源」一致：想要 SSE 就把 SoT 里的 `transport` 声明成 `sse`，不靠运行时猜。
  */
 export function piMcpServersObject(
   servers: readonly McpServer[],
@@ -236,8 +248,8 @@ export function piMcpServersObject(
     }
     entries[server.name] = {
       ...remoteFields(server, 'headers'),
-      // http 不写该键：留空即适配器默认的 streamable HTTP（+ 不兼容时回退 SSE）
-      ...(server.transport === 'sse' ? { httpTransport: 'sse' } : {}),
+      // 两个分支都显式写：merge_json 删不掉留空的键（见上「为什么 http 也显式写」）
+      httpTransport: server.transport === 'sse' ? 'sse' : 'streamable-http',
     };
   }
   return entries;

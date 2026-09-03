@@ -97,7 +97,8 @@ function piUserDir(ctx: ProjectContext): string {
  * Pi MCP 管理键 JSON 载荷（merge_json 的 item.content）。
  *
  * 顶层 `mcpServers` 键（与 Claude Code 同名），条目形状由 mcp-transport 归一化层
- * 给出（无 `type` 键；`transport: sse` 落成 `httpTransport: "sse"`）；enabled=false 的
+ * 给出（无 `type` 键；远端两态都显式写 `httpTransport`：`sse` → `"sse"`、`http` →
+ * `"streamable-http"`，理由见该层 JSDoc 与 issue #69）；enabled=false 的
  * server 不投影。空数组 → `{"mcpServers":{}}`（保留管理键声明，深合并时未知键保留）。
  */
 export function piMcpPayload(servers: readonly McpServer[]): string {
