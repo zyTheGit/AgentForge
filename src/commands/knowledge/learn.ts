@@ -273,6 +273,10 @@ export function registerLearnCommand(program: Command): void {
       'explicit confidence 0-1 (default: scored by heuristics from the content)',
     )
     .option('--no-auto-promote', 'do not promote right away even if learning.auto_promote is true')
+    // 其余命令都声明了本地 `--json`；缺它时 `aforge learn --file - --json` 会被
+    // commander 当成 unknown option 报错，而 README / commands.md 都写着"任何子命令
+    // 都可加 --json"。action 里的 --json 分支本来就存在，只是入口没登记。
+    .option('--json', 'print machine-readable JSON (absolute paths)')
     .option(
       '--print-protocol',
       'print the learning protocol text and exit (used by the session hook of learning.auto_capture: hook)',
@@ -310,6 +314,14 @@ export function registerLearnCommand(program: Command): void {
         // ---- 内容采集（§7.4-1：粘贴 / 文件 / stdin）----
         let stdinContent: string | undefined;
         if (options.file === '-') {
+          // 交互终端里裸跑 `--file -` 会一直等 EOF（Windows 要 Ctrl+Z 回车），看着像卡死。
+          // 协议正文与 README 都把 `--file -` 摆在显眼位置，误敲的概率不低，所以先报错
+          // 并给出三条正确形态；管道 / 重定向 / 钩子调用下 stdin 都不是 TTY，不受影响。
+          if (isInteractiveStdin()) {
+            throw new ConfigError('--file - 要从管道或重定向读入，当前 stdin 是交互终端', {
+              hint: '交互粘贴直接跑 aforge learn；管道: echo "..." | aforge learn --file -；重定向: aforge learn --file - < notes.md',
+            });
+          }
           stdinContent = await readStdinText();
         } else if (options.file === undefined && isInteractiveStdin()) {
           intro('aforge learn');

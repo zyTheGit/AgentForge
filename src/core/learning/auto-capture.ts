@@ -107,27 +107,40 @@ export function rendersLearningProtocol(effective: AutoCapture): boolean {
  * 固定内容、不受 SoT 影响：它是给 agent 的协议说明，不是用户沉淀。含触发条件
  * 与可直接复制的命令行；随 marker 区间整体替换，因此不产生独立产物、不进 §3.3 记账。
  *
- * 五条内容约束（对应 §7.4 的护栏）：
+ * 六条内容约束（对应 §7.4 的护栏）：
  * - 只让 agent 写 SoT（`aforge learn`），**不提** `aforge sync`——进投影恒由人工触发；
  * - 明说不要塞会话原文（凭据泄漏面 + 条目体积，护栏 4）；
  * - 不承诺晋升（`promote` 由人工或 auto_promote 决定，护栏 2）；
  * - 明说命令被拒时不要重试：CI 下 store 守卫会拒掉写入（ConfigError(2)，护栏 3），
  *   而正文与环境无关、照样渲染，不加这一句 agent 可能对着注定失败的命令反复重试；
+ * - 明说**不要把 `--print-protocol` 的输出管道进 `learn`**：agent 看到的正是这段文本，
+ *   最容易的误动作就是反射式去执行那条打印命令、把协议自己存成一条 learning；
  * - 纯 ASCII 命令行，Windows 终端可直接粘。
  *
- * 另有两条**可用性**约束（不是护栏，但缺了 agent 会问或猜错）：一次调用只记一条；
- * scope 默认 project，跨项目的约定才提示用 `--scope user`。
+ * 另有三条**可用性**约束（不是护栏，但缺了 agent 会问或猜错）：一次调用只记一条；
+ * scope 默认 project，跨项目的约定才提示用 `--scope user`；命令给**可直接照抄的管道
+ * 形态**（`echo ... | aforge learn --file -`）并给出多行正文的备选（`--file <path>`）——
+ * 只写 `aforge learn --file -` 时 agent 不一定知道正文该怎么喂进去。
+ *
+ * 触发条件里显式写「用户的纠正」：那是信号最强、最容易被丢掉的一类沉淀时机。
  */
 export const LEARNING_PROTOCOL_SECTION = `${LEARNING_PROTOCOL_HEADING}
 
-When you and the user establish a durable convention during this session - a tool
-choice, a project-specific gotcha, a workflow that must be repeated - record it so
+When a durable convention is established during this session - the user corrects
+you in a way that should outlive this task, a tool choice is settled, a
+project-specific gotcha is found, a workflow has to be repeated - record it so
 future sessions inherit it. Skip one-off facts and anything already written down.
 
-Write it with (content is read from stdin):
+The entry text is read from stdin:
 
 \`\`\`
-aforge learn --file -
+echo "Use pnpm, never npm, in this repo." | aforge learn --file -
+\`\`\`
+
+For a multi-line entry, write the text to a file first and pass the path instead:
+
+\`\`\`
+aforge learn --file notes.md
 \`\`\`
 
 Rules for what you write:
@@ -139,4 +152,6 @@ Rules for what you write:
 - Never paste raw session transcripts, tool output, secrets or tokens.
 - Recording does not activate the rule. Projection stays a human step
   (\`aforge sync\`), so do not run it yourself.
-- If the command is refused (CI environment), do not retry it.`;
+- If the command is refused (CI environment), do not retry it.
+- Never pipe \`aforge learn --print-protocol\` into \`aforge learn\`: that flag
+  prints this protocol, not an entry.`;

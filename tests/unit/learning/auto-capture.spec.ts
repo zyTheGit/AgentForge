@@ -89,7 +89,7 @@ describe('writesSessionHooks / rendersLearningProtocol — 两条投递通道互
   });
 });
 
-describe('LEARNING_PROTOCOL_SECTION — 固定正文（§5.2 / §7.4 五条护栏）', () => {
+describe('LEARNING_PROTOCOL_SECTION — 固定正文（§5.2 / §7.4 六条护栏）', () => {
   it('以标题常量起头（三处共用同一字面量）', () => {
     expect(LEARNING_PROTOCOL_SECTION.startsWith(LEARNING_PROTOCOL_HEADING)).toBe(true);
     expect(LEARNING_PROTOCOL_HEADING).toBe('## Learning Protocol');
@@ -97,6 +97,18 @@ describe('LEARNING_PROTOCOL_SECTION — 固定正文（§5.2 / §7.4 五条护�
 
   it('含可复制的 aforge learn 命令行', () => {
     expect(LEARNING_PROTOCOL_SECTION).toContain('aforge learn --file -');
+  });
+
+  it('管道形态给全（只写 --file - 时 agent 不知道正文怎么喂进去）', () => {
+    expect(LEARNING_PROTOCOL_SECTION).toContain('| aforge learn --file -');
+  });
+
+  it('给出多行正文的备选形态 --file <path>（管道塞多行容易被截断）', () => {
+    expect(LEARNING_PROTOCOL_SECTION).toMatch(/aforge learn --file \w+\.md/);
+  });
+
+  it('触发条件里点名"用户的纠正"（信号最强、最容易被丢掉的沉淀时机）', () => {
+    expect(LEARNING_PROTOCOL_SECTION).toMatch(/user corrects/i);
   });
 
   it('明说不要塞会话原文 / 凭据（护栏 4）', () => {
@@ -110,6 +122,11 @@ describe('LEARNING_PROTOCOL_SECTION — 固定正文（§5.2 / §7.4 五条护�
 
   it('明说被拒时不要重试（CI 下写入必被守卫拒掉，护栏 3）', () => {
     expect(LEARNING_PROTOCOL_SECTION).toContain('do not retry');
+  });
+
+  it('明说 --print-protocol 的输出不能管道回 learn（agent 最容易的反射式误动作）', () => {
+    expect(LEARNING_PROTOCOL_SECTION).toContain('--print-protocol');
+    expect(LEARNING_PROTOCOL_SECTION).toMatch(/Never pipe .*--print-protocol/);
   });
 
   it('纯 ASCII（Windows GBK 控制台与四家 target 均安全）', () => {

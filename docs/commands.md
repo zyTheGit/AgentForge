@@ -8,7 +8,7 @@
 | `aforge init --yes` / `aforge init --json` | 静默初始化（探测快照 + 骨架落盘）：scope 默认 `project`、target 默认全部四个。非 TTY（CI / 管道）自动走这条；`--scope project\|user` 可单独指定层 |
 | `aforge detect [--json]` | 探测本机工具链（node/python/java/dotnet/包管理器/rust/go/monorepo/CI/shell/已有规则文件），无副作用；**只打印不写盘**，各项的候选优先级与判据见 [habits.yaml](habits.md#detected-快照结构) |
 | `aforge sync [--targets a,b] [--dry-run] [--force] [--json]` | 渲染 SoT 并投影到目标 Agent（规则 marker 区间 + 技能 / MCP / [命令薄壳](skills.md#额外投影成命令expose_as_command)整文件产物） |
-| `aforge learn [--scope s] [--file f\|'-'] [--id id] [--confidence 0-1] [--no-auto-promote]` | 记录一条 learning（不投影；`--confidence` 省略即按内容[自动打分](learning.md#自动打分)，越界或非数字 → 退出码 2；`learning.auto_promote: true` 时顺手 promote，`--no-auto-promote` 单次关掉） |
+| `aforge learn [--scope s] [--file f\|'-'] [--id id] [--confidence 0-1] [--no-auto-promote] [--json]` | 记录一条 learning（不投影；`--file -` 只接**管道或重定向**，交互终端里裸给 → 退出码 2 并提示改用不带 `--file` 的 `aforge learn`；`--confidence` 省略即按内容[自动打分](learning.md#自动打分)，越界或非数字 → 退出码 2；`learning.auto_promote: true` 时顺手 promote，`--no-auto-promote` 单次关掉） |
 | `aforge learn --print-protocol` | 只把 `## Learning Protocol` 正文打到 stdout 就退出。`learning.auto_capture: hook` 的会话钩子调的就是它：只读，不解析配置、不读 SoT、不写盘、不取锁 |
 | `aforge promote <id> [--to user] [--yes]` | 将 learning 升级为 custom 规则或 skill |
 | `aforge learnings list [--json]` / `show <id>` / `edit <id>` / `rm <id>` | 管理两层 SoT 的 learning 条目（`edit` 在交互终端拉起 `$EDITOR` 改条目 yaml，退出后重校验；非交互或 `--json` 时只打印路径与正文） |

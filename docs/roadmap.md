@@ -31,6 +31,15 @@
 - **已实现（两层）** — 适配器插件化：第一层是 `Projector` 契约收口（补齐 `skillDir` / `skillPath` / `writesSessionHooks`，新 target 漏实现即编译失败）与 target 全集的两个事实源（编译期 `src/core/project/target-ids.ts`、运行时 `projectorRegistry`），命令层不再直连具体 projector 模块；第二层是**声明式适配器**——user 层 SoT 放一份 `adapters/<id>.yaml` 即可新增 target，`profile.targets` 除四个内置 id 外也接受已加载的适配器 id（`TargetEnum` 每次校验现读 `knownTargetIds()`）。**边界**：只接受数据、不接受代码——`merge_toml`、scope 条件产出、自由 MCP 字段映射、自定义 `soft` 语义、会话钩子（`writesSessionHooks` 恒 `false`）一律不开放，需要这些的 target 仍得写成内置 projector；project 层的 `adapters/*.yaml` 默认忽略，需 `AGF_ALLOW_PROJECT_ADAPTERS=1` 显式授权；`schemas/profile.schema.json` 里 `targets[]` 只能是 `string`（静态 schema 枚举不了运行时才知道的 id），编辑器补全对第三方 id 无效、写错靠 `aforge doctor` 兜。取值域、安全边界与写法见 [profile.yaml](profile.md#声明式适配器第三方-target)
 - **已实现** — WSL 互通说明：见 [平台注意事项](platform.md#wsl-互通)。AgentForge 仍然几乎不检测 WSL，唯一例外是锁元数据里的 pid 空间标识。**边界**：该章节原先标「未实测」的几条已在 Windows 11 + WSL2（`/mnt/c` 为 9p、**不带 `metadata`**）上实测——`/mnt/c` 上两侧 `mkdir` 互斥成立（20000 次对抗，双方赢下的名字互不相交）、跨边界 `sameProcessSpace` 恒为 `false`（PR #59 加了 pid 空间一项，与计算机名大小写无关）、`chmod` 在该挂载下是 no-op、`/mnt/c` 大小写不敏感（同一项目两种写法 → 两个根 → 两把锁，互斥失效）、WSL 侧不受 260 字符限制、UNC 落点物理上写得进去。**「在 WSL 侧跑一轮完整 `aforge sync`」也已实测**（v0.2.3-rc.3 的 `aforge-linux-x64` 单文件二进制，绕开了「发行版里没有 node」这个障碍）：SoT 放 WSL 原生 `$HOME` 与放 `/mnt/c` 各一轮，均为四 target 8 文件落地、二次 sync 全 `unchanged` 且 hash 不变、`doctor` 30 ok / 0 warn / 0 error、产物全 LF，且 `content hash` 与 Windows 侧同 SoT 一致。**仍未实测**：带 `metadata` 挂载选项时的权限行为
 
+## Phase 4 — Learning 捕获（当前阶段）
+
+对应 [PRD §10 Phase 4](../AgentForge-PRD.md#10-分阶段路线)，待验证假设：闭环的瓶颈在**捕获**而非管理。
+
+- **已实现** — 捕获路径可发现性：`learn --file <path>` / `--file -` 的条目管道示例进了 [README](../README.md) 与 [learning](learning.md#人工记录与晋升)（管道 / 重定向 / 给路径三种形态齐全）；`prompt` 档协议正文重写（触发时机把「用户纠正你」摆到第一条，正文里直接给可粘贴的管道命令），常量在 `src/core/learning/auto-capture.ts`；无钩子能力的三家的手工挂载写法见 [learning](learning.md#手工挂载)。**反模式已成文**：`aforge learn --print-protocol` 的输出是给 agent 看的协议，不能接回 `aforge learn`——协议正文、README、learning.md 三处同时写着
+- **已实现** — 顺带修掉两个可发现性缺陷：`learn` 补上本地 `--json`（此前 `aforge learn --file - --json` 会被 commander 判成 unknown option，与「任何子命令都可加 `--json`」的文档契约矛盾）；`--file -` 在交互终端下改为退出码 2 并给出三条正确形态，不再挂在那里等 EOF
+- **已实现** — `scripts/measure-init-timing.mjs` 入库，作为 PRD §8 L1 第 1 条的主证据（只测非交互路径，判据是 `aforge doctor` 退出码 0）
+- **不予实现** — claude 侧 `auto_capture: hook` 落点：随 issue [#56](https://github.com/zyTheGit/AgentForge/issues/56) 决议不做，重启需先推翻 [learning](learning.md#另外三家将来要支持的前置条件) 记录的前置条件
+
 ## 已知遗留
 
 不阻塞 Phase 2 / Phase 3 收尾，但会影响特定场景，均已开 issue 跟踪：
