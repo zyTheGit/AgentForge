@@ -35,14 +35,14 @@
 
 对应 [PRD §10 Phase 4](../AgentForge-PRD.md#10-分阶段路线)，待验证假设：闭环的瓶颈在**捕获**而非管理。
 
-- **已实现** — 捕获路径可发现性：`learn --file <path>` / `--file -` 的条目管道示例进了 [README](../README.md) 与 [learning](learning.md#人工记录与晋升)（管道 / 重定向 / 给路径三种形态齐全）；`prompt` 档协议正文重写（触发时机把「用户纠正你」摆到第一条，正文里直接给可粘贴的管道命令），常量在 `src/core/learning/auto-capture.ts`；无钩子能力的三家的手工挂载写法见 [learning](learning.md#手工挂载)。**反模式已成文**：`aforge learn --print-protocol` 的输出是给 agent 看的协议，不能接回 `aforge learn`——协议正文、README、learning.md 三处同时写着
+- **已实现** — 捕获路径可发现性：`learn --file <path>` / `--file -` 的条目管道示例进了 [README](../README.md) 与 [learning](learning.md#人工记录与晋升)（管道 / 重定向 / 给路径三种形态齐全）；`prompt` 档协议正文重写（触发时机把「用户纠正你」摆到第一条，正文里直接给可粘贴的管道命令），常量在 `src/core/learning/auto-capture.ts`；无钩子能力的三家的手工挂载写法见 [learning](learning.md#手工挂载把协议塞进没有落点的三家)。**反模式已成文**：`aforge learn --print-protocol` 的输出是给 agent 看的协议，不能接回 `aforge learn`——协议正文、README、learning.md 三处同时写着
 - **已实现** — 顺带修掉两个可发现性缺陷：`learn` 补上本地 `--json`（此前 `aforge learn --file - --json` 会被 commander 判成 unknown option，与「任何子命令都可加 `--json`」的文档契约矛盾）；`--file -` 在交互终端下改为退出码 2 并给出三条正确形态，不再挂在那里等 EOF
 - **已实现** — `scripts/measure-init-timing.mjs` 入库，作为 PRD §8 L1 第 1 条的主证据（只测非交互路径，判据是 `aforge doctor` 退出码 0）
 - **不予实现** — claude 侧 `auto_capture: hook` 落点：随 issue [#56](https://github.com/zyTheGit/AgentForge/issues/56) 决议不做，重启需先推翻 [learning](learning.md#另外三家将来要支持的前置条件) 记录的前置条件
 
 ## 已知遗留
 
-不阻塞 Phase 2 / Phase 3 收尾，但会影响特定场景，均已开 issue 跟踪：
+不阻塞任一 Phase 收尾，但会影响特定场景，均已开 issue 跟踪：
 
 - **上游行为的实机验证已全部完成**（issue [#54](https://github.com/zyTheGit/AgentForge/issues/54) 已闭环）：四项逐个实测通过——codex sidecar 的字段路径 `policy.allow_implicit_invocation` 正确（0.147.0）、codex 侧 on_demand 技能的**显式 `$name` 调用仍能完整展开正文**（0.153.0，探针技能回显唯一哨兵串）、opencode 对未知 frontmatter 键一律忽略（1.15.13，注入那一行是真空操作）、**在 WSL 侧跑一轮完整 `aforge sync`**（v0.2.3-rc.3，`$HOME` 与 `/mnt/c` 两种落点各一轮）。结论见 [技能](skills.md#按需装载on_demand) 与 [平台注意事项](platform.md#wsl-互通)
 - **pi 侧 `httpTransport: "sse"` 依赖的是未公开契约**（issue [#66](https://github.com/zyTheGit/AgentForge/issues/66) 的实机验证已完成，判定不变）：连接行为实测无误（证据见上 Phase 2 与 [MCP](mcp.md#transport--target-支持矩阵)），但该键在 pi-mcp-adapter 的 README 里零提及，只存在于源码与类型定义。因此这格是「已验证但依赖实现细节」——上游若把它收成 Agent Plugin 专用，症状仍是静默回落成 streamable HTTP、只影响**仅支持 SSE** 的 server
