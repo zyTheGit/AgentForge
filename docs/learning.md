@@ -5,9 +5,10 @@
 ```powershell
 # 记一条（不投影）：交互终端直接跑会提示粘贴多行内容
 aforge learn
-# 脚本里从文件或 stdin 读（非交互终端且未给 --file → 退出码 2）
-aforge learn --file notes.md
-aforge learn --file - < notes.md
+# 脚本 / agent 里从文件或 stdin 读（非交互终端且未给 --file → 退出码 2）
+aforge learn --file notes.md                                  # 直接给路径（多行正文最省事）
+echo "Use pnpm, never npm, in this repo." | aforge learn --file -   # 管道读正文
+aforge learn --file - < notes.md                              # 重定向读正文
 # 自己拍一个置信度（省略则自动打分，见下）
 aforge learn --file notes.md --confidence 0.9
 
@@ -23,6 +24,8 @@ aforge sync
 ```
 
 `learn` 只写 SoT 的 `learnings/`，不动投影产物；`promote` 也只写 SoT——真正落到各 Agent 规则文件里要靠 `aforge sync`。`profile.yaml` 里 `learning.auto_promote: true` 时 `learn` 会顺手 promote，`--no-auto-promote` 可单次关掉。
+
+`--file -` 读的是**要沉淀的条目正文**，且只接管道或重定向：交互终端里裸敲 `aforge learn --file -` 会退出码 2 并给出三条正确形态，而不是挂在那里等 EOF（Windows 上要 Ctrl+Z 回车）。交互粘贴走不带 `--file` 的 `aforge learn`。
 
 `learnings edit <id>` 在交互终端（stdin/stdout 都是 TTY）里用 `$EDITOR`（缺省 `notepad`）打开条目 yaml，等编辑器退出后立刻重校验：内容不合 §4.3 → 退出码 2 并指出问题字段；文件被删掉 → 只提示，不报错。三种情况退回「打印文件路径 + 正文」的手工编辑提示而**不**报错：非交互环境（CI / 管道）、`--json`、`$EDITOR` 在 PATH 上解析不到。
 

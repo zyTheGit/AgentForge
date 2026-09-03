@@ -56,13 +56,26 @@ aforge status              # SoT 概览：scope、各 target 落点与技能调�
 aforge doctor              # 体检：配置合法性、投影一致性、环境问题
 aforge sync --dry-run      # 只看会写哪些文件，不落盘
 aforge learn               # 记一条 learning（不投影，promote 后才进规则）
-aforge learn --file -      # 从 stdin 读正文（管道 / agent 调用；非交互终端必须走这条）
 aforge learn --file notes.md   # 从文件读正文
 aforge skill add <name>    # 装技能进 SoT 并登记，sync 后投影到四家
 aforge mcp add             # 登记 MCP 服务器，sync 时翻译成各 Agent 的原生配置
 ```
 
-让 agent 自己沉淀经验：把 `learning.auto_capture` 设为 `prompt`（投影正文里多一段协议）或 `hook`（codex 侧会话钩子注入）。没有钩子落点的三家可以手工挂载同一份协议，写法见 [learning](docs/learning.md#手工挂载把协议塞进没有落点的三家)。
+### 把 learning 从管道喂进去
+
+`aforge learn` 无参数时在交互终端弹粘贴框；**非交互场景（agent 调用、脚本、CI 之外的自动化）走 `--file`**：
+
+```powershell
+echo "Use pnpm, never npm, in this repo." | aforge learn --file -   # 管道读正文
+aforge learn --file - < notes.md                                    # 重定向读正文
+aforge learn --file notes.md                                        # 直接给路径（多行正文更省事）
+```
+
+`--file -` 读的是**要沉淀的条目正文**，一次调用记一条。它必须有管道或重定向——在交互终端裸敲会直接报错并提示这三种形态，不会挂在那里等输入。
+
+让 agent 自己沉淀经验：把 `learning.auto_capture` 设为 `prompt`（投影正文里多一段协议，告诉 agent 什么时候该调 `aforge learn --file -`）或 `hook`（codex 侧会话钩子注入）。没有钩子落点的三家可以手工挂载同一份协议，写法见 [learning](docs/learning.md#手工挂载把协议塞进没有落点的三家)。
+
+**`aforge learn --print-protocol` 的输出不能喂回 `aforge learn`。** 它打印的是**给 agent 看的协议**，不是条目正文；管道进去只会把协议本身存成一条 learning。
 
 任何子命令都可加 `--json` 拿机器可读输出（路径一律绝对路径）。完整 14 个命令、参数与退出码见 [命令速查](docs/commands.md)。
 
