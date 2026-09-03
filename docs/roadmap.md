@@ -18,7 +18,7 @@
 ## Phase 2（已完成）
 
 - **已实现** — Commands 命名空间 + `$1..$9` 归一化；Interactive `init` 体验（提前落地）
-- **已实现** — MCP 字段与上游对齐：`stdio` / `http` / `sse` 三态按 target 逐格归一化，能力矩阵是 `src/core/project/projectors/mcp-transport.ts` 的 `MCP_TRANSPORT_MATRIX`（单一事实源）。上游表达不了的两格显式降级而非静默：opencode × `sse` 降级为 streamable HTTP、codex × `sse` 整条跳过，`sync` 与 `doctor` 各报一条。用法与矩阵见 [MCP](mcp.md#transport--target-支持矩阵)
+- **已实现** — MCP 字段与上游对齐：`stdio` / `http` / `sse` 三态按 target 逐格归一化，能力矩阵是 `src/core/project/projectors/mcp-transport.ts` 的 `MCP_TRANSPORT_MATRIX`（单一事实源）。上游表达不了的两格显式降级而非静默：opencode × `sse` 降级为 streamable HTTP、codex × `sse` 整条跳过，`sync` 与 `doctor` 各报一条。pi × `sse` 判为无损**已实机验证**（issue [#66](https://github.com/zyTheGit/AgentForge/issues/66)，pi-mcp-adapter 2.32.1）：写 `httpTransport: "sse"` 时传输层第一个请求就是 `GET` + `Accept: text/event-stream`、全程零 streamable-HTTP POST；不写该键才是先 POST、被拒后回落 SSE。**遗留风险**：该键属未公开契约（适配器 README 零提及，只见源码与类型定义，注释写着 "Used by Agent Plugins"），上游收回不算 breaking change，届时这格需重新验证。用法与矩阵见 [MCP](mcp.md#transport--target-支持矩阵)
 - **已实现** — 更丰富探测器：在 node/python/包管理器/rust/go/shell 之外新增 java（`sdkman` > `jenv` > `jabba` > `mise` > `asdf`）、dotnet（只有 `system` / `none`）、monorepo（`nx` > `turbo` > `lerna` > `rush` > `pnpm-workspace`）、CI（`github-actions` > `gitlab-ci` > `circleci` > `jenkins` > `azure-pipelines`）。**边界**：这四类只写进 `habits.detected`，声明侧字段（`runtime.java` 等）尚未定义、不参与渲染，判据见 [habits.yaml](habits.md#detected-快照结构)
 - **已实现** — 可选官方模板仓库：`init` 往 user 层 `sources.json` 播种一条 `official`（pin 到 tag，**默认禁用**、零网络），`aforge source enable official` 才启用。**边界**：官方仓库当前没有 `manifest.yaml`（走目录扫描回落）。~~`disable` 挡不住已拉取缓存被 `resolveTemplate` 渲染~~——已由 PR #61（b723a03）修复：`enabled` 是渲染参与判据（`src/core/sources/render-scope.ts`），禁用源的模板一律解析不到。行为见 [命令速查](commands.md#官方模板源默认注册默认禁用)。**该能力已决议裁剪**（停止播种、下一 major 移除代码，见下「不予实现」与 [Spec §4.6](../AgentForge-Spec.md#46-template--source-体系的范围决议2026-09-03)），issue [#55](https://github.com/zyTheGit/AgentForge/issues/55) 据此关闭
 - **已实现** — `import` 增强：文件识别改为声明式规则表（8 种，含 `.cursor/rules/*.mdc` 与 `.github/copilot-instructions.md` 的目录判据），工具链关键词扩到 9 类且词边界安全，见 [命令速查](commands.md#import-可识别的文件与关键词覆盖)
@@ -36,7 +36,7 @@
 不阻塞 Phase 2 / Phase 3 收尾，但会影响特定场景，均已开 issue 跟踪：
 
 - **两处仍未实机验证的上游行为**（issue [#54](https://github.com/zyTheGit/AgentForge/issues/54)，已收窄）：codex 侧 on_demand 技能的**显式 `$name` 调用**（`codex debug prompt-input` 只渲染提示词、不展开技能正文，要确认得开一次真会话），以及**在 WSL 侧跑一轮完整 `aforge sync`**。原先同列的两项已实测通过：codex sidecar 的字段路径 `policy.allow_implicit_invocation` 正确（codex 0.147.0）、opencode 对未知 frontmatter 键一律忽略（1.15.13，注入那一行是真空操作），结论见 [技能](skills.md#按需装载on_demand) 与 [平台注意事项](platform.md#wsl-互通)
-- **pi 侧 `httpTransport: "sse"` 的实际连接行为**（issue [#66](https://github.com/zyTheGit/AgentForge/issues/66)）：能力矩阵把 pi × `sse` 判为无损（`src/core/project/projectors/mcp-transport.ts` 的 `MCP_TRANSPORT_MATRIX`），依据是 pi-mcp-adapter 的文档而非实机连接测试。若与上游不符，症状是「SSE 锁定不生效、回落成 streamable HTTP」而非报错，且只影响**仅支持 SSE** 的 server，见 [MCP](mcp.md#transport--target-支持矩阵)
+- **pi 侧 `httpTransport: "sse"` 依赖的是未公开契约**（issue [#66](https://github.com/zyTheGit/AgentForge/issues/66) 的实机验证已完成，判定不变）：连接行为实测无误（证据见上 Phase 2 与 [MCP](mcp.md#transport--target-支持矩阵)），但该键在 pi-mcp-adapter 的 README 里零提及，只存在于源码与类型定义。因此这格是「已验证但依赖实现细节」——上游若把它收成 Agent Plugin 专用，症状仍是静默回落成 streamable HTTP、只影响**仅支持 SSE** 的 server
 
 ## 不予实现
 

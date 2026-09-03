@@ -115,6 +115,9 @@ aforge sync
 - **opencode**（`opencode.json` 的 `mcp`）：`type` 只有 `local` / `remote` 两种，remote 侧的字段只有 `url` / `headers` / `oauth` / `timeout` / `enabled`——**上游没有任何字段能声明 SSE**。所以 `transport: sse` 会和 `http` 一样落成 `type: "remote"`，opencode 按 streamable HTTP 连接。这不是 AgentForge 偷懒，是上游确实不区分；AgentForge 的做法是照实投影 + 显式告警，不发明上游不认的字段。
 - **codex**（`.codex\config.toml` 的标记段）：只支持 STDIO 与 Streamable HTTP，**没有 SSE**。`transport: sse` 的 server **整条不写进标记段**——写进去 codex 也认不了，反而让用户以为生效了。远端条目的鉴权头键名是 `http_headers`（不是 `headers`，写错 codex 会静默忽略）。另外每个 server 是**单表** `[mcp_servers.<name>]`，不是数组表 `[[mcp_servers.<name>]]`：写成数组表会让 codex 整份 `config.toml` 解析失败（`invalid type: map, expected a string`），不只是这一段失效。
 - **pi**（`.pi\mcp.json` 的 `mcpServers`，需 `pi-mcp-adapter`）：条目**没有 `type` 字段**，适配器按 `command` / `url` / `socket` 互斥来判定 transport。只给 `url` 时默认 streamable HTTP 并允许回落 SSE；`transport: sse` 会额外写 `httpTransport: "sse"` 锁定 SSE 并关掉回落，所以 SSE 在 pi 上是无损的。顶层键名与 Claude Code 同名，但条目形状**不同构**，别照抄。
+  - **适配器是强前置**：pi 本体（实测 `@earendil-works/pi-coding-agent` 0.84.3）不含任何 MCP 代码，`pi --help` 里也没有 MCP 子命令。没装 `pi-mcp-adapter` 时 `.pi\mcp.json` 就是一份死文件——不会报错，只是完全不生效。
+  - **「SSE 无损」已实机验证**（issue [#66](https://github.com/zyTheGit/AgentForge/issues/66)，pi-mcp-adapter 2.32.1）：本地探针对比两组配置，写 `httpTransport: "sse"` 时传输层第一个请求就是 `GET` + `Accept: text/event-stream`、全程零 streamable-HTTP POST；不写该键时第一个请求是 POST、被拒后才回落 SSE。上游 `server-manager.ts` 里首选 transport 取 `definition.httpTransport ?? "streamable-http"`，回退分支的第一个前置条件是该键为 `undefined`。
+  - **但依据是未公开契约**：`httpTransport` 在适配器 README 里零提及，只出现在源码与类型定义里（注释写着 "Used by Agent Plugins"）。上游把它收回成 Agent Plugin 专用不算 breaking change，届时这格判定要重新验证。
 
 **表达不了的时候不会静默。** 降级（opencode × sse）与跳过（codex × sse）都会出现在两个地方：
 
