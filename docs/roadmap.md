@@ -1,6 +1,6 @@
 # 路线图与实现状态
 
-这份文档是「哪些能力已经能用、哪些还没有」的单一入口。分阶段规划的权威来源是 [Spec §12](../AgentForge-Spec.md#12-分阶段技术) 与 [PRD §10](../AgentForge-PRD.md#10-分阶段路线)；字段级的行为边界见 [平台注意事项与已知限制](platform.md#已知限制)。
+这份文档是「哪些能力已经能用、哪些还没有」的单一入口，只记录**实现状态**。**阶段划分的唯一权威是 [PRD §10](../AgentForge-PRD.md#10-分阶段路线)**；[Spec §12](../AgentForge-Spec.md#12-分阶段技术映射) 只做「阶段名 → 技术项」的映射，阶段变更须与 PRD §10 同 PR 联改。字段级的行为边界见 [平台注意事项与已知限制](platform.md#已知限制)。
 
 约定：**已实现** = 有代码且有测试覆盖；**部分实现** = 主路径可用，留有明确的契约位；**未实现** = schema/文档已登记，运行时无行为；**不予实现** = 已决策放弃，不列入任何 Phase。
 
@@ -20,7 +20,7 @@
 - **已实现** — Commands 命名空间 + `$1..$9` 归一化；Interactive `init` 体验（提前落地）
 - **已实现** — MCP 字段与上游对齐：`stdio` / `http` / `sse` 三态按 target 逐格归一化，能力矩阵是 `src/core/project/projectors/mcp-transport.ts` 的 `MCP_TRANSPORT_MATRIX`（单一事实源）。上游表达不了的两格显式降级而非静默：opencode × `sse` 降级为 streamable HTTP、codex × `sse` 整条跳过，`sync` 与 `doctor` 各报一条。用法与矩阵见 [MCP](mcp.md#transport--target-支持矩阵)
 - **已实现** — 更丰富探测器：在 node/python/包管理器/rust/go/shell 之外新增 java（`sdkman` > `jenv` > `jabba` > `mise` > `asdf`）、dotnet（只有 `system` / `none`）、monorepo（`nx` > `turbo` > `lerna` > `rush` > `pnpm-workspace`）、CI（`github-actions` > `gitlab-ci` > `circleci` > `jenkins` > `azure-pipelines`）。**边界**：这四类只写进 `habits.detected`，声明侧字段（`runtime.java` 等）尚未定义、不参与渲染，判据见 [habits.yaml](habits.md#detected-快照结构)
-- **已实现** — 可选官方模板仓库：`init` 往 user 层 `sources.json` 播种一条 `official`（pin 到 tag，**默认禁用**、零网络），`aforge source enable official` 才启用。**边界**：官方仓库当前没有 `manifest.yaml`（走目录扫描回落），且 `disable` 挡不住已拉取缓存被 `resolveTemplate` 渲染——这两项收在 issue [#55](https://github.com/zyTheGit/AgentForge/issues/55)，行为与规避方式见 [命令速查](commands.md#官方模板源默认注册默认禁用)
+- **已实现** — 可选官方模板仓库：`init` 往 user 层 `sources.json` 播种一条 `official`（pin 到 tag，**默认禁用**、零网络），`aforge source enable official` 才启用。**边界**：官方仓库当前没有 `manifest.yaml`（走目录扫描回落），该项收在 issue [#55](https://github.com/zyTheGit/AgentForge/issues/55)。~~`disable` 挡不住已拉取缓存被 `resolveTemplate` 渲染~~——已由 PR #61（b723a03）修复：`enabled` 是渲染参与判据（`src/core/sources/render-scope.ts`），禁用源的模板一律解析不到。行为见 [命令速查](commands.md#官方模板源默认注册默认禁用)
 - **已实现** — `import` 增强：文件识别改为声明式规则表（8 种，含 `.cursor/rules/*.mdc` 与 `.github/copilot-instructions.md` 的目录判据），工具链关键词扩到 9 类且词边界安全，见 [命令速查](commands.md#import-可识别的文件与关键词覆盖)
 - **已实现** — `skills.on_demand` 按需装载：正文照常物化投影，区别是**不进模型的自动路由清单**（claude / pi 注入 frontmatter `disable-model-invocation: true`，codex 写 sidecar `agents\openai.yaml`）。**边界**：opencode 无对应开关——实测确认注入那一行对它是真正的空操作（未知 frontmatter 键被忽略，技能仍进模型清单），`doctor` 显式告警；codex sidecar 的字段路径 `policy.allow_implicit_invocation` 已实机验证正确。仍未验证的只剩 codex 侧 on_demand 技能的显式 `$name` 调用（见下「已知遗留」）。验证方法与观察到的现象见 [技能](skills.md#按需装载on_demand)
 
