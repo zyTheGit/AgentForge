@@ -65,11 +65,15 @@
   - 代价在**老锁文件**上：`pidSpace` 是后加字段，旧版本写下的 `meta.json` 没有它 → 读成空串 → `sameProcessSpace` 为 false → 不做 pid 探针。于是一把真·本机活锁若心跳停摆超 5 分钟仍可能被抢占；这个方向是实现里刻意选的（反方向会让跨边界的陈旧锁被永久判成活锁，只能人工删目录）。
 - **「跨文件系统边界 rename 会失败」在这里不成立**：`atomicWrite` 的临时文件与目标**同目录**（`src/infra/fsutil.ts:100`），rename 永远发生在同一文件系统内。实测 WSL 侧在 `/mnt/c` 上做同目录 `mv` 成功。`/mnt/c` 场景下真实的风险是另一侧进程占用目标文件，rename 拿到 `EPERM` / `EACCES` → `PermissionError` 退出码 4（`src/infra/fsutil.ts:131`）。
 - `copyMode` 在 posix 上把目标原有权限位复制到临时文件（`src/infra/real-host.ts:71`，win32 上是 no-op）。**实测：默认（不带 `metadata`）挂载下 `chmod` 是无效操作**——`/mnt/c` 上新建文件恒为 `777`，`chmod 600` 退出码 0 但回读仍是 `777`（同一发行版 ext4 `/tmp` 上的对照组正确变成 `600`）。即 posix 分支的 `copyMode` 在 `/mnt/c` 上等价于 no-op：不报错、不阻断写入（失败本来也是 best-effort 吞掉，`src/infra/fsutil.ts:122`），只是「保留原权限」这件事不会发生。带 `metadata` 挂载选项时行为不同（本次未测）。
-- 结论：互斥原语本身跨边界成立（上面那轮 20000 次对抗实测），`sameProcessSpace` 也已经把「跨边界误信 pid 探针」这个坑堵掉了，但仍**不建议**两侧同时对同一份 SoT 跑 `sync`——剩下的理由是：大小写不敏感带来的「同一项目两个根 → 两把锁」（互斥直接失效，见下节），以及跨边界的陈旧锁只能走「心跳停摆 5 分钟」这条慢路径恢复（pid 探针恒不采信）。另见下方 [已知限制](#已知限制) 的并发安全条目。
+- 结论：互斥原语本身跨边界成立（上面那轮 20000 次对抗实测），`sameProcessSpace` 也已经把「跨边界误信 pid 探针」这个坑堵掉了，但仍**不建议**两侧同时对同一份 SoT 跑 `sync`——剩下的理由是跨边界的陈旧锁只能走「心跳停摆 5 分钟」这条慢路径恢复（pid 探针恒不采信）。另见下方 [已知限制](#已知限制) 的并发安全条目。
 
 ### 大小写与路径长度
 
-- posix 分支的路径比较是**大小写敏感**的：`samePath` 只在 win32 折叠大小写（`src/core/paths.ts:130`），`isWithinAnyRoot` 的 fold 同理（`src/core/paths.ts:236`）。而 `/mnt/c` **实测确认大小写不敏感**：WSL 侧建出 `.../CaseProbe` 后，`[ -d .../caseprobe ]` 与 `[ -d .../CASEPROBE ]` 都命中，再 `mkdir .../caseprobe` 报 `File exists`（即文件系统只认一个目录，但任意大小写写法都能访问到它）。于是 WSL 侧分别用 `/mnt/c/Zy/proj` 和 `/mnt/c/zy/proj` 访问同一个项目时，AgentForge 会当成两个不同的根：影响面是锁根推导（`resolveLockRoots`，`src/core/project/sync-lock.ts:379`）与落盘 journal 的归属判定——两个「根」各自建自己的 `.sync.lock`，互斥就失效了。规避办法是固定路径的大小写写法（例如始终用 `cd -P` 后的形态，或在脚本里写死一种）。
+- posix 分支的路径比较是**大小写敏感**的：`samePath` 只在 win32 折叠大小写（`src/core/paths.ts:261`），`isWithinAnyRoot` 的 fold 同理（`src/core/paths.ts:410`）。而 `/mnt/c` **实测确认大小写不敏感**：WSL 侧建出 `.../CaseProbe` 后，`[ -d .../caseprobe ]` 与 `[ -d .../CASEPROBE ]` 都命中，再 `mkdir .../caseprobe` 报 `File exists`（即文件系统只认一个目录，但任意大小写写法都能访问到它）。
+  - **锁不会因此变成两把**（2026-09-03 实测推翻了本节早先的结论）：`resolveLockRoots` 推出的路径拼写虽然不同，但落到大小写不敏感的卷上仍是同一个目录——两种拼写下建出的 `.sync.lock` inode 相同，`mkdir` 的 `EEXIST` 互斥照常成立。
+  - 真正受影响的是**记账里的路径拼写**：`sync-meta.artifacts` 记的是写它那一轮的拼写，换一种拼写再 sync 时差集比对会对不上。这曾是一个 P0 数据丢失（issue #67：刚写出的产物被当成上轮遗留删掉），已修——prune 的差集比对改用 `pathIdentityKey`（无条件折叠大小写与分隔符，`src/core/paths.ts:375`），拼写漂移只会打一行 skip 提示并在下一轮记账里自愈。
+  - 仍建议固定路径的大小写写法（例如始终用 `cd -P` 后的形态，或在脚本里写死一种），以免每轮 sync 都带一行 skip 噪音。
+- **Windows 与 WSL 交替 sync 会在记账里留下另一平台形态的路径**（`C:\...` 与 `/mnt/c/...`）。本进程对另一侧的路径既 stat 不到也不该删，prune 会把这些记录**原样留在 sync-meta 里**并打一行 skip（issue #68：早先是静默丢弃，那批产物从此无人认领）；`doctor` 的 `sync-meta/artifacts/foreign-platform` 会把它们列出来，提示在原平台上 sync 才能清理。
 - Windows 长路径 `\\?\` 前缀只在 win32 上添加（`src/core/paths.ts:142`）。**实测：WSL 侧不受 260 字符限制**——在 `/mnt/c` 下逐级建到 40 层、目录路径 905 字符仍成功，在 914 字符处写文件并读回正常。反向读也没问题：Windows 侧 node 走普通路径（无 `\\?\`）就能 `readdir` / `stat` / 读到那个 910 字符的文件，加 `\\?\` 前缀同样可以——注意这台机器的 `LongPathsEnabled=0`，能成的原因是 libuv 自己会把超长绝对路径转成 `\\?\` 形式，**不能**据此推断「Win32 API 裸长路径可用」。`longPathAware` 因此是一层显式冗余保护，而不是唯一屏障。
 
 ### doctor 在跨环境下的读法
