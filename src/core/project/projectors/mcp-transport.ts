@@ -214,6 +214,16 @@ export function claudeMcpServersObject(
  * Agent Plugins 的清单里出现。远端条目默认走 streamable HTTP 并在端点确实不兼容时
  * 回退 SSE；`httpTransport: "sse"` 可强制 SSE 且禁用回退，因此 AgentForge 的
  * `transport: sse` 在 pi 侧是**无损**的。
+ *
+ * 该判定已实机验证（issue #66，pi-mcp-adapter 2.32.1）：上游 `server-manager.ts` 里
+ * 首选 transport 取 `definition.httpTransport ?? 'streamable-http'`，而回退分支的第一个
+ * 前置条件是 `definition.httpTransport === undefined`——写了该键就选 SSE 且不回落。
+ * 本地探针实测：写该键时传输层第一个请求就是 `GET` + `Accept: text/event-stream`、
+ * 全程零 streamable-HTTP POST；不写时第一个请求是 POST、失败后才回落 SSE。
+ *
+ * **稳定性风险**：`httpTransport` 在适配器 README 里零提及，只出现在源码与类型定义中
+ * （注释写着 "Used by Agent Plugins"），属于**未公开契约**。上游把它改成 Agent Plugin
+ * 专用不算 breaking change，届时本行判定要重新验证。
  */
 export function piMcpServersObject(
   servers: readonly McpServer[],
