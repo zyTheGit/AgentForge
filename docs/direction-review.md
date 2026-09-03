@@ -49,7 +49,7 @@ PRD §1.4 差异化中的两项同样不随标准收敛而贬值：
 | `bundle` | 功能完整即封版 |
 | 探测器扩充 | java/dotnet/monorepo/CI 四类探测自 Phase 2 起只写 `habits.detected`、不参与渲染（见 [roadmap](roadmap.md) Phase 2 与 [habits](habits.md#detected-快照结构)）——在「探测 → 渲染」打通之前，**不再新增任何探测器** |
 | 声明式适配器 | 机制保留，能力面不再扩（`merge_toml`、scope 条件产出、自由 MCP 字段映射、会话钩子继续不开放）；是否解冻取决于 §3 的条件判断 |
-| WSL | 实测已完成，剩余两条「未实测」项留在 [platform](platform.md#wsl-互通)，不再主动投入 |
+| WSL | 实测已完成（含「WSL 侧跑一轮完整 `aforge sync`」，`$HOME` 与 `/mnt/c` 两种落点各一轮，见 [platform](platform.md#wsl-互通)）；剩余一条「未实测」项（带 `metadata` 挂载时的权限行为）留在 platform，不再主动投入 |
 
 ### 2.3 砍掉（建议裁决，需按 §4.2 决议流程确认后执行）
 

@@ -254,7 +254,7 @@ v1.1 把「多工具规则格式碎片化」列为首要问题。AGENTS.md 正�
 
 问题陈述 §2 第 1 条对应的阶段，也是下一阶段**唯一集中投入**的方向。待验证假设：闭环的瓶颈在**捕获**而非管理。
 
-- 捕获路径可发现性：`learn --print-protocol` 接 `learn --file -` 的衔接示例、`prompt` 档协议正文打磨、无钩子能力的三家的手工挂载写法文档化
+- 捕获路径可发现性：`learn --file -` / `--file <path>` 的条目管道示例、`prompt` 档协议正文打磨、无钩子能力的三家的手工挂载写法文档化（含反模式提示：`learn --print-protocol` 输出的是给 agent 看的协议，不能接回 `learn`）
 - `scripts/` 计时脚本入库（供 §8 L1 主证据使用）
 - **不含** claude 侧 `auto_capture: hook` 落点：已随 issue #56 决议不做，重启需先推翻 `docs/learning.md` 记录的四条安全前提
 

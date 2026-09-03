@@ -39,7 +39,9 @@
 
 - **Windows 侧不能把 SoT 放进 WSL 文件系统。** `\\wsl$\<distro>\...` 与 `\\wsl.localhost\<distro>\...` 都是 UNC 形态；win32 上以 `\\` 或 `//` 开头的**外部路径入口**（`AGF_HOME` / `CODEX_HOME` / `PI_CODING_AGENT_DIR` / 项目目录）一律 `GenericError` 退出码 1（判据在 `src/core/paths.ts` 的 `validatePath`，四个入口共用它）。这条属于「不予实现」，见 [路线图](roadmap.md#不予实现)。
 - 同一个守卫还拒绝**Windows 上的无盘符绝对路径**（`CODEX_HOME=/home/x/.codex` 这类照抄 WSL 侧配置的写法）：`path.win32.resolve` 会把它静默补成 `C:\home\x\.codex`，落点与用户写的完全不是一回事，所以报 `ConfigError` 退出码 2 而不是猜一个盘符。`~` 会先展开成家目录再校验，写 `~/.codex` 不会造出字面名为 `~` 的目录。
-- 反方向（WSL 侧把 SoT 放在 `/mnt/c/...`）不会被拒：UNC 判据只在 win32 分支生效，posix 上 `//foo` 是合法绝对路径（`validatePath` 里的注释说明了为什么不能在 posix 上拦）。技术上可行，但要一并接受下面「锁与原子写」「大小写」两节的代价。AgentForge 依赖的**文件系统原语**已在 `/mnt/c` 上逐条实测通过（非递归 `mkdir` 的 `EEXIST`、同目录 rename、深路径读写，见下面两节），但**「WSL 侧跑一轮完整 `aforge sync`」这件事本身仍未实测**——本次验证用的发行版里没有 node / bun 运行时，装一个属于改动机器环境，没做。所以这条只能说「前提条件都成立」，不能说「整体可用」。
+- 反方向（WSL 侧把 SoT 放在 `/mnt/c/...`）不会被拒：UNC 判据只在 win32 分支生效，posix 上 `//foo` 是合法绝对路径（`validatePath` 里的注释说明了为什么不能在 posix 上拦）。技术上可行，但要一并接受下面「锁与原子写」「大小写」两节的代价。AgentForge 依赖的**文件系统原语**已在 `/mnt/c` 上逐条实测通过（非递归 `mkdir` 的 `EEXIST`、同目录 rename、深路径读写，见下面两节），**整体链路也已实测**（v0.2.3-rc.3）：`init --yes` → `sync` → `sync` → `doctor`，SoT 分别放在 WSL 原生 `$HOME` 与 `/mnt/c` 下各跑一轮，两轮都是四 target 8 文件投影落地、第二轮全部 `unchanged` 且 `content hash` 不变、`doctor` **30 ok / 0 warn / 0 error**、产物全为 LF；两轮的 `content hash` 与 Windows 侧同 SoT 的完全一致（`ac1b5565…`），即挂载形态不渗进渲染口径。
+  - 验证用的是 Release 的 `aforge-linux-x64` 单文件二进制（内嵌 bun runtime）——**这正是绕开「发行版里没有 node」的办法**，不必为跑一轮验证去装运行时、改机器环境。安装方式见 [安装与构建](install.md)。
+  - 仍未实测的只剩**带 `metadata` 挂载选项时的权限行为**。不带 `metadata` 时 `chmod 0600` 后回读是 `777`（9p 不承载 Unix mode），与下面「锁与原子写」那条同源。
 - `aforge doctor` 的 `user-sot-root` 条目会把 UNC `AGF_HOME` 报成 error（`src/core/doctor/check-config.ts:27` 调 `resolveUserSoT`）；`CODEX_HOME` / `PI_CODING_AGENT_DIR` 的同类问题由 `codex-home` / `pi-coding-agent-dir` 两条报出——看到这些就是撞上了上面那两条拒绝。
 
 ### user scope 是两份，不会自动合并
