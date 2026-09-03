@@ -34,6 +34,7 @@
     "emit-schema": "tsx src/schema/emit.ts && biome check --write --error-on-warnings schemas/",
     "gen:version": "node scripts/gen-version.mjs",
     "gen:version:check": "node scripts/gen-version.mjs --check",
+    "measure:init-timing": "node scripts/measure-init-timing.mjs",
     "build": "npm run build:node && npm run build:bun",
     "build:bun": "npm run gen:version && node scripts/build-bun.mjs",
     "build:bun:all": "npm run gen:version && node scripts/build-bun.mjs --all",
