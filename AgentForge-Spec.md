@@ -432,6 +432,24 @@ mcp:
 - 三个数组均可缺省，缺省视为 `[]`；`skills` 缺省或为空时，skill 清单退化为扫描包内 `skills/` 目录。
 - **校验时机与错误码**：manifest 由源加载路径（`loadSourceManifest`）在读取时按上述契约校验。文件不存在不算错误（目录型源可只放 `skills/`）；YAML 语法错误或 schema 不通过 → `ConfigError`，**退出码 2**，逐条列出出错字段路径。
 
+### 4.6 template / source 体系的范围决议（2026-09-03）
+
+模板与源体系**收缩为三档并封顶**：内置 `base/default` + 本地 `templates/` + git pin。下列五项属于「深化」，**不予实现**；每条理由独立成立，任一条单独就足以否掉该项。
+
+| # | 不予实现项 | 理由 |
+|---|-----------|------|
+| 1 | manifest 成为解析事实源（`manifest.templates[].path` 参与解析 + `source add/update` 校验 + doctor 检查项） | 解析口径固定为 `<源根>\templates\<id>.md`（§4.5），改成 manifest 驱动等于把「列得出、解析不到」换成另一套等价约束，用户仍得让 id 与路径对应；且**官方仓库至今没有 `manifest.yaml`，即零供给**，为零供给建约束是纯成本 |
+| 2 | 模板组合能力（模板间引用/继承、变量 schema、错误定位到模板行） | 会重新撕开已决议的「自定义 helper / partial 不予实现」口子（见 [规则正文装配](docs/rules.md)）——模板一旦能互相引用，装配就从拼接变成求值，与 marker 投影的可预测性直接冲突 |
+| 3 | 供应链信任（checksum、签名、内容审计） | **模板正文是注入 Agent 上下文的指令文本**，第三方模板源本质是 prompt injection 供应链。做了信任层等于承诺永久维护它；不做而鼓励生态则是把风险转给用户。唯一自洽的选择是不建生态 |
+| 4 | 发现与分发（registry、search、安装量） | 这是做包管理器，与 habit-first 定位正交；生态规模本身也不是本产品的成功指标 |
+| 5 | 多源优先级深化、`template` / `source` 的 enable/disable 语义扩展 | 现状四层优先级（内置短路 → 项目层 → 用户层 → 已登记且启用的源）已覆盖「个人 + 团队私有源」的完整场景，再加档只增加解释成本 |
+
+**官方模板源**：`init` 播种的 `official` 源（§4.4、[命令速查](docs/commands.md#官方模板源默认注册默认禁用)）从「修」改「裁」——停止播种、下一 major 移除相关代码。理由：持续成本（manifest 规范、缓存治理、供应链责任）对应一个从未被验证的需求，而 git pin + 本地路径已覆盖外部模板的真实场景。issue [#55](https://github.com/zyTheGit/AgentForge/issues/55) 据此关闭（其 `disable` 一半已由 PR #61 修复）。
+
+**唯一条件触发的幸存者**：**项目层 pin**（当前 pin 是 user 层登记表里的 `ref`、全机器共享，项目无法各自 pin 同一源的不同版本）。它对应真实场景（多项目共用一个团队私有源、版本需求各异），但需**先有团队用户反馈版本冲突**才单独立项，不预先实现。
+
+**本决议不改运行时行为**：停止播种 `official` 是行为变更，与本节文字分开、单独 PR 落地；在那之前 §4.4 与命令速查描述的现状仍然有效。
+
 ---
 
 ## 5. 模板与合并
@@ -939,7 +957,7 @@ codex 只有 user 级 `$CODEX_HOME\prompts\`（§8.4 实测结论）。effective
 | Phase 1 — MVP | 四投影、源 local/git、learn/promote、`learning.auto_capture: prompt`（§7.4）、Commands 投影（§8.8）、Windows 门禁（§11.2） |
 | Phase 2 | MCP 对齐（§8.7）、import 增强、更多模板；Commands 命名空间与 `$1..$9` 归一化（§8.8.2）已提前落地。**不含 `skills.copy_mode: symlink`**——已决定不实现，理由见 §4.2 |
 | Phase 3 | Learning 启发式（§7.4）、`auto_capture: hook` 的 codex `hooks.json` 落地（§7.4）、适配器插件化（§4.2 / §8.9）、WSL 说明 |
-| Phase 4 — Learning 捕获 | 捕获路径的可发现性（`learn --print-protocol` 与 `learn --file -` 的衔接、`prompt` 档协议正文）、`scripts/` 计时脚本入库（供 PRD §8 L1 主证据使用）。**claude 侧 hook 落点不在此阶段**：issue #56 已决议不做，重启需先满足 `docs/learning.md` 记录的四条安全前提 |
+| Phase 4 — Learning 捕获 | 捕获路径的可发现性（`learn --file -` / `--file <path>` 的条目管道示例、`prompt` 档协议正文；`learn --print-protocol` 输出的是给 agent 的协议，不接 `learn`）、`scripts/` 计时脚本入库（供 PRD §8 L1 主证据使用）。**claude 侧 hook 落点不在此阶段**：issue #56 已决议不做，重启需先满足 `docs/learning.md` 记录的四条安全前提 |
 | Phase 5 — Skills 主打 | 无新增技术面；准入前置是 codex 显式 `$name` 调用的实机验证（PRD §8 L1 第 6 条）。MCP transport（§8.7）归「交付保障」，只做维护 |
 | Phase 6 — target 扩展 | 条件解冻（PRD §8 L4）；解冻后仅以数据-only 声明式适配器（§4.2 的能力边界）扩 target，不开放可执行代码投放 |
 
