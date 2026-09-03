@@ -50,7 +50,7 @@ learning:
 | `version` | `1` | `1` | schema 版本，目前只接受 `1` |
 | `scope` | `user` \| `project` | 无 | 仅声明本文件所属层级；实际有效 scope 由「哪一层在用」推导（`AGF_SCOPE` 可强制），合并后该字段无意义 |
 | `targets` | `string[]` | **必填**，至少一项 | 投影目标 id：内置 `opencode` / `codex` / `claude` / `pi`，或[声明式适配器](#声明式适配器第三方-target)注册的 id。**选择型数组**：合并时 project 层恒覆盖 user 层，不受 `merge.arrays` 影响 |
-| `templates` | `string[]` | 无（渲染层兜底 `base/default`） | 模板 id 列表，内容型数组，参与 `merge.arrays`。可登记的内置 id 还有 opt-in 的 `base/tools` / `base/context`；解析优先级与自定义写法见 [规则正文装配](rules.md) |
+| `templates` | `string[]` | 无（渲染层兜底 `base/default`） | 模板 id 列表，内容型数组，参与 `merge.arrays`。可登记的内置 id 还有 opt-in 的 `base/tools` / `base/context`；解析优先级与自定义写法见 [templates/ 模板](templates.md) |
 | `extensions` | object | `{}` | 用户自定义扩展键，原样透传、不校验内部结构 |
 
 给 `targets` 默认值会伪造用户选择，所以它是唯一的必填项；`templates` / `mcp.servers` / `skills.*` 都是内容型数组，缺省即「未设置」，好让两层继承能区分「显式空数组」和「没写」。
