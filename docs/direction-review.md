@@ -30,7 +30,7 @@ PRD §1.4 差异化中的两项同样不随标准收敛而贬值：
 
 | 投入项 | 理由 | 首要动作 |
 |--------|------|----------|
-| Learning 闭环（`learn` / `learnings` / `promote` / `auto_capture`） | 最深的护城河（另一项见 §1 列表第 2 条）。**待验证假设**：瓶颈在**捕获**不在管理——捕获不顺手，闭环不会跑起来，存储/打分/衰减做得再好都是空的。该假设目前无用户证据（§3.1 的信号尚未采集），因此首要动作只取不依赖上游能力的那几项 | ① 打磨 `prompt` 档协议正文（常量在 `src/core/learning/auto-capture.ts`）；② 提升 `aforge learn` 非 HTTP 通道的**可发现性**——stdin / `--file` / 免交互路径**均已实现**（`learn.ts`：无参数 TTY 交互、`--file <path>\|-`、非 TTY 报 ConfigError(2)），要补的是 README / docs 的管道示例，以及 `learn --print-protocol` 输出接 `learn --file -` 的衔接示例；③ 给无钩子能力的三家文档化 `learn --print-protocol` 的手工挂载写法（**文档项，不计入工程投入**）。**不含 claude 侧 hook 落点**——该项已随 issue [#56](https://github.com/zyTheGit/AgentForge/issues/56) 决议不做（理由见 [learning](learning.md#另外三家将来要支持的前置条件)，登记见 [roadmap](roadmap.md) Phase 3）；要重启得先给出「收益 > 风险面」的新证据，learning.md 记录的四条安全条件（白名单键路径、只增不减、条目带标记、用户手改处置）仍是硬门槛 |
+| Learning 闭环（`learn` / `learnings` / `promote` / `auto_capture`） | 最深的护城河（另一项见 §1 列表第 2 条）。**待验证假设**：瓶颈在**捕获**不在管理——捕获不顺手，闭环不会跑起来，存储/打分/衰减做得再好都是空的。该假设目前无用户证据（§3.1 的信号尚未采集），因此首要动作只取不依赖上游能力的那几项 | ① 打磨 `prompt` 档协议正文（常量在 `src/core/learning/auto-capture.ts`）；② 提升 `aforge learn` 非 HTTP 通道的**可发现性**——stdin / `--file` / 免交互路径**均已实现**（`learn.ts`：无参数 TTY 交互、`--file <path>\|-`、非 TTY 报 ConfigError(2)），要补的是 README / docs 的管道示例（`--file -` 从 stdin 读的是**条目正文**；`--print-protocol` 输出的是给 agent 看的协议，两者不可对接）；③ 给无钩子能力的三家文档化 `learn --print-protocol` 的手工挂载写法（**文档项，不计入工程投入**）。**不含 claude 侧 hook 落点**——该项已随 issue [#56](https://github.com/zyTheGit/AgentForge/issues/56) 决议不做（理由见 [learning](learning.md#另外三家将来要支持的前置条件)，登记见 [roadmap](roadmap.md) Phase 3）；要重启得先给出「收益 > 风险面」的新证据，learning.md 记录的四条安全条件（白名单键路径、只增不减、条目带标记、用户手改处置）仍是硬门槛 |
 | Skills 跨 CLI 分发（**主叙事**） | 用户感知最强的第二叙事；主路径可用（四家投影、`expose_as_command`、`on_demand` 均已实现）；SKILL.md 输入侧标准化 + 输出侧碎片化的差值即生存空间（§1） | **准入前置**：对外宣称「主打」之前，必须先完成 [#54](https://github.com/zyTheGit/AgentForge/issues/54) 中 codex 显式 `$name` 调用的实机验证。在此之前对外表述维持「主路径可用、待实证」，不先扩能力面 |
 | MCP transport 可靠性（**交付保障，不作主叙事**） | 三态逐格归一化 + 两格显式降级已实现（`MCP_TRANSPORT_MATRIX`），它保的是「不静默失真」的信任，不是获客叙事 | 只做维护；[#66](https://github.com/zyTheGit/AgentForge/issues/66)（pi × `sse` 实机连接）随时可做。**不与 Skills 合并宣称「均已验证」** |
 | sync 事务化内核（marker 保护、回滚、幂等、`doctor`、两级合并） | 信任基石——用户敢用是因为「不碰我的手写内容」 | 只做维护与打磨，不加新面 |
@@ -108,7 +108,7 @@ PRD §8 L1 那条门禁至今零执行记录，仓库里既无计划书、问卷
 
 **一阶段主线（唯一集中投入的工程项）**
 
-2. **Learning 捕获可发现性打磨**：`learn --print-protocol` 输出接 `learn --file -` 的衔接示例进 README / docs、`prompt` 档协议正文（`src/core/learning/auto-capture.ts` 常量）打磨、三家手工挂载写法文档化。依据是 §2.1 的待验证假设「瓶颈在捕获不在管理」，且该项不依赖 §3 信号、不随标准收敛贬值。
+2. **Learning 捕获可发现性打磨**：`learn --file -` / `--file <path>` 的管道示例进 README / docs、`prompt` 档协议正文（`src/core/learning/auto-capture.ts` 常量）打磨、三家手工挂载写法文档化（含反模式提示：`--print-protocol` 的输出是给 agent 的协议，不能喂回 `learn`）。依据是 §2.1 的待验证假设「瓶颈在捕获不在管理」，且该项不依赖 §3 信号、不随标准收敛贬值。
 3. 按 §2.3 开决议 PR（流程见 §4.2）：#55 剩余的「官方仓库缺 manifest」一半由「修」改「裁」（`disable` 一半已由 PR #61 修复，见 §2.3.2），`template`/`source` 收缩为三档。
 4. 撰写 PRD 2.0：重写问题陈述（§1 核心判断）、把 §3.1 的双指标与两级解冻门槛写进 §8、术语表同步（§12 的「Learning / Instinct」行在文档体系里已不用 Instinct，需随新叙事一并清理），Phase 划分改为「Learning 捕获 → Skills 主打 → target 扩展（视 §3）」。版本策略见 §4.3。
 
