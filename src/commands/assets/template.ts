@@ -71,10 +71,10 @@ export async function runSetTemplateEnabled(
   return setTemplateEnabled(ctx.host, targetLayer, id, enabled, ctx.os);
 }
 
-/** 单行模板摘要（enabled/disabled 上色；builtin 项加 always-rendered 注记）。 */
+/** 单行模板摘要（enabled/disabled 上色；恒渲染的内置项加 always-rendered 注记）。 */
 function templateLine(item: TemplateListItem, ui: Ui): string {
   const origin = item.origin === 'source' ? `source:${item.sourceId ?? '?'}` : item.origin;
-  const note = item.origin === 'builtin' ? ui.dim('  (always rendered, Spec 5.2)') : '';
+  const note = item.alwaysRendered === true ? ui.dim('  (always rendered, Spec 5.2)') : '';
   const state = item.enabled ? ui.green('enabled') : ui.dim('disabled');
   return `  ${ui.bold(item.id)}  [${origin}]  ${state}${note}`;
 }

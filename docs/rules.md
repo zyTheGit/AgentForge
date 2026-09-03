@@ -11,7 +11,7 @@
 ①′ ## Learning Protocol          仅 learning.auto_capture: prompt
 ② ## Learnings                   已 promote 的 learning 条目
 ②′ ## Notes                      habits.notes
-③ profile.templates 里的模板      按数组顺序，Handlebars 渲染
+③ profile.templates 里的模板      按数组顺序，Handlebars 渲染（含 opt-in 的内置模板）
 ④ 内置 base/default              恒渲染一次，最低层
 ```
 
@@ -59,7 +59,7 @@ id 校验（`src/core/generate/resolver.ts:36`）拒绝空串、含反斜杠 `\`
 
 同一个 id 按这个顺序取第一个命中（`src/core/generate/resolver.ts` 的 `resolveTemplate`）：
 
-1. **内置 `base/default`**（发行包只读骨架）
+1. **内置模板**（发行包只读骨架：`base/default` / `base/tools` / `base/context`）
 2. 项目层 `<项目根>\.agentforge\templates\<id>.md`
 3. 用户层 `%USERPROFILE%\.agentforge\templates\<id>.md`
 4. **已登记且已启用**的源：`<源根>\templates\<id>.md`（git 源的源根是 `%USERPROFILE%\.agentforge\store\<源 id>`，local 源是登记的 `path`），多个源命中时按源 id 字典序取首个
@@ -67,26 +67,45 @@ id 校验（`src/core/generate/resolver.ts:36`）拒绝空串、含反斜杠 `\`
 四处都没有 → `ConfigError` 退出码 2，message `未解析的模板 id: <id>`，hint 指向 `aforge template list`。
 若该 id 只存在于**已禁用**的源里，报的是 `模板 id 只存在于已禁用的源: <id>（来自 <源 id>）`，hint 给出 `aforge source enable <源 id>` 与 `aforge template disable <id>` 两条修复动作（第 4 层只认 `sources.json` 里 `enabled` 的条目：`source disable` 之后缓存留着但不参与渲染，未登记的孤儿 `store\` 目录同样不参与）。
 
-**`base/default` 不可覆盖。** 它在第 1 步就短路返回内置常量，在 `templates/base/default.md` 放同名文件**没有任何效果**（仓库根的 `templates/base/default.md` 只是 `src/assets/templates.ts` 的同步副本，由单测锁定逐字一致，不参与运行时查找）。想改内置那套说法，只能换个 id（如 `my/base`）登记进 `profile.templates`——它会渲染在内置模板**之前**。
+### 三个内置模板
+
+登记表是 `src/assets/templates.ts` 的 `BUILTIN_TEMPLATES`（Spec §5.1，**数量封顶 3 个**）：
+
+- **`base/default`** —— **恒渲染**（第 ④ 层）。骨架 + Toolchain / Style / Verification / Forbidden。
+- **`base/tools`** —— **opt-in**。渲染 `tools.shell` / `editor` / `container` / `git.*`，输出 `## Tools` 节。
+- **`base/context`** —— **opt-in**。把 `habits.detected` 渲染成 `## Project Context (detected)` 节，首句明写「for reference only — not rules」；`manager: none` 的条目整条省略。
+
+opt-in 的两个要登记才生效：`aforge template enable base/tools`（或手工加进 `profile.templates`）→ `aforge sync`。**`init` 不会自动追加它们**，默认投影保持极薄。它们与外部模板同层（第 ③ 层），所以按数组顺序出现在 `base/default` **之前**。
+
+```yaml
+templates: [base/tools, base/context, base/default]
+```
+
+**三个都不可覆盖。** 它们在第 1 步短路返回内置常量，在 `templates/base/*.md` 放同名文件**没有任何效果**（仓库根的 `templates/base/` 只是 `src/assets/templates.ts` 的同步副本，由单测锁定逐字一致，不参与运行时查找）。想改内置那套说法，只能换个 id（如 `my/base`）登记进 `profile.templates`——它会渲染在内置模板**之前**。
+
 
 `aforge template list` 列出 builtin + 两层 SoT + 各启用源的全部可用 id（同 id 多处存在会逐条列出并标 origin）；`aforge template enable/disable <id>` **只改 `profile.templates` 数组**，不动文件。
 
 ### 模板里能用什么
 
-数据只有 `habits.yaml` 投影出来的三个顶层键（`TemplateView`，`src/core/generate/composer.ts:96`）：
+数据只有 `habits.yaml` 投影出来的四个顶层键（`TemplateView`，`src/core/generate/composer.ts:96`）：
 
 ```
 runtime.node.{manager,version,notes}      runtime.python.{manager,version,notes}
 runtime.package_managers                  runtime.rust.{manager,toolchain}
 runtime.go.{manager,version}              runtime.has_toolchain   ← 派生布尔
-tools.shell   tools.editor   tools.container
+tools.shell   tools.editor   tools.container   tools.has_any   ← 派生布尔
 tools.git.{conventional_commits,sign_commits,default_branch,notes}
 ai.language   ai.style   ai.verification   ai.forbid
+detected.runtimes[].{label,manager,version,source}                ← habits.detected 收窄
+detected.package_managers   detected.monorepo   detected.ci   detected.has_any
 ```
 
-**访问不到**：`profile.*`、`habits.notes`、`habits.detected`、`habits.extensions`、learnings、custom 内容、以及任何环境信息（OS / 环境变量 / CI）。环境信息是**刻意**排除的——正文必须与环境无关，否则同一份 SoT 在 CI 与本机渲染出的 `contentHash` 会漂移，`doctor` 的一致性比对就开始误报。
+**访问不到**：`profile.*`、`habits.notes`、`habits.extensions`、learnings、custom 内容、以及任何**现场**环境信息（OS / 环境变量 / CI）。环境信息是**刻意**排除的——正文必须与环境无关，否则同一份 SoT 在 CI 与本机渲染出的 `contentHash` 会漂移，`doctor` 的一致性比对就开始误报。
 
-`tools.*` 与 `ai.language` 是内置模板不渲染、但视图里有的字段——自定义模板的主要用途之一就是把它们渲染出来。
+`detected.*` 不违反这条：它读的是 `habits.yaml` 里**已落盘**的探测快照（`aforge init` / `aforge detect` 写入），跨环境字节一致；快照变了本身就是一次显式的 SoT 变更。收窄规则在 `src/core/generate/detected-view.ts`：只认白名单键（node / python / java / dotnet / rust / go / package_managers / monorepo / ci），类型不符或 `manager: none` 的条目静默省略，**不抛错**——一段参考信息不该把 `sync` 拖挂。
+
+`tools.*` 与 `ai.language` 是 `base/default` 不渲染的字段——`tools.*` 现在有内置的 `base/tools` 兜底（见下），`ai.language` 仍需自定义模板。
 
 几个影响 `#if` 判断的归一化：`manager` 未声明或为 `none` 的 runtime 条目整条变 undefined；空数组变 undefined；`tools.container: none` 变 undefined。所以模板里 `{{#if runtime.node}}` 与 `{{#if runtime.node.manager}}` 效果相同。
 
@@ -108,7 +127,7 @@ ai.language   ai.style   ai.verification   ai.forbid
 
 ### 一个例子
 
-`.agentforge\templates\my\workflow.md`，把内置模板不管的 `tools` 渲染出来：
+`.agentforge\templates\my\workflow.md`，把 `tools` 按自己的措辞渲染出来（只想要默认措辞的话，直接 `aforge template enable base/tools` 就够了）：
 
 ```handlebars
 {{#if tools.shell}}

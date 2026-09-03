@@ -303,7 +303,8 @@ describe('listTemplates 对官方源的按需拉取', () => {
     await seedRegistryFixture(mgrCtx(host));
 
     const result = await listTemplates(tplCtx(host));
-    expect(result.items).toEqual([{ id: 'base/default', origin: 'builtin', enabled: false }]);
+    expect(result.items.map((i) => i.id)).toEqual(['base/default', 'base/tools', 'base/context']);
+    expect(result.items.every((i) => i.origin === 'builtin' && !i.enabled)).toBe(true);
     expect(result.warnings).toEqual([]);
     expect(host.gitCalls).toHaveLength(0);
   });
@@ -444,7 +445,9 @@ describe('listTemplates 对官方源的按需拉取', () => {
 
     const result = await listTemplates(tplCtx(host, { offline: true }));
     expect(host.gitCalls).toHaveLength(0);
-    expect(result.items).toEqual([{ id: 'base/default', origin: 'builtin', enabled: false }]);
+    // 官方源没拉下来 → 清单只剩三个内置模板
+    expect(result.items.map((i) => i.id)).toEqual(['base/default', 'base/tools', 'base/context']);
+    expect(result.items.every((i) => i.origin === 'builtin' && !i.enabled)).toBe(true);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain('AGF_OFFLINE');
     expect(result.warnings[0]).toContain(`aforge source update ${OFFICIAL_TEMPLATES_SOURCE_ID}`);
@@ -469,7 +472,12 @@ describe('listTemplates 对官方源的按需拉取', () => {
     host.files.set(path.join(PROJECT_SOT, 'templates', 'review.md'), '# 项目模板\n');
 
     const result = await listTemplates(tplCtx(host));
-    expect(result.items.map((i) => i.id)).toEqual(['base/default', 'review']);
+    expect(result.items.map((i) => i.id)).toEqual([
+      'base/default',
+      'base/tools',
+      'base/context',
+      'review',
+    ]);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain('首次拉取失败');
   });

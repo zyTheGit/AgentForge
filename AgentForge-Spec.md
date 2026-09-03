@@ -239,6 +239,8 @@ extensions: object        # 用户扩展键
 
 **规则：** 声明字段优先于 `detected`。生成规则时不得在模板中硬编码个人工具名，只能通过变量注入。
 
+**`detected` 的渲染出口：** 快照默认**不进投影**；登记 `base/context`（§5.1）后按「检测到，仅供参考」的措辞渲染成 `## Project Context (detected)` 段，仍不具规则效力。渲染读的是**落盘快照**而非现场环境，因此同一份 SoT 在 CI 与本机的 `contentHash` 不漂移。
+
 **`notes`：** `aforge promote <id>` 在 `promote_target: habits_note` 时追加到此数组（§7.5），投影时渲染成 `## Notes` 段，紧随 `## Learnings` 之后。属内容型数组，两层合并走 `merge.arrays`（§4.2）。早期版本曾写 `detected.promote_notes` 自由键且渲染层不消费（等于 promote 完永远进不了投影）；现在正式落点是 `notes`，旧键只做**读兼容**（一并渲染）而不自动搬迁——迁移是显式动作，把旧键内容挪进 `notes` 后该兼容分支自然失效。
 
 ### 4.2 profile.yaml
@@ -434,7 +436,7 @@ mcp:
 
 ### 4.6 template / source 体系的范围决议（2026-09-03）
 
-模板与源体系**收缩为三档并封顶**：内置 `base/default` + 本地 `templates/` + git pin。下列五项属于「深化」，**不予实现**；每条理由独立成立，任一条单独就足以否掉该项。
+模板与源体系**收缩为三档并封顶**：内置模板（**数量封顶 3 个**，见 §5.1）+ 本地 `templates/` + git pin。下列五项属于「深化」，**不予实现**；每条理由独立成立，任一条单独就足以否掉该项。
 
 | # | 不予实现项 | 理由 |
 |---|-----------|------|
@@ -454,18 +456,28 @@ mcp:
 
 ## 5. 模板与合并
 
-### 5.1 内置 base/default
+### 5.1 内置模板（3 个封顶）
+
+发行包内置三个模板，**登记表是 `src/assets/templates.ts` 的 `BUILTIN_TEMPLATES`**，都不可被同名 SoT 文件覆盖（§3.4）：
+
+| id | 层级 | 内容 |
+|----|------|------|
+| `base/default` | **恒渲染**（§5.2 第 ④ 层） | 骨架 + Toolchain / Style / Verification / Forbidden |
+| `base/tools` | **opt-in**（第 ③ 层，需登记进 `profile.templates`） | `tools.shell` / `editor` / `container` / `git.*` |
+| `base/context` | **opt-in** | `habits.detected` 快照，措辞为「检测到，仅供参考」而非规则 |
 
 - 仅章节结构 + 变量占位。
-- 变量示例：`{{runtime.node.manager}}`、`{{runtime.python.manager}}`、`{{runtime.package_managers}}`、`{{ai.style}}`、`{{ai.verification}}`、`{{ai.forbid}}`。
+- 变量示例：`{{runtime.node.manager}}`、`{{runtime.python.manager}}`、`{{runtime.package_managers}}`、`{{ai.style}}`、`{{ai.verification}}`、`{{ai.forbid}}`、`{{tools.shell}}`、`{{detected.runtimes}}`。
 - 字段为空时：省略小节或输出 “Not specified”，**禁止编造**默认工具。
+- **数量封顶 3 个，且新增内置模板必须是纯变量渲染**：每个都是发行包常量，改一个字就是全用户投影变更；「带观点的内容包」（工作流、人格模板）属 §4.6 已裁决放弃的生态路线。
+- 后两个刻意**不恒渲染**：默认投影保持极薄，且 `base/context` 输出的是探测结论而非用户声明，默认打开等于替用户接受一段他没写过的正文。
 
 ### 5.2 规则正文合并优先级（高 → 低）
 
 1. `custom/*.md`
 2. 已 promote 的 learnings 注入段
-3. `profile.templates` 中已解析模板（列表顺序）
-4. 内置 `base/default`
+3. `profile.templates` 中已解析模板（列表顺序；含 opt-in 的内置模板）
+4. 内置 `base/default`（恒渲染一次）
 
 未解析的 template id → sync 失败，退出码 2。
 
