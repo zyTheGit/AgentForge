@@ -75,7 +75,7 @@
 | 离线 / CI 里呢 | `AGF_OFFLINE=1` 或 `CI` 为真时**不自动拉取**；`aforge template list` 照常列出其余来源，并附一行说明与 `aforge source update official` 的下一步。拉取失败也只降级成说明，不影响命令退出码 |
 | 会覆盖内置 `base/default` 吗 | 不会。内置模板恒优先（见 [规则正文装配](rules.md)），启用官方源只**新增**它独有的模板 id（同名 id 会在 `template list` 里各列一行，渲染时仍取内置那份） |
 | 它的模板清单从哪来 | 优先读源根的 `manifest.yaml`（§4.5）；源里没有 manifest 时回落扫描源根的 `templates\**.md`，与模板解析的口径一致。官方仓库当前**没有** `manifest.yaml`，走的就是回落路径 |
-| 发布 `manifest.yaml` 有什么约束 | 模板**解析**固定按 `<源根>\templates\<模板 id>.md` 找文件，`manifest.templates[].path` 目前只是说明性字段、不参与解析。因此登记的 `id` 必须与 `templates/<id>.md` 的相对路径对应（例如 `id: team/review` ↔ `templates/team/review.md`），否则该 id 会"在 `template list` 里列得出、`sync` 却解析不到" |
+| 发布 `manifest.yaml` 有什么约束 | 模板**解析**固定按 `<源根>\templates\<模板 id>.md` 找文件，`manifest.templates[].path` 只是说明性字段、不参与解析（**已决议维持现状**：让 manifest 成为解析事实源属深化项，不予实现，见 [Spec §4.6](../AgentForge-Spec.md#46-template--source-体系的范围决议2026-09-03)）。因此登记的 `id` 必须与 `templates/<id>.md` 的相对路径对应（例如 `id: team/review` ↔ `templates/team/review.md`），否则该 id 会"在 `template list` 里列得出、`sync` 却解析不到" |
 | 源里的模板从哪个目录读 | git 源读缓存 `store\<id>`，local 源读登记的 `path`；两类都只认 `<源根>\templates\` 下的 `.md`。`store\` 下有目录但登记表里没有对应源（手工残留的孤儿缓存）时**不参与**解析 |
 
 `aforge source list` 的 `ENABLED` 列、`aforge status` 的 `sources` 一节、`aforge doctor` 的 `sources/default/official` 检查项都会如实反映上述状态（doctor 对它只报 `ok` / `warn`，不会把体检判失败）。
