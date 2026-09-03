@@ -61,19 +61,14 @@ async function describeDefaultSource(
 ): Promise<DoctorCheckResult> {
   const item = `sources/default/${decl.id}`;
   if (registered === undefined) {
-    // 「未登记」有两种成因，对用户的下一步动作不同：登记表**存在**说明播种跑过
-    // （老 SoT 或用户 remove 过，都是正常态）；登记表**不存在**则意味着 init 从未
-    // 跑完播种——最常见是 user 层不可写，那时 init 只回报一条 warning 就过去了。
-    // 两态显示成同一句话时，"播种半成功"这个真问题在体检报告里完全隐形。
-    const file = sourcesFilePath(mgr);
-    const hasRegistry = await mgr.host.exists(file);
+    // 「未登记」是**常规态**：`init` 已不再播种（Spec §4.6），该源只在用户显式
+    // `source enable` 时进登记表。所以这里不区分「登记表存不存在」——两种情况下用户的
+    // 下一步动作完全一样，分开写只会让报告里多一句没有行动价值的话。
     return {
       section: 'config',
       level: 'ok',
       item,
-      detail: hasRegistry
-        ? `${decl.description}：未登记（登记表已存在但无此条目：本机 sources.json 早于该特性，或已被 aforge source remove）`
-        : `${decl.description}：未登记，且登记表尚不存在（${file}）——本机未跑过 aforge init，或 init 播种时 user 层不可写（见 init 输出的 warning）`,
+      detail: `${decl.description}：未登记（init 不再播种该源，Spec §4.6 已决议裁剪，下一 major 移除）`,
       hint: `如需使用：aforge source enable ${decl.id}（会按内置声明补登记并启用，pin: ${decl.ref}）`,
     };
   }
