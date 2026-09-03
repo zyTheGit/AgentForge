@@ -55,7 +55,7 @@ PRD §1.4 差异化中的两项同样不随标准收敛而贬值：
 
 | 项目 | 建议 | 理由 |
 |------|------|------|
-| 官方模板源 | issue [#55](https://github.com/zyTheGit/AgentForge/issues/55) 从「修」改「裁」：`init` 停止播种 `official` 源，下一 major 版本移除相关代码 | 持续成本（manifest 规范、缓存治理、供应链责任）对应一个**从未被验证的需求**；git pin + 本地路径已覆盖外部模板的真实场景 |
+| 官方模板源 | issue [#55](https://github.com/zyTheGit/AgentForge/issues/55) 从「修」改「裁」：`init` 停止播种 `official` 源（**已落地**，改由 `source enable` 补登记入场），下一 major 版本移除相关代码 | 持续成本（manifest 规范、缓存治理、供应链责任）对应一个**从未被验证的需求**；git pin + 本地路径已覆盖外部模板的真实场景 |
 | `template` / `source` 体系深化 | 收缩为三档：内置 `base/default` + 本地 `templates/` + git pin；停止 enable/disable、多源优先级等深化 | 模板体系在做包管理器，而包管理不是本产品；是产品中最偏离「habit-first」定位的部分 |
 | `skills.copy_mode: symlink` | 维持既有「不予实现」决议（[Spec §4.2](../AgentForge-Spec.md#42-profileyaml)） | 确认项，非新建议 |
 
@@ -77,7 +77,7 @@ PRD §1.4 差异化中的两项同样不随标准收敛而贬值：
 
 #### 2.3.2 口径分歧核实记录（2026-09-03）
 
-评审过程中发现 [roadmap](roadmap.md) Phase 2 边界与 [commands.md](commands.md#官方模板源默认注册默认禁用) 对「`disable` 能否挡住缓存渲染」口径相反。已核实代码事实：`src/core/sources/render-scope.ts` 即 issue #55 的实现侧修复（commit b723a03，PR #61），`enabled` 是渲染参与判据，禁用源的模板一律解析不到。**commands.md 口径正确**；roadmap 已随本评审同步修正（与本档同一 PR 提交）。#55 的 `disable` 半已修复，剩余仅「官方仓库缺 manifest」一半，随 §2.3 官方源裁剪决议一并处理。
+评审过程中发现 [roadmap](roadmap.md) Phase 2 边界与 [commands.md](commands.md#官方模板源不再默认注册) 对「`disable` 能否挡住缓存渲染」口径相反。已核实代码事实：`src/core/sources/render-scope.ts` 即 issue #55 的实现侧修复（commit b723a03，PR #61），`enabled` 是渲染参与判据，禁用源的模板一律解析不到。**commands.md 口径正确**；roadmap 已随本评审同步修正（与本档同一 PR 提交）。#55 的 `disable` 半已修复，剩余仅「官方仓库缺 manifest」一半，随 §2.3 官方源裁剪决议一并处理。
 
 ## 3. 条件判断（唯一可能改写上表的触发器）
 

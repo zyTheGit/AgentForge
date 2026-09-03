@@ -33,7 +33,6 @@ import { runInit, runSync } from '../../src/commands/lifecycle';
 import { OfflineError, toExitCode } from '../../src/core/errors';
 import { DEFAULT_MARKER_BEGIN, DEFAULT_MARKER_END, splitByMarkers } from '../../src/core/markers';
 import { currentOs } from '../../src/core/paths';
-import { OFFICIAL_TEMPLATES_SOURCE_ID } from '../../src/core/sources/official';
 import type { Host } from '../../src/infra/host';
 import { realHost } from '../../src/infra/real-host';
 
@@ -543,12 +542,11 @@ describe('真 git 仓库 fixture：add git（file:// pin）→ skill add → upd
 
       // remove：登记删除 + store 缓存回收
       await runSourceRemove({ host: ws.host, cwd: ws.root, os: OS }, 'fixture');
-      // runInit 播种的官方模板源仍留在登记表里（默认禁用，§12 Phase 2）——
-      // 断言"只剩它"比断言长度 0 更精确：既验证 fixture 被摘掉，也验证 remove
-      // 没有顺手碰别的登记项
+      // 登记表里只有本用例加的 fixture 源：`init` 不再播种官方模板源（Spec §4.6），
+      // 所以 remove 之后登记表应当为空。断言整张表而不只看 fixture 是否消失，
+      // 顺带守住"remove 没有顺手碰别的登记项"这条
       const remaining = await runSourceList({ host: ws.host, cwd: ws.root, os: OS });
-      expect(remaining.map((s) => s.id)).toEqual([OFFICIAL_TEMPLATES_SOURCE_ID]);
-      expect(remaining[0]?.enabled).toBe(false);
+      expect(remaining).toEqual([]);
       expect(existsSync(storeDir)).toBe(false);
     } finally {
       await disposeWorkspace(ws);

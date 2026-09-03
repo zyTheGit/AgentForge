@@ -444,11 +444,11 @@ mcp:
 | 4 | 发现与分发（registry、search、安装量） | 这是做包管理器，与 habit-first 定位正交；生态规模本身也不是本产品的成功指标 |
 | 5 | 多源优先级深化、`template` / `source` 的 enable/disable 语义扩展 | 现状四层优先级（内置短路 → 项目层 → 用户层 → 已登记且启用的源）已覆盖「个人 + 团队私有源」的完整场景，再加档只增加解释成本 |
 
-**官方模板源**：`init` 播种的 `official` 源（§4.4、[命令速查](docs/commands.md#官方模板源默认注册默认禁用)）从「修」改「裁」——停止播种、下一 major 移除相关代码。理由：持续成本（manifest 规范、缓存治理、供应链责任）对应一个从未被验证的需求，而 git pin + 本地路径已覆盖外部模板的真实场景。issue [#55](https://github.com/zyTheGit/AgentForge/issues/55) 据此关闭（其 `disable` 一半已由 PR #61 修复）。
+**官方模板源**：`init` 曾播种的 `official` 源（§4.4、[命令速查](docs/commands.md#官方模板源不再默认注册)）从「修」改「裁」——停止播种、下一 major 移除相关代码。理由：持续成本（manifest 规范、缓存治理、供应链责任）对应一个从未被验证的需求，而 git pin + 本地路径已覆盖外部模板的真实场景。issue [#55](https://github.com/zyTheGit/AgentForge/issues/55) 据此关闭（其 `disable` 一半已由 PR #61 修复）。
 
 **唯一条件触发的幸存者**：**项目层 pin**（当前 pin 是 user 层登记表里的 `ref`、全机器共享，项目无法各自 pin 同一源的不同版本）。它对应真实场景（多项目共用一个团队私有源、版本需求各异），但需**先有团队用户反馈版本冲突**才单独立项，不预先实现。
 
-**本决议不改运行时行为**：停止播种 `official` 是行为变更，与本节文字分开、单独 PR 落地；在那之前 §4.4 与命令速查描述的现状仍然有效。
+**行为落地情况**：本节前五项决议均不改运行时行为（只封顶范围）。唯一的行为变更「停止播种 `official`」**已单独 PR 落地**：`init` 不再写 user 层 `sources.json`，该源改由 `aforge source enable official` 的补登记分支（`setSourceEnabled`）入场；已登记条目的解析行为一律不变，代码移除留到下一 major。§4.4 与命令速查已同步到新口径。
 
 ---
 
