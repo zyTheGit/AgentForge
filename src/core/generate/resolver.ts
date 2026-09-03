@@ -2,8 +2,9 @@
  * 模板解析（Spec §5.2 / §3.4 / §4.5）：模板 id → 模板正文。
  *
  * 查找优先级（高 → 低）：
- * 1. 内置 base/default（发行包只读骨架，恒可用；不可被 SoT 覆盖，Spec §3.4）；
- * 2. 项目 SoT `<project>\.agentforge\templates\<id>.md`；
+ * 1. 内置模板（发行包只读骨架，恒可用；不可被 SoT 覆盖，Spec §3.4）——登记表见
+ *    assets/templates.BUILTIN_TEMPLATES（`base/default` / `base/tools` / `base/context`）；
+ * 2. 项目 SoT `<project>\.agentforge\templates\<id>.md`;
  * 3. 用户 SoT `<user>\templates\<id>.md`；
  * 4. **已登记且已启用**的源：`<源根>\templates\<id>.md`（§4.5 外部模板包布局；
  *    源根由 core/sources/render-scope 按 sources.json 推导——git 源为
@@ -13,7 +14,7 @@
  * 所有文件访问经注入的 Host；路径拼接一律 path.join（Spec §2.1）。
  */
 import path from 'node:path';
-import { BASE_DEFAULT_TEMPLATE, BASE_DEFAULT_TEMPLATE_ID } from '../../assets/templates';
+import { findBuiltinTemplate } from '../../assets/templates';
 import type { Host } from '../../infra/host';
 import { ConfigError } from '../errors';
 import type { TemplateSourceEntry } from '../sources/render-scope';
@@ -100,9 +101,10 @@ async function lookupSources(id: string, ctx: ResolveContext): Promise<SourceLoo
 export async function resolveTemplate(id: string, ctx: ResolveContext): Promise<ResolvedTemplate> {
   validateTemplateId(id);
 
-  // 1. 内置 base/default（恒优先，Spec §3.4 只读）
-  if (id === BASE_DEFAULT_TEMPLATE_ID) {
-    return { id, content: BASE_DEFAULT_TEMPLATE };
+  // 1. 内置模板（恒优先，Spec §3.4 只读）
+  const builtin = findBuiltinTemplate(id);
+  if (builtin !== undefined) {
+    return { id, content: builtin.content };
   }
 
   // 2. 项目 SoT

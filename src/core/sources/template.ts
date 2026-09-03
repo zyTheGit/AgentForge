@@ -1,7 +1,8 @@
 /**
  * 模板清单与启停（Spec §7.6 / §5.2 / §6 命令表）。
  *
- * - listTemplates：内置 base/default（§3.4 恒可用）+ 两层 SoT templates\
+ * - listTemplates：内置模板（§3.4 恒可用，登记表见 assets/templates）+ 两层 SoT
+ *   templates\
  *   递归扫描（相对路径去 .md 即模板 id）+ 各源的 manifest.templates（§4.5），
  *   源无 manifest 时回落扫描源根 `templates\**.md`（与 resolver 第 4 层同源）；
  *   已启用但**尚无可用缓存**的 git 源在此按需首次拉取（见 materializeIfNeeded）；
@@ -10,7 +11,7 @@
  *   ProfileSchema 全量校验防写坏。
  */
 import path from 'node:path';
-import { BASE_DEFAULT_TEMPLATE_ID } from '../../assets/templates';
+import { BUILTIN_TEMPLATES } from '../../assets/templates';
 import { listDirSafe } from '../../infra/fsutil';
 import type { Host } from '../../infra/host';
 import type { GitSource } from '../../schema';
@@ -38,10 +39,17 @@ export interface TemplateListItem {
   readonly origin: 'builtin' | 'project' | 'user' | 'source';
   /** source 项的来源源 id。 */
   readonly sourceId?: string;
-  /** manifest 声明的描述（无则 undefined）。 */
+  /** manifest / 内置登记表声明的描述（无则 undefined）。 */
   readonly description?: string;
   /** 是否在生效 profile.templates 中（两层合并后）。 */
   readonly enabled: boolean;
+  /**
+   * builtin 项是否**恒渲染**（§5.2 第 ④ 层）。
+   *
+   * 只有 `base/default` 是 true；`base/tools` / `base/context` 是 opt-in 的内置模板，
+   * 不登记就不产出——命令层据此只给恒渲染那条加 always-rendered 注记。
+   */
+  readonly alwaysRendered?: boolean;
 }
 
 /** 模板上下文。 */
@@ -162,13 +170,13 @@ async function materializeIfNeeded(
  */
 export async function listTemplates(ctx: TemplateContext): Promise<TemplateListResult> {
   const enabledSet = new Set(ctx.effectiveTemplates);
-  const items: TemplateListItem[] = [
-    {
-      id: BASE_DEFAULT_TEMPLATE_ID,
-      origin: 'builtin',
-      enabled: enabledSet.has(BASE_DEFAULT_TEMPLATE_ID),
-    },
-  ];
+  const items: TemplateListItem[] = BUILTIN_TEMPLATES.map((tpl) => ({
+    id: tpl.id,
+    origin: 'builtin' as const,
+    description: tpl.description,
+    enabled: enabledSet.has(tpl.id),
+    alwaysRendered: tpl.alwaysRendered,
+  }));
 
   for (const layer of [
     { origin: 'project' as const, root: ctx.projectSoTRoot },

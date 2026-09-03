@@ -18,7 +18,7 @@ YAML 语法错误或校验失败时命令直接失败、列出出错字段路径
 `habits.yaml` 里有两类内容：
 
 - **声明字段**（`runtime` / `tools` / `ai` / `notes`）——你手写的意图，是渲染的唯一输入；
-- **`detected`**——探测器写下的只读快照，**完全不参与渲染**，只用于 `doctor` 比对和你自己参考。
+- **`detected`**——探测器写下的只读快照，**默认不参与渲染**，用于 `doctor` 比对和你自己参考；登记内置 `base/context` 后会以「检测到，仅供参考」的措辞渲染成一节参考上下文（见 [规则正文装配](rules.md#三个内置模板)），仍不具规则效力。
 
 所以「装了 nvm 但想统一用 fnm」这种情况，写 `runtime.node.manager: fnm` 就行，`doctor` 会报一条 `declared-vs-detected/node` warn 提示两者不一致，但投影正文照你声明的走，不影响退出码。
 
@@ -61,7 +61,7 @@ ai:
 | `tools` | object | `{}` | shell / 编辑器 / git / 容器声明，见下 |
 | `ai` | object | `{}` | 对 AI 的风格、验证、禁止项声明，见下 |
 | `notes` | string[] | 无 | 自由文本沉淀 → 渲染成 `## Notes` 段。`aforge promote` 的正式落点（追加语义，不会覆盖既有条目） |
-| `detected` | object | `{}` | 探测器只读快照，passthrough 不校验内部结构，**不进渲染** |
+| `detected` | object | `{}` | 探测器只读快照，passthrough 不校验内部结构，**默认不进渲染**（`base/context` 可选渲染成参考节） |
 | `extensions` | object | `{}` | 用户扩展键，passthrough 不校验，**不进渲染** |
 
 顶层未知键会被**静默丢弃**（不是报错），只有 `detected` / `extensions` 两个容器接受任意键。写错顶层字段名不会有提示，只会「配了但没生效」。
@@ -127,7 +127,7 @@ tools:
 | `git.notes` | string | |
 | `container` | `docker` \| `podman` \| `none` \| `other` | `none` 在渲染视图里归一为「未设置」 |
 
-**整个 `tools` 块内置 `base/default` 模板都不渲染**——它只产出 Toolchain / Style / Verification / Forbidden 四节。这些值确实进了模板变量视图（`src/core/generate/composer.ts:106`），但要让它们出现在投影正文里，得自己写一个模板；见 [规则正文装配](rules.md#templates自定义模板)。或者干脆把这类约定写进 `notes`。
+**整个 `tools` 块内置 `base/default` 模板都不渲染**——它只产出 Toolchain / Style / Verification / Forbidden 四节。要让这些值出现在投影正文里，最省事的是登记内置 `base/tools`（`aforge template enable base/tools`，输出 `## Tools` 节）；想改措辞就自己写模板，见 [规则正文装配](rules.md#三个内置模板)。或者干脆把这类约定写进 `notes`。
 
 ## ai
 
@@ -200,7 +200,7 @@ detected:
 - `monorepo`：候选 `nx` > `turbo` > `lerna` > `rush` > `pnpm-workspace`，以配置文件（`nx.json` / `turbo.json` / `lerna.json` / `rush.json` / `pnpm-workspace.yaml`）为主判据、PATH 命中为辅；多工具共存时取优先级首位。
 - `ci`：候选 `github-actions` > `gitlab-ci` > `circleci` > `jenkins` > `azure-pipelines`，纯文件/目录判据（`.github/workflows/` 需含至少一个 `.yml` / `.yaml`；其余为 `.gitlab-ci.yml` / `.circleci/config.yml` / `Jenkinsfile` / `azure-pipelines.yml`），不看 PATH。
 
-这四类目前**只出现在 `detected` 里**，声明侧（`runtime.java` 等）尚未定义，故 `habits.schema.json` 不含对应枚举。
+这四类目前**只出现在 `detected` 里**，声明侧（`runtime.java` 等）尚未定义，故 `habits.schema.json` 不含对应枚举。想让它们出现在投影正文里，登记内置 `base/context`——它会把 java / dotnet / monorepo / ci 连同 node / python / rust / go 一起渲染成参考节（措辞是「检测到」，不是规则）。
 
 ## 校验与编辑器提示
 

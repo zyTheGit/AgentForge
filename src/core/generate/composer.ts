@@ -3,7 +3,12 @@
  *   ① custom/*.md（按文件名序）→ ①' Learning Protocol（仅 auto_capture: prompt，§7.4）
  *   → ② promoted learnings（统一 ## Learnings 段）
  *   → ②' habits.notes（统一 ## Notes 段，§4.1）
- *   → ③ profile.templates 已解析模板（列表序）→ ④ 内置 base/default（恒渲染一次）。
+ *   → ③ profile.templates 已解析模板（列表序，含 opt-in 的内置模板）
+ *   → ④ 恒渲染的内置模板（base/default，一次）。
+ *
+ * ③ 与 ④ 的分界由 assets/templates 的登记表决定（isAlwaysRenderedTemplate）：
+ * 只有 `alwaysRendered` 的内置模板才在 ③ 层被跳过——`base/tools` / `base/context`
+ * 是 opt-in 的内置模板，登记进 profile.templates 后就该按列表序在 ③ 层出现。
  *
  * ①' 与 ②' 都不是新增的优先级层：①' 是给 agent 的固定协议说明（§5.2 规定它插在
  * 第 ② 层之前），②' 的 notes 与 ② 的 learnings 同属"用户沉淀的自由文本"，
@@ -15,15 +20,22 @@
  * 模板正文来自调用方先经 resolver 解析（fail-fast：缺失 id 在此抛 ConfigError(2)）；
  * 渲染前先 validateTemplate 再 renderTemplate（Spec §5.4：非法表达式 → 退出码 2）。
  *
- * 数据侧（变量视图）：habits → TemplateView（runtime.* / tools.* / ai.*）。
+ * 数据侧（变量视图）：habits → TemplateView（runtime.* / tools.* / ai.* / detected.*）。
  * manager='none' / container='none' / 空数组统一归一化为"未设置"，模板经 #if
  * 据此省略小节——禁止编造默认工具、禁止输出 "Not specified"（Spec §5.1）。
+ * detected.* 的收窄归 core/generate/detected-view（passthrough 快照，需防御式收窄）。
  */
-import { BASE_DEFAULT_TEMPLATE, BASE_DEFAULT_TEMPLATE_ID } from '../../assets/templates';
+import {
+  BASE_DEFAULT_TEMPLATE_ID,
+  BUILTIN_TEMPLATES,
+  findBuiltinTemplate,
+  isAlwaysRenderedTemplate,
+} from '../../assets/templates';
 import type { AutoCapture, Habits, PathStyle, Profile } from '../../schema';
 import { ConfigError } from '../errors';
 import { LEARNING_PROTOCOL_SECTION, rendersLearningProtocol } from '../learning/auto-capture';
 import type { OsContext } from '../paths';
+import { buildDetectedView, type DetectedView } from './detected-view';
 import { renderTemplate, validateTemplate } from './renderer';
 
 /** 已解析模板正文（resolver 的输出形态；composer 只消费、不再做 IO 解析）。 */
@@ -92,7 +104,15 @@ export interface RuntimeGoView {
   readonly version?: string;
 }
 
-/** 渲染变量视图：模板可直接消费的 habits 投影（runtime.* / tools.* / ai.*）。 */
+/** tools.git 视图（四个子字段全空时整条归一为 undefined，见 visibleGit）。 */
+export interface ToolsGitView {
+  readonly conventional_commits?: boolean;
+  readonly sign_commits?: boolean;
+  readonly default_branch?: string;
+  readonly notes?: string;
+}
+
+/** 渲染变量视图：模板可直接消费的 habits 投影（runtime.* / tools.* / ai.* / detected.*）。 */
 export interface TemplateView {
   readonly runtime: {
     readonly node?: RuntimeNodeView;
@@ -106,13 +126,10 @@ export interface TemplateView {
   readonly tools: {
     readonly shell?: string;
     readonly editor?: string;
-    readonly git?: {
-      readonly conventional_commits?: boolean;
-      readonly sign_commits?: boolean;
-      readonly default_branch?: string;
-      readonly notes?: string;
-    };
+    readonly git?: ToolsGitView;
     readonly container?: string;
+    /** 派生：Tools 节可见性（四个条目任一存在；内置 base/tools 用它整节省略）。 */
+    readonly has_any: boolean;
   };
   readonly ai: {
     readonly language?: readonly string[];
@@ -120,6 +137,13 @@ export interface TemplateView {
     readonly verification?: readonly string[];
     readonly forbid?: readonly string[];
   };
+  /**
+   * 探测快照的参考视图（内置 base/tools / base/context 之外的模板同样可读）。
+   *
+   * 与上面三个键的区别：这里是**探测结论**而非用户声明，按 §4.1「声明字段优先于
+   * detected」它只能以参考口吻出现。收窄规则见 core/generate/detected-view。
+   */
+  readonly detected: DetectedView;
 }
 
 /** manager 未声明或为 'none' 的 runtime 条目视为"不使用"，整条省略（Spec §4.1 枚举含 none）。 */
@@ -143,13 +167,36 @@ function visibleArray<T>(items: readonly T[] | undefined): readonly T[] | undefi
   return items;
 }
 
-/** habits → 变量视图（内置 base/default 与外部模板共用同一形状）。 */
+/**
+ * 四个子字段全空的 `tools.git` 归一为 undefined。
+ *
+ * 理由与 visibleArray 同构：`git: {}`（或只写了注释的空映射）在 Handlebars 里是
+ * truthy 对象，`{{#if tools.git}}` 会成立却渲染不出任何条目，模板作者只能改用
+ * 「逐字段 #if」这种啰嗦写法。归一之后 `{{#if tools.git}}` 与「git 有内容」等价。
+ */
+function visibleGit(git: ToolsGitView | undefined): ToolsGitView | undefined {
+  if (git === undefined) {
+    return undefined;
+  }
+  const hasField =
+    git.conventional_commits !== undefined ||
+    git.sign_commits !== undefined ||
+    git.default_branch !== undefined ||
+    git.notes !== undefined;
+  return hasField ? git : undefined;
+}
+
+/** habits → 变量视图（内置模板与外部模板共用同一形状）。 */
 export function buildTemplateView(habits: Habits): TemplateView {
   const node = visibleRuntime(habits.runtime.node);
   const python = visibleRuntime(habits.runtime.python);
   const packageManagers = visibleArray(habits.runtime.package_managers);
   const rust = visibleRuntime(habits.runtime.rust);
   const go = visibleRuntime(habits.runtime.go);
+  const shell = habits.tools.shell;
+  const editor = habits.tools.editor;
+  const git = visibleGit(habits.tools.git);
+  const container = habits.tools.container === 'none' ? undefined : habits.tools.container;
   return {
     runtime: {
       node,
@@ -165,10 +212,12 @@ export function buildTemplateView(habits: Habits): TemplateView {
         go !== undefined,
     },
     tools: {
-      shell: habits.tools.shell,
-      editor: habits.tools.editor,
-      git: habits.tools.git,
-      container: habits.tools.container === 'none' ? undefined : habits.tools.container,
+      shell,
+      editor,
+      git,
+      container,
+      has_any:
+        shell !== undefined || editor !== undefined || git !== undefined || container !== undefined,
     },
     ai: {
       language: visibleArray(habits.ai.language),
@@ -176,6 +225,7 @@ export function buildTemplateView(habits: Habits): TemplateView {
       verification: visibleArray(habits.ai.verification),
       forbid: visibleArray(habits.ai.forbid),
     },
+    detected: buildDetectedView(habits.detected as Record<string, unknown>),
   };
 }
 
@@ -280,8 +330,8 @@ async function renderValidated(id: string, source: string, view: TemplateView): 
  * 装配规则正文（§5.2 四层优先级）。
  *
  * - ③ 层按 templateContents 顺序（调用方按 profile.templates 顺序提供），
- *   其中 base/default 跳过——④ 层恒用内置常量渲染一次，避免重复；
- * - profile.templates 声明的非内置 id 缺失于 templateContents → ConfigError(2)
+ *   其中**恒渲染**的内置模板跳过——④ 层恒用内置常量渲染一次，避免重复；
+ * - profile.templates 声明的其余 id 缺失于 templateContents → ConfigError(2)
  *   （调用方应先 resolve；此处 fail-fast 兜底，Spec §5.2 未解析 id → sync 失败）；
  * - 全空输入输出最小骨架（base/default 渲染出的 `# AgentForge Rules` 标题）。
  *
@@ -318,11 +368,11 @@ export async function composeRules(input: ComposeInput): Promise<string> {
     sections.push(stripSection(`## Notes\n\n${notes.join('\n\n')}`));
   }
 
-  // ③ 已解析模板（列表序）：缺失的非内置 id → fail-fast
+  // ③ 已解析模板（列表序）：缺失的非「恒渲染」id → fail-fast
   const declared = input.profile.templates ?? [];
   const available = new Set(input.templateContents.map((t) => t.id));
   for (const id of declared) {
-    if (id === BASE_DEFAULT_TEMPLATE_ID) {
+    if (isAlwaysRenderedTemplate(id)) {
       continue;
     }
     if (!available.has(id)) {
@@ -333,14 +383,18 @@ export async function composeRules(input: ComposeInput): Promise<string> {
     }
   }
   for (const template of input.templateContents) {
-    if (template.id === BASE_DEFAULT_TEMPLATE_ID) {
+    if (isAlwaysRenderedTemplate(template.id)) {
       continue;
     }
     sections.push(await renderValidated(template.id, template.content, view));
   }
 
-  // ④ 内置 base/default（恒渲染，四层最低）
-  sections.push(await renderValidated(BASE_DEFAULT_TEMPLATE_ID, BASE_DEFAULT_TEMPLATE, view));
+  // ④ 恒渲染的内置模板（base/default，四层最低；登记表见 assets/templates）
+  for (const builtin of BUILTIN_TEMPLATES) {
+    if (builtin.alwaysRendered) {
+      sections.push(await renderValidated(builtin.id, builtin.content, view));
+    }
+  }
 
   const parts = sections.filter((s) => s !== '');
   if (parts.length === 0) {
@@ -358,6 +412,13 @@ export async function composeRules(input: ComposeInput): Promise<string> {
  */
 export async function renderRules(habits: Habits): Promise<string> {
   const view = buildTemplateView(habits);
-  await validateTemplate(BASE_DEFAULT_TEMPLATE, `模板 ${BASE_DEFAULT_TEMPLATE_ID} `);
-  return renderTemplate(BASE_DEFAULT_TEMPLATE, view);
+  const builtin = findBuiltinTemplate(BASE_DEFAULT_TEMPLATE_ID);
+  if (builtin === undefined) {
+    throw new ConfigError(`内置模板缺失: ${BASE_DEFAULT_TEMPLATE_ID}`, {
+      hint: '发行包资产损坏，请重装 agentforge',
+      details: { id: BASE_DEFAULT_TEMPLATE_ID },
+    });
+  }
+  await validateTemplate(builtin.content, `模板 ${builtin.id} `);
+  return renderTemplate(builtin.content, view);
 }

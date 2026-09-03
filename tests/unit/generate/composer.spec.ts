@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BASE_DEFAULT_TEMPLATE } from '../../../src/assets/templates';
+import { BUILTIN_TEMPLATES } from '../../../src/assets/templates';
 import { ConfigError, ExitCode } from '../../../src/core/errors';
 import type { ComposeInput } from '../../../src/core/generate/composer';
 import { applyPathStyle, composeRules, renderRules } from '../../../src/core/generate/composer';
@@ -558,11 +558,20 @@ describe('projection.path_style 路径风格归一（Spec §4.2）', () => {
 });
 
 describe('内置模板资产同步', () => {
-  it('templates/base/default.md 与 BASE_DEFAULT_TEMPLATE 常量逐字一致（防两份漂移；CRLF 归一化后比较）', () => {
+  it.each(
+    BUILTIN_TEMPLATES.map((tpl) => [tpl.id, tpl.content] as const),
+  )('templates/%s.md 与登记表常量逐字一致（防两份漂移；CRLF 归一化后比较）', (id, content) => {
     const fileContent = readFileSync(
-      new URL('../../../templates/base/default.md', import.meta.url),
+      new URL(`../../../templates/${id}.md`, import.meta.url),
       'utf8',
     ).replace(/\r\n/g, '\n');
-    expect(fileContent).toBe(BASE_DEFAULT_TEMPLATE);
+    expect(fileContent).toBe(content);
+  });
+
+  it('登记表数量封顶 3 个（每条都是发行包常量，改措辞 = 全用户投影变更）', () => {
+    expect(BUILTIN_TEMPLATES.length).toBeLessThanOrEqual(3);
+    expect(BUILTIN_TEMPLATES.filter((tpl) => tpl.alwaysRendered).map((tpl) => tpl.id)).toEqual([
+      'base/default',
+    ]);
   });
 });

@@ -63,10 +63,16 @@ function projectLayer(): TargetLayer {
 }
 
 describe('listTemplates', () => {
-  it('内置 base/default 恒在（§3.4），enabled 随 effectiveTemplates', async () => {
+  it('三个内置模板恒在（§3.4），enabled 随 effectiveTemplates', async () => {
     const host = createDirAwareHost();
     const result = await listTemplates(tplCtx(host, ['base/default']));
-    expect(result.items).toEqual([{ id: 'base/default', origin: 'builtin', enabled: true }]);
+    expect(result.items.map((i) => ({ id: i.id, origin: i.origin, enabled: i.enabled }))).toEqual([
+      { id: 'base/default', origin: 'builtin', enabled: true },
+      { id: 'base/tools', origin: 'builtin', enabled: false },
+      { id: 'base/context', origin: 'builtin', enabled: false },
+    ]);
+    // 只有 base/default 恒渲染；另两个是 opt-in（登记后才产出正文）
+    expect(result.items.map((i) => i.alwaysRendered)).toEqual([true, false, false]);
     expect(result.warnings).toEqual([]);
   });
 
