@@ -66,7 +66,7 @@ learning:
 
 写了一个未注册的 id 时，报错会区分四种成因（成因不同，修法完全不同）：打错了（提示「是否想写 X」）、对应的 `adapters/<id>.yaml` 加载失败（报具体是 YAML / schema / 模板 / 落点越界，并给出文件路径）、适配器在 project 层未授权（给出 `AGF_ALLOW_PROJECT_ADAPTERS=1`）、压根没有那个文件（列出扫过哪些目录）。
 
-`templates` 里能填哪些 id，取决于 user 层 `sources.json` 中登记且**已启用**的源（`sources.json` 与 `store\` 恒在 user 层）。`aforge init` 默认注册的官方模板源是**禁用**态，启用方式、pin 策略与离线行为见 [命令速查](commands.md#官方模板源默认注册默认禁用)。
+`templates` 里能填哪些 id，取决于 user 层 `sources.json` 中登记且**已启用**的源（`sources.json` 与 `store\` 恒在 user 层）。`aforge init` **不再注册**官方模板源——需要时跑一次 `aforge source enable official` 补登记并启用，pin 策略与离线行为见 [命令速查](commands.md#官方模板源不再默认注册)。
 
 ## 声明式适配器（第三方 target）
 

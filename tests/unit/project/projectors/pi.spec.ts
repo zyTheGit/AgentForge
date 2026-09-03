@@ -225,7 +225,7 @@ describe('piMcpPayload（mcpServers 管理键；顶层键与 Claude Code 同名�
     expect(payload.mcpServers.fs).toEqual({ command: 'npx' });
   });
 
-  it('http → url / headers 键（无 type：适配器按 command / url 互斥判定 transport）', () => {
+  it('http → url / headers / httpTransport: "streamable-http"（无 type：适配器按 command / url 互斥判定 transport）', () => {
     const server = McpServerSchema.parse({
       name: 'docs',
       transport: 'http',
@@ -238,6 +238,7 @@ describe('piMcpPayload（mcpServers 管理键；顶层键与 Claude Code 同名�
     expect(payload.mcpServers.docs).toEqual({
       url: 'https://example.com/mcp',
       headers: { Authorization: 'Bearer x' },
+      httpTransport: 'streamable-http',
     });
   });
 

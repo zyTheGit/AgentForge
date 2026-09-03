@@ -2,10 +2,9 @@
  * 默认注册源（官方模板源）单测（Spec §4.4 / §7.8 / §9 / §12 Phase 2）。
  *
  * 覆盖本特性的全部行为面，且**一条真网络请求都不发**（fake git 见 ./helpers）：
- * - 常量表与条目构造：显式 pin、默认禁用、播种时不编造 commit；
- * - 播种语义：`sources.json` 不存在才播种；已存在 → registry-exists；
- *   `remove` 之后再 `init` **不复活**（登记表的存在即墓碑）；
- * - enable/disable：翻位、幂等 no-op、老 SoT 的补登记（迁移路径）、disable 不补登记；
+ * - 常量表与条目构造：显式 pin、enabled 由调用方显式给定、补登记时不编造 commit；
+ * - enable/disable：翻位、幂等 no-op、未登记时的补登记（`init` 不再播种，这是官方源
+ *   唯一的入场路径，Spec §4.6）、disable 不补登记；
  * - 按需拉取：已就绪（有缓存 + 有 commit）→ 零 git 调用；AGF_OFFLINE / CI → 不联网且
  *   给可操作说明；拉取失败 → 降级为说明而不是抛错，且**清掉残留目录**；
  *   目录在但 commit 缺失（中途失败的存量残留）→ 重走完整 pin 序列；
@@ -38,9 +37,9 @@ import {
   findDefaultSource,
   isDefaultSourceId,
   OFFICIAL_TEMPLATES_SOURCE_ID,
-  seedDefaultSources,
   setSourceEnabled,
 } from '../../../src/core/sources/official';
+import { saveSources } from '../../../src/core/sources/store';
 import { listTemplates } from '../../../src/core/sources/template';
 import type { Source } from '../../../src/schema';
 import { VERSION } from '../../../src/version';
@@ -105,21 +104,36 @@ async function officialEntry(ctx: SourceManagerContext): Promise<Extract<Source,
   return found;
 }
 
+/**
+ * 夹具：模拟老 SoT —— `init` 曾播种过的登记表（全部默认项以**禁用**态落盘）。
+ *
+ * `init` 现已不播种（Spec §4.6，`seedDefaultSources` 随之删除），但"登记表里有一条
+ * disabled 的官方源"仍是存量机器上的真实形态，下面的 enable/disable、status 展示、
+ * doctor 判态、bundle 往返都得先有这张表才谈得上。走被测代码自己的 saveSources 而不是
+ * 手拼 JSON：写盘格式（2 空格缩进 + 末尾换行）由它决定，夹具跟着它走，
+ * "不写盘"这类逐字节断言才不会因为格式差异误红。
+ */
+async function seedRegistryFixture(ctx: SourceManagerContext): Promise<string> {
+  return saveSources(
+    ctx,
+    DEFAULT_SOURCES.map((decl) => defaultSourceEntry(decl, false)),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // 常量表与条目构造
 // ---------------------------------------------------------------------------
 
 describe('DEFAULT_SOURCES / defaultSourceEntry', () => {
-  it('官方源：显式 pin（非浮动 main）、kind=templates、默认禁用', () => {
+  it('官方源：显式 pin（非浮动 main）、kind=templates', () => {
     expect(OFFICIAL.id).toBe(OFFICIAL_TEMPLATES_SOURCE_ID);
-    expect(OFFICIAL.enabledByDefault).toBe(false);
     expect(OFFICIAL.kind).toEqual(['templates']);
     expect(OFFICIAL.ref).not.toBe('main');
     expect(OFFICIAL.ref.trim()).not.toBe('');
   });
 
-  it('条目形态为普通 git 源，且**不带 commit**（播种时还没 clone）', () => {
-    const entry = defaultSourceEntry(OFFICIAL);
+  it('条目形态为普通 git 源，且**不带 commit**（补登记时还没 clone）', () => {
+    const entry = defaultSourceEntry(OFFICIAL, false);
     expect(entry).toEqual({
       id: OFFICIAL.id,
       type: 'git',
@@ -133,8 +147,16 @@ describe('DEFAULT_SOURCES / defaultSourceEntry', () => {
     expect(entry.kind).not.toBe(OFFICIAL.kind);
   });
 
-  it('enabled 可显式覆盖（enable 时补登记走这一支）', () => {
-    expect(defaultSourceEntry(OFFICIAL, true).enabled).toBe(true);
+  it('enabled 由第二参数（必填）说话，两种取值都不带 commit', () => {
+    // `init` 不再播种后，唯一的补登记入口是 enable（传 true）；夹具与迁移场景则要
+    // 造禁用态（传 false）。把参数做成必填就是为了让调用点自己交代意图——这条用例
+    // 钉住"传什么就得什么"，以及两支都不会凭空编出一个 commit。
+    const enabled = defaultSourceEntry(OFFICIAL, true);
+    const disabled = defaultSourceEntry(OFFICIAL, false);
+    expect(enabled.enabled).toBe(true);
+    expect(disabled.enabled).toBe(false);
+    expect(enabled.commit).toBeUndefined();
+    expect(disabled.commit).toBeUndefined();
   });
 
   it('pin 与 CLI 版本同源：ref 恒为 `v<package.json version>`', () => {
@@ -154,87 +176,18 @@ describe('DEFAULT_SOURCES / defaultSourceEntry', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 播种（init）
-// ---------------------------------------------------------------------------
-
-describe('seedDefaultSources', () => {
-  it('登记表不存在 → 写入官方源（禁用态），且零 git 调用', async () => {
-    const host = createDirAwareHost();
-    const result = await seedDefaultSources(mgrCtx(host));
-
-    expect(result.file).toBe(SOURCES_JSON);
-    expect(result.registered).toEqual([OFFICIAL_TEMPLATES_SOURCE_ID]);
-    expect(result.skipped).toBeNull();
-
-    const entry = await officialEntry(mgrCtx(host));
-    expect(entry).toMatchObject({ type: 'git', ref: OFFICIAL.ref, enabled: false });
-    expect(host.gitCalls).toHaveLength(0);
-    // store 下不该有任何东西：登记在先、内容后补
-    expect(await host.exists(sourceStoreDir(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID))).toBe(
-      false,
-    );
-  });
-
-  it('登记表已存在 → skipped=registry-exists，不改一个字节（幂等）', async () => {
-    const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
-    const before = host.files.get(SOURCES_JSON);
-
-    const again = await seedDefaultSources(mgrCtx(host));
-    expect(again.registered).toEqual([]);
-    expect(again.skipped).toBe('registry-exists');
-    expect(host.files.get(SOURCES_JSON)).toBe(before);
-  });
-
-  it('用户手动登记过别的源（老 SoT）→ 不追加官方源，用户的登记表不被改写', async () => {
-    const host = createDirAwareHost();
-    host.files.set(
-      SOURCES_JSON,
-      `${JSON.stringify({
-        version: 1,
-        sources: [{ id: 'vendor-src', type: 'local', path: abs('vendor') }],
-      })}\n`,
-    );
-    const before = host.files.get(SOURCES_JSON);
-
-    const result = await seedDefaultSources(mgrCtx(host));
-    expect(result.skipped).toBe('registry-exists');
-    expect(host.files.get(SOURCES_JSON)).toBe(before);
-    expect((await listSources(mgrCtx(host))).map((s) => s.id)).toEqual(['vendor-src']);
-  });
-
-  it('remove 之后再播种 → **不复活**（登记表仍存在，内容为空数组）', async () => {
-    const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
-    await removeSource(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID);
-    expect(await listSources(mgrCtx(host))).toEqual([]);
-
-    // 第二次 init（含在别的项目里跑的 project scope init：共享同一张 user 层登记表）
-    const again = await seedDefaultSources(mgrCtx(host));
-    expect(again.registered).toEqual([]);
-    expect(again.skipped).toBe('registry-exists');
-    expect(await listSources(mgrCtx(host))).toEqual([]);
-  });
-
-  it('禁用之后再播种 → 保持禁用（不被重置成"新装机"状态）', async () => {
-    const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
-    await setSourceEnabled(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID, true);
-    await setSourceEnabled(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID, false);
-
-    await seedDefaultSources(mgrCtx(host));
-    expect((await officialEntry(mgrCtx(host))).enabled).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // enable / disable
+//
+// 原先此处之上还有一整个 `seedDefaultSources` 区块（只在登记表不存在时播种、幂等、
+// remove 后不复活……）。`init` 不再播种后该函数已从 src 删除（Spec §4.6），那些用例
+// 随之删掉——它们测的是一个不存在的入口，而"官方源如何进登记表"现在全由下面的
+// enable 补登记这一支负责。
 // ---------------------------------------------------------------------------
 
 describe('setSourceEnabled', () => {
   it('已登记 → 翻 enabled 位并落盘（url/ref/commit 不动）', async () => {
     const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
+    await seedRegistryFixture(mgrCtx(host));
 
     const enabled = await setSourceEnabled(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID, true);
     expect(enabled).toMatchObject({ changed: true, registered: false, file: SOURCES_JSON });
@@ -247,7 +200,7 @@ describe('setSourceEnabled', () => {
 
   it('已是目标状态 → changed:false 且不写盘', async () => {
     const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
+    await seedRegistryFixture(mgrCtx(host));
     const before = host.files.get(SOURCES_JSON);
 
     const result = await setSourceEnabled(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID, false);
@@ -283,6 +236,21 @@ describe('setSourceEnabled', () => {
     expect(host.gitCalls).toHaveLength(0);
   });
 
+  it('remove 之后再 enable → 重新按常量表补登记（remove 不再是墓碑）', async () => {
+    // 这条是原 `seedDefaultSources` 区块里"remove 后再 init 不复活"那条用例仍然有效的
+    // 部分：`init` 不播种后，"不复活"由 init 自己保证（见集成用例），但登记表里没有
+    // 官方源之后**用户仍能自己把它请回来**这条路径只有这里能测。
+    const host = createDirAwareHost();
+    await seedRegistryFixture(mgrCtx(host));
+    await removeSource(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID);
+    expect(await listSources(mgrCtx(host))).toEqual([]);
+
+    const result = await setSourceEnabled(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID, true);
+    expect(result).toMatchObject({ registered: true, changed: true });
+    expect((await officialEntry(mgrCtx(host))).enabled).toBe(true);
+    expect(host.gitCalls).toHaveLength(0);
+  });
+
   it('未登记的默认项 disable → ConfigError(2)（不写一条用户没要求的禁用记录）', async () => {
     const host = createDirAwareHost();
     host.files.set(SOURCES_JSON, `${JSON.stringify({ version: 1, sources: [] })}\n`);
@@ -303,7 +271,7 @@ describe('setSourceEnabled', () => {
 
   it('禁用不删缓存（重新 enable 无需再联网）', async () => {
     const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
+    await seedRegistryFixture(mgrCtx(host));
     const cached = path.join(
       sourceStoreDir(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID),
       'templates',
@@ -323,16 +291,16 @@ describe('setSourceEnabled', () => {
 // ---------------------------------------------------------------------------
 
 describe('listTemplates 对官方源的按需拉取', () => {
-  /** 播种 + 启用官方源（登记态：有 ref、无 commit、无缓存）。 */
+  /** 登记 + 启用官方源（登记态：有 ref、无 commit、无缓存）。 */
   async function enabledOfficial(host: DirAwareHost): Promise<void> {
-    await seedDefaultSources(mgrCtx(host));
+    await seedRegistryFixture(mgrCtx(host));
     await setSourceEnabled(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID, true);
     host.gitCalls.length = 0;
   }
 
-  it('默认（禁用态）→ 零 git 调用、零 warning，清单只有内置模板', async () => {
+  it('已登记但禁用 → 零 git 调用、零 warning，清单只有内置模板', async () => {
     const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
+    await seedRegistryFixture(mgrCtx(host));
 
     const result = await listTemplates(tplCtx(host));
     expect(result.items).toEqual([{ id: 'base/default', origin: 'builtin', enabled: false }]);
@@ -533,19 +501,20 @@ describe('checkDefaultSources（零网络、只 ok/warn）', () => {
 
   const OFFICIAL_ITEM = `sources/default/${OFFICIAL_TEMPLATES_SOURCE_ID}`;
 
-  it('未登记（老 SoT / 已被 remove）→ ok + 启用命令，一条 git 都不发', async () => {
+  it('未登记（常规态：init 不播种）→ ok + 启用命令，一条 git 都不发', async () => {
     const host = createDirAwareHost();
     const results = await check(host);
     const entry = itemOf(results, OFFICIAL_ITEM);
     expect(entry.level).toBe('ok');
     expect(entry.detail).toContain('未登记');
     expect(entry.hint).toContain(`aforge source enable ${OFFICIAL_TEMPLATES_SOURCE_ID}`);
+    expect(entry.hint).toContain(OFFICIAL.ref);
     expect(host.gitCalls).toHaveLength(0);
   });
 
   it('已登记、禁用 → ok，说明"不联网、不进 template list"并给 pin', async () => {
     const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
+    await seedRegistryFixture(mgrCtx(host));
     const entry = itemOf(await check(host), OFFICIAL_ITEM);
     expect(entry.level).toBe('ok');
     expect(entry.detail).toContain('当前禁用');
@@ -554,7 +523,7 @@ describe('checkDefaultSources（零网络、只 ok/warn）', () => {
 
   it('已启用但无缓存 → warn（首次 template list 会拉；离线/CI 需显式 update）', async () => {
     const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
+    await seedRegistryFixture(mgrCtx(host));
     await setSourceEnabled(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID, true);
 
     const entry = itemOf(await check(host), OFFICIAL_ITEM);
@@ -565,7 +534,7 @@ describe('checkDefaultSources（零网络、只 ok/warn）', () => {
 
   it('已启用且缓存就绪 → ok，detail 含 pin 与 commit', async () => {
     const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
+    await seedRegistryFixture(mgrCtx(host));
     await setSourceEnabled(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID, true);
     await listTemplates(tplCtx(host)); // 走一次首次拉取，回写 commit
     host.files.set(
@@ -580,7 +549,7 @@ describe('checkDefaultSources（零网络、只 ok/warn）', () => {
 
   it('缓存目录在但登记项无 commit → warn（不再谎报"缓存就绪"）', async () => {
     const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
+    await seedRegistryFixture(mgrCtx(host));
     await setSourceEnabled(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID, true);
     host.files.set(
       path.join(sourceStoreDir(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID), 'README.md'),
@@ -594,17 +563,21 @@ describe('checkDefaultSources（零网络、只 ok/warn）', () => {
     expect(host.gitCalls).toHaveLength(0);
   });
 
-  it('未登记且登记表不存在 → detail 点出"登记表尚不存在"（区分播种半成功与主动 remove）', async () => {
+  it('未登记时**不再区分**登记表是否存在：两种情况同一句话（Spec §4.6）', async () => {
+    // 老实现按"登记表尚不存在 / 已存在但无此条目"分两句，用来区分播种半成功与主动
+    // remove。init 不播种后这个区分没有行动价值了——两种情况下用户的下一步都是
+    // `source enable`，所以 detail 收敛成一句，并点明该源已决议裁剪。
     const host = createDirAwareHost();
     const absent = itemOf(await check(host), OFFICIAL_ITEM);
-    expect(absent.detail).toContain('登记表尚不存在');
-    expect(absent.detail).toContain(SOURCES_JSON);
+    expect(absent.level).toBe('ok');
+    expect(absent.detail).toContain('未登记（init 不再播种该源');
+    expect(absent.detail).toContain('Spec §4.6');
 
-    // 登记表存在但没有该条目（remove 过 / 老 SoT）→ 另一句话
+    // 登记表存在但没有该条目（remove 过 / 老 SoT）→ 同一句
     host.files.set(SOURCES_JSON, `${JSON.stringify({ version: 1, sources: [] })}\n`);
     const removed = itemOf(await check(host), OFFICIAL_ITEM);
-    expect(removed.detail).toContain('登记表已存在但无此条目');
     expect(removed.level).toBe('ok');
+    expect(removed.detail).toBe(absent.detail);
   });
 
   it('用户改过 pin → 仍是 ok，但点明"本机改写优先"', async () => {
@@ -654,7 +627,8 @@ describe('checkDefaultSources（零网络、只 ok/warn）', () => {
       `${JSON.stringify({
         version: 1,
         sources: [
-          defaultSourceEntry(OFFICIAL),
+          // 官方源登记态与本项断言无关，取禁用（老 SoT 的存量形态）
+          defaultSourceEntry(OFFICIAL, false),
           { id: 'vendor-src', type: 'local', path: abs('vendor') },
         ],
       })}\n`,
@@ -672,7 +646,7 @@ describe('checkDefaultSources（零网络、只 ok/warn）', () => {
 describe('collectStatusSources / formatStatusSources', () => {
   it('禁用的官方源可见（official 标记 + disabled + pin），零 git 调用', async () => {
     const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
+    await seedRegistryFixture(mgrCtx(host));
 
     const report = await collectStatusSources(host, envFor(), OS, PROJECT_ROOT, USER_SOT);
     expect(report).toEqual({
@@ -698,7 +672,7 @@ describe('collectStatusSources / formatStatusSources', () => {
 
   it('启用但未拉取 → enabled, not fetched（"登记了但不生效"一眼可见）', async () => {
     const host = createDirAwareHost();
-    await seedDefaultSources(mgrCtx(host));
+    await seedRegistryFixture(mgrCtx(host));
     await setSourceEnabled(mgrCtx(host), OFFICIAL_TEMPLATES_SOURCE_ID, true);
 
     const report = await collectStatusSources(host, envFor(), OS, PROJECT_ROOT, USER_SOT);
@@ -744,16 +718,16 @@ describe('bundle export/import 往返', () => {
   const OTHER_SOT = path.join(OTHER_ROOT, '.agentforge');
 
   /**
-   * 一份已 init 且播种过官方源的 SoT。
+   * 一份已 init、且登记表里有一条禁用官方源的 SoT。
    *
-   * 播种目标层显式指向 PROJECT_SOT：seedDefaultSources 写的是 ctx.userSoTRoot，
+   * 登记目标层显式指向 PROJECT_SOT：seedRegistryFixture 写的是 ctx.userSoTRoot，
    * 而本用例要验证的是"这张登记表被 bundle 原样带走"，故让它落在被导出的那一层。
    */
   function seeded(): Promise<DirAwareHost> {
     const host = createDirAwareHost({ USERPROFILE: abs('home', 'u') });
     host.files.set(path.join(PROJECT_SOT, 'habits.yaml'), 'version: 1\n');
     host.files.set(path.join(PROJECT_SOT, 'profile.yaml'), 'version: 1\ntargets: [claude]\n');
-    return seedDefaultSources({
+    return seedRegistryFixture({
       host,
       env: envFor(),
       userSoTRoot: PROJECT_SOT,
@@ -780,7 +754,7 @@ describe('bundle export/import 往返', () => {
       cwd: OTHER_ROOT,
       os: OS,
     });
-    expect(landed).toEqual([defaultSourceEntry(OFFICIAL)]);
+    expect(landed).toEqual([defaultSourceEntry(OFFICIAL, false)]);
     expect(landed.filter((s) => s.id === OFFICIAL_TEMPLATES_SOURCE_ID)).toHaveLength(1);
   });
 

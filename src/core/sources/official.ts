@@ -1,40 +1,28 @@
 /**
- * 默认注册源（官方模板仓库，Spec §4.4 / §12 Phase 2「可选官方模板仓库」）。
+ * 默认注册源（官方模板仓库，Spec §4.4 / §4.6）。
  *
  * 这个模块回答三个问题，且只回答这三个：
- * 1. **官方源长什么样**：`DEFAULT_SOURCES` 是一张常量表（数据声明），加第二个官方源
- *    （例如官方 skills 源）只改这张表，不改任何流程分支；
- * 2. **它什么时候进 SoT**：`seedDefaultSources` —— 只在 user 层 `sources.json`
- *    **尚不存在**时播种一次；
- * 3. **怎么开关**：`setSourceEnabled` —— 翻 `enabled` 位；对老 SoT（登记表已存在但
- *    没有官方源条目）的 `enable` 兼作补登记，这就是迁移路径。
+ * 1. **官方源长什么样**：`DEFAULT_SOURCES` 是一张常量表（数据声明）；
+ * 2. **它什么时候进 SoT**：只有用户显式跑 `aforge source enable official` 时——
+ *    `init` **不再播种**（Spec §4.6：该能力已决议裁剪，下一 major 移除本模块）；
+ * 3. **怎么开关**：`setSourceEnabled` —— 翻 `enabled` 位；对登记表里没有官方源条目的
+ *    SoT，`enable` 兼作补登记，这是它唯一的入场路径。
  *
- * ## 为什么"落盘进 SoT"而不是"像内置模板那样运行时隐式存在"
+ * ## 为什么 `init` 不再播种
  *
- * 隐式方案（不落盘、用户只能 disable）看似对老 SoT 自动生效，但有两处硬伤：
- * - **pin 会随 CLI 版本漂移**：隐式条目的 url/ref 存在发行包的常量里，升级 CLI 就换了
- *   一个 pin，而用户的 SoT 一个字节都没变。`bundle export/import` 搬到另一台装了不同
- *   版本的机器上时，同一份 bundle 会解析出不同的模板内容——这与「SoT 是唯一事实源」
- *   直接冲突；落盘方案里 pin 写在 sources.json 内，bundle 原样带走（export 对
- *   sources.json 是原文直拷），往返后 ref/commit/enabled 逐字节不变。
- * - **"已删除"需要墓碑**：用户删掉隐式条目后要让它不复活，就得再存一份"我删过它"的
- *   记录——那还是落盘，只是把状态取反、并且多一种文件格式。
+ * 播种的持续成本（manifest 规范、缓存治理、供应链责任）对应一个从未被验证的需求，
+ * 而 git pin + 本地路径已覆盖外部模板的真实场景（Spec §4.6，issue #55）。附带的一个
+ * 具体代价是常量表里的 `ref` 是硬编码 pin：播种会把一个随 CLI 发版持续落后的版本号
+ * 写进每台机器的 user 层登记表，而用户的 SoT 一个字节都没变。
  *
- * 落盘方案的代价是"老 SoT 拿不到"，用一条显式命令（`aforge source enable official`）
- * 兑掉，见 setSourceEnabled 的补登记分支。
- *
- * ## 为什么"只在 sources.json 不存在时播种"
- *
- * 这是"不复活"的关键：`sources.json` 的**存在**本身就是墓碑。用户
- * `aforge source remove official` 后，登记表仍在（内容是 `sources: []`），此后任何
- * `init`（包括在别的项目里跑的 project scope init，它们共享同一张 user 层登记表）
- * 都不再播种。`sync` 从头到尾不写登记表，自然也不会加回来。
+ * 停止播种不改变已登记条目的行为：`sources.json` 里已有的 `official`（老 SoT 播种下来
+ * 的，或用户自己 enable 的）照旧参与解析，pin 也照旧由用户的文件说话。
  *
  * ## 零网络
  *
- * 播种只写一个 JSON，**不做任何 git 调用**：条目带 `ref`、不带 `commit`，store 下也
+ * 补登记只写一个 JSON，**不做任何 git 调用**：条目带 `ref`、不带 `commit`，store 下也
  * 没有目录。内容在首次真正用到时才补（见 manager.materializeGitSource 与
- * template.listTemplates）。因此离线 / CI 下 `init` 不会因官方源变慢或失败。
+ * template.listTemplates）。
  */
 import type { GitSource, Source } from '../../schema';
 import { ConfigError } from '../errors';
@@ -63,16 +51,6 @@ export interface DefaultSourceDecl {
   readonly ref: string;
   /** 该源提供的内容类别（§4.4 kind）。 */
   readonly kind: GitSource['kind'];
-  /**
-   * 播种时是否直接启用。
-   *
-   * 官方源恒为 `false`：启用它意味着"这台机器会去 clone 一个远端仓库"，那是用户的
-   * 决定而不是安装器的决定。禁用态下 listTemplates **完全跳过它**（不联网、不进
-   * 清单），渲染侧的模板解析也不认它（generate/resolver 第 4 层按
-   * `sources.json` 的 `enabled` 取源，见 `./render-scope`）。于是「默认注册」不带来
-   * 任何网络与行为变化——真正的零配置是"想用时一条命令"，不是"装完就偷偷联网"。
-   */
-  readonly enabledByDefault: boolean;
   /** 人类可读说明（doctor / status 的展示文案）。 */
   readonly description: string;
 }
@@ -80,9 +58,12 @@ export interface DefaultSourceDecl {
 /**
  * 默认注册项常量表（**唯一事实源**）。
  *
- * 官方模板仓库当前就是 AgentForge 本仓库：它的 `templates/` 目录即官方模板集
- * （v0.2.2 只有 `base/default.md`，后续官方模板会往这里加）。指向本仓库而不是另开
- * 一个仓库，是为了让 pin 与 CLI 版本天然同源、不必维护两套 tag 节奏。
+ * 官方模板仓库当前就是 AgentForge 本仓库：它的 `templates/` 目录即官方模板集。指向本
+ * 仓库而不是另开一个仓库，是为了让 pin 与 CLI 版本天然同源、不必维护两套 tag 节奏。
+ *
+ * 这张表只在用户显式 `aforge source enable official` 时被读取（补登记的模板）——`init`
+ * 不再播种，所以表里的 `ref` 落后于当前 CLI 版本不再影响任何未主动启用的用户。整个模块
+ * 按 Spec §4.6 在下一 major 移除。
  *
  * 注意与内置模板的**同名优先级**：本源里的 `templates/base/default.md` 与发行包内置的
  * `base/default` 同 id，而 resolveTemplate 恒先返回内置内容（§3.4 内置模板不可被
@@ -94,7 +75,6 @@ export const DEFAULT_SOURCES: readonly DefaultSourceDecl[] = [
     url: 'https://github.com/zyTheGit/AgentForge.git',
     ref: 'v0.2.2',
     kind: ['templates'],
-    enabledByDefault: false,
     description: 'AgentForge 官方模板集（templates/ 目录）',
   },
 ];
@@ -112,52 +92,19 @@ export function isDefaultSourceId(id: string): boolean {
 /**
  * 声明 → 待落盘的登记条目。
  *
- * 刻意**不填 `commit`**：播种时还没 clone，编一个 commit 会让 `source list` 显示一个
+ * 刻意**不填 `commit`**：补登记时还没 clone，编一个 commit 会让 `source list` 显示一个
  * 磁盘上并不存在的 pin。首次拉取由 materializeGitSource 回写真实 commit。
  */
-export function defaultSourceEntry(decl: DefaultSourceDecl, enabled?: boolean): GitSource {
+export function defaultSourceEntry(decl: DefaultSourceDecl, enabled: boolean): GitSource {
   assertSourceId(decl.id);
   return {
     id: decl.id,
     type: 'git',
     url: decl.url,
     ref: decl.ref,
-    enabled: enabled ?? decl.enabledByDefault,
+    enabled,
     kind: [...decl.kind],
   };
-}
-
-/** seedDefaultSources 结果。 */
-export interface SeedDefaultSourcesResult {
-  /** user 层 sources.json 绝对路径（无论是否播种都回报，供 init 输出）。 */
-  readonly file: string;
-  /** 本次写入的源 id（未播种 → 空数组）。 */
-  readonly registered: readonly string[];
-  /** 未播种的原因（已播种 → null）。 */
-  readonly skipped: 'registry-exists' | null;
-}
-
-/**
- * 播种默认注册项到 user 层 sources.json（**仅当该文件尚不存在**）。
- *
- * 由 `init` 调用（两条路径：静默 runInit 与交互 init 的写入确认之后）。为什么写 user 层
- * 而不是本次 init 的那一层：`sources.json` 与 `store\` 按 §3.1 恒在 user 层，项目层的
- * 登记表当前根本没有读取方——写进项目层就是个死文件。
- *
- * 幂等且不复活：见文件头「为什么只在 sources.json 不存在时播种」。
- *
- * @throws PermissionError(4) user 层不可写（调用方按需降级，见 init-scaffold）。
- */
-export async function seedDefaultSources(
-  ctx: SourceManagerContext,
-): Promise<SeedDefaultSourcesResult> {
-  const file = sourcesFilePath(ctx);
-  if (await ctx.host.exists(file)) {
-    return { file, registered: [], skipped: 'registry-exists' };
-  }
-  const entries = DEFAULT_SOURCES.map((decl) => defaultSourceEntry(decl));
-  await saveSources(ctx, entries);
-  return { file, registered: entries.map((entry) => entry.id), skipped: null };
 }
 
 /** setSourceEnabled 结果。 */
@@ -170,8 +117,8 @@ export interface SetSourceEnabledResult {
   /**
    * 本次是否顺带**补登记**了一个默认注册项。
    *
-   * 老 SoT（本特性之前 init 过的）登记表里没有官方源条目，`enable` 时按常量表补一条
-   * ——这是老 SoT 的迁移路径，也是唯一会让默认项"出现"的用户显式动作。
+   * `init` 不再播种（Spec §4.6），所以登记表里通常没有官方源条目；`enable` 按常量表补
+   * 一条——这是该源唯一的入场路径，也是唯一会让默认项"出现"的用户显式动作。
    */
   readonly registered: boolean;
 }
@@ -181,7 +128,8 @@ export interface SetSourceEnabledResult {
  *
  * 三条分支：
  * - id 已登记 → 翻位（已是目标状态则 changed:false，不写盘）；
- * - id 未登记但在 `DEFAULT_SOURCES` 中且 `enabled=true` → 按常量表补登记并启用；
+ * - id 未登记但在 `DEFAULT_SOURCES` 中且 `enabled=true` → 按常量表补登记并启用（`init`
+ *   不再播种，所以这是官方源的常规入场路径）；
  * - 其余 → ConfigError(2)。
  *
  * `disable` 刻意**不**走补登记：对一个本就不存在的条目"禁用"，写一条 disabled 记录

@@ -58,10 +58,9 @@ export interface SourceManagerContext extends SourceRegistryContext {
 /**
  * sources.json 的绝对路径（`<userSoT>\sources.json`）。
  *
- * 导出而非文件私有：`./official` 的默认注册要判断"这张登记表是否**存在过**"
- * （见 seedDefaultSources 的 seed 语义），而 setSourceEnabled 要在不写盘的
- * no-op 分支里也回报文件路径。两处都只该拿到同一个口径的路径，不该各自
- * `path.join(userSoTRoot, 'sources.json')`。
+ * 导出而非文件私有：`./official` 的 setSourceEnabled 要在不写盘的 no-op 分支里
+ * 也回报文件路径，doctor 的默认源体检也要指认这张表的位置。两处都只该拿到同一个
+ * 口径的路径，不该各自 `path.join(userSoTRoot, 'sources.json')`。
  */
 export function sourcesFilePath(ctx: SourceRegistryContext): string {
   return path.join(ctx.userSoTRoot, SOURCES_FILE);

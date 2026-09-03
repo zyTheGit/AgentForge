@@ -371,11 +371,16 @@ describe('MCP servers 配置后的投影（§8.3/§8.4/§8.5/§8.6 管理键）'
     expect(toml).not.toContain('[mcp_servers.old]');
     expect(toml).not.toContain('command = "old"');
 
-    // pi .pi\mcp.json：顶层键与 .mcp.json 同名，但条目无 type（transport 由字段互斥判定）
+    // pi .pi\mcp.json：顶层键与 .mcp.json 同名，但条目无 type（transport 由字段互斥判定）；
+    // 远端条目显式带 httpTransport（留空会让上一轮的 "sse" 在深合并里活下来，issue #69）
     expect(JSON.parse(await readFile(ws.piMcp, 'utf8'))).toEqual({
       mcpServers: {
         fs: { command: 'npx', args: ['-y', 'server-fs'], env: { KEY: 'v' } },
-        docs: { url: 'https://example.com/mcp', headers: { Authorization: 'Bearer x' } },
+        docs: {
+          url: 'https://example.com/mcp',
+          headers: { Authorization: 'Bearer x' },
+          httpTransport: 'streamable-http',
+        },
       },
     });
 

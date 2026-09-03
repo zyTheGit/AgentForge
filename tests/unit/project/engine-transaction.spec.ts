@@ -106,6 +106,18 @@ const PROFILE_WITH_SSE = [
   '',
 ].join('\n');
 
+/** 同名 server 由 sse 改回 http：钉住 pi 侧不留陈旧 httpTransport（issue #69）。 */
+const PROFILE_SSE_SWITCHED_TO_HTTP = [
+  'version: 1',
+  'targets: [opencode, codex, claude, pi]',
+  'mcp:',
+  '  servers:',
+  '    - name: stream',
+  '      transport: http',
+  '      url: https://example.com/sse',
+  '',
+].join('\n');
+
 /** 目录感知 listDir（engine 的 readCustomLayer 经宿主 path.join 拼路径）。 */
 function createSyncHost(): FakeHost {
   const base = createFakeHost({ USERPROFILE: HOME });
@@ -258,7 +270,11 @@ describe('syncOnce — 四 target 全量投影（§8.7 投影矩阵）', () => {
     expect(JSON.parse(host.files.get(PI_MCP) as string)).toEqual({
       mcpServers: {
         fs: { command: 'npx', args: ['-y', 'server-fs'], env: { KEY: 'v' } },
-        docs: { url: 'https://example.com/mcp', headers: { Authorization: 'Bearer x' } },
+        docs: {
+          url: 'https://example.com/mcp',
+          headers: { Authorization: 'Bearer x' },
+          httpTransport: 'streamable-http',
+        },
       },
     });
 
@@ -302,6 +318,28 @@ describe('syncOnce — 四 target 全量投影（§8.7 投影矩阵）', () => {
     expect(
       result.mcpTransportNotices.map((n) => `${n.targetId}:${n.serverName}:${n.support}`),
     ).toEqual(['opencode:stream:degraded', 'codex:stream:unsupported']);
+  });
+
+  it('sse → http 改回后 pi 侧不留陈旧 httpTransport: "sse"（merge_json 删不掉键，issue #69）', async () => {
+    const host = createSyncHost();
+    await seed(host, PROFILE_WITH_SSE);
+    await syncOnce(syncOptions(host));
+    expect(JSON.parse(host.files.get(PI_MCP) as string).mcpServers.stream.httpTransport).toBe(
+      'sse',
+    );
+
+    // 用户把同名 server 的 transport 改回 http，再 sync
+    await seed(host, PROFILE_SSE_SWITCHED_TO_HTTP);
+    const result = await syncOnce(syncOptions(host));
+
+    // http 分支显式写 streamable-http，把上一轮的 "sse" 覆盖掉；
+    // 若留空则深合并保留旧值，pi 会继续锁在 SSE 而 sync 只报 unchanged
+    expect(JSON.parse(host.files.get(PI_MCP) as string).mcpServers.stream).toEqual({
+      url: 'https://example.com/sse',
+      httpTransport: 'streamable-http',
+    });
+    // transport 已是 http：三家都无损，落差清单应清空
+    expect(result.mcpTransportNotices).toEqual([]);
   });
 
   it('幂等：二次 sync 全部 unchanged，contentHash 不变', async () => {
