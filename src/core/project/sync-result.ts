@@ -79,6 +79,7 @@ function flattenAdvisories(advisories: SyncAdvisories): {
   return {
     commandSkips: advisories.commandSkips,
     mcpTransportNotices: advisories.mcpTransportNotices,
+    mcpTransportUnmeasuredTargets: advisories.mcpTransportUnmeasuredTargets,
     mcpScopeNotices: advisories.mcpScopeNotices,
     sessionHookNotices: advisories.sessionHookNotices,
     skillSkips: advisories.skillSkips,

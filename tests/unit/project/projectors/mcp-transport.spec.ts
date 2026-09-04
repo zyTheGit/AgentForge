@@ -11,9 +11,14 @@ import {
   claudeMcpServersObject,
   codexMcpEntries,
   collectMcpTransportNotices,
+  collectMcpTransportNoticesForTargets,
+  collectUnmeasuredMcpTransportTargets,
   enabledMcpServerNames,
+  isMcpProjectionTargetId,
   type McpProjectionTargetId,
   mcpTransportSupport,
+  mcpTransportUnmeasuredItem,
+  mcpTransportUnmeasuredReason,
   opencodeMcpObject,
   piMcpServersObject,
 } from '../../../../src/core/project/projectors/mcp-transport';
@@ -316,5 +321,50 @@ describe('enabledMcpServerNames（§7.6 prune 记账口径）', () => {
 
   it('空输入 → 空数组', () => {
     expect(enabledMcpServerNames([])).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 矩阵外的 target id（声明式适配器）：护栏，PRD 适配器扩展 Phase 0
+// ---------------------------------------------------------------------------
+
+describe('矩阵外 target id 的护栏（此前 as 强转 → TypeError 崩 sync/doctor）', () => {
+  it('isMcpProjectionTargetId：四个内置 id 为真，声明式 / 原型链键为假', () => {
+    for (const id of ['claude', 'opencode', 'codex', 'pi']) {
+      expect(isMcpProjectionTargetId(id)).toBe(true);
+    }
+    for (const id of ['my-agent', 'cursor', '', 'toString', 'constructor']) {
+      expect(isMcpProjectionTargetId(id)).toBe(false);
+    }
+  });
+
+  it('collectMcpTransportNoticesForTargets：混入声明式 id 不抛，落差只按内置 id 判定', () => {
+    expect(() => collectMcpTransportNoticesForTargets(['my-agent'], [STDIO])).not.toThrow();
+    expect(collectMcpTransportNoticesForTargets(['my-agent'], [STDIO, HTTP, SSE])).toEqual([]);
+
+    const mixed = collectMcpTransportNoticesForTargets(['my-agent', 'codex'], [SSE]);
+    expect(mixed.map((n) => `${n.targetId}:${n.support}`)).toEqual(['codex:unsupported']);
+  });
+
+  it('collectUnmeasuredMcpTransportTargets：每 target 恰一条、去重、不含内置 id', () => {
+    expect(
+      collectUnmeasuredMcpTransportTargets(['claude', 'my-agent', 'cursor'], [STDIO, HTTP, SSE]),
+    ).toEqual(['my-agent', 'cursor']);
+    // 三个 server 也只出一条：落差判定压根没跑，逐 server 重复同一句是噪音
+    expect(collectUnmeasuredMcpTransportTargets(['my-agent', 'my-agent'], [STDIO])).toEqual([
+      'my-agent',
+    ]);
+  });
+
+  it('collectUnmeasuredMcpTransportTargets：无可投影 server → 空（没 MCP 内容就没得说）', () => {
+    expect(collectUnmeasuredMcpTransportTargets(['my-agent'], [])).toEqual([]);
+    const disabled = server({ name: 'off', transport: 'stdio', command: 'x', enabled: false });
+    expect(collectUnmeasuredMcpTransportTargets(['my-agent'], [disabled])).toEqual([]);
+  });
+
+  it('item 名与文案带上 target id（doctor / sync 共用同一份）', () => {
+    expect(mcpTransportUnmeasuredItem('my-agent')).toBe('mcp-transport/my-agent-unmeasured');
+    expect(mcpTransportUnmeasuredReason('my-agent')).toContain('my-agent');
+    expect(mcpTransportUnmeasuredReason('my-agent')).toContain('不在 transport 能力矩阵内');
   });
 });

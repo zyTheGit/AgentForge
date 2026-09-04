@@ -45,6 +45,7 @@ import { CODEX_PROJECT_COMMANDS_SKIP_REASON } from './commands';
 import { CLAUDE_USER_MCP_SKIP_REASON } from './projectors/claude';
 import {
   collectMcpTransportNoticesForTargets,
+  collectUnmeasuredMcpTransportTargets,
   enabledMcpServerNames,
   type McpTransportNotice,
 } from './projectors/mcp-transport';
@@ -219,6 +220,14 @@ export function collectMcpScopeNotices(input: SyncAdvisoryInput): SyncNotice[] {
 export interface SyncAdvisories {
   readonly commandSkips: readonly SyncCommandSkip[];
   readonly mcpTransportNotices: readonly McpTransportNotice[];
+  /**
+   * 不在 transport 能力矩阵内的 target id（每 target 恰一条，非每 server 一条）。
+   *
+   * 只带 id：落差判定压根没跑，没有 serverName / transport / support 可填，文案由
+   * `mcpTransportUnmeasuredReason` 现算——塞进 `mcpTransportNotices` 得给那三个字段
+   * 编空值，读的人分不清"空"是"没有落差"还是"没判定"。
+   */
+  readonly mcpTransportUnmeasuredTargets: readonly string[];
   /** user scope 下 claude 的 MCP 整项不投影（issue #52；见 collectMcpScopeNotices）。 */
   readonly mcpScopeNotices: readonly SyncNotice[];
   readonly sessionHookNotices: readonly SyncNotice[];
@@ -236,8 +245,13 @@ export interface SyncAdvisories {
 export function collectSyncAdvisories(input: SyncAdvisoryInput): SyncAdvisories {
   return {
     commandSkips: collectCommandSkips(input),
-    // targetIds 已被 filterTargets 限定在四个注册 target 内（能力矩阵按 id 查表）
+    // targetIds 的取值域含声明式适配器 id（knownTargetIds()），不止四个内置 id：
+    // 矩阵里没有的 id 由 collect* 内部按 id 守卫跳过，另出一条 unmeasured 占位
     mcpTransportNotices: collectMcpTransportNoticesForTargets(input.targetIds, input.mcpServers),
+    mcpTransportUnmeasuredTargets: collectUnmeasuredMcpTransportTargets(
+      input.targetIds,
+      input.mcpServers,
+    ),
     mcpScopeNotices: collectMcpScopeNotices(input),
     sessionHookNotices: collectSessionHookNotices(
       writesSessionHooks(effectiveAutoCapture(input.profile)),

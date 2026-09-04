@@ -32,6 +32,10 @@ import {
   type SyncTargetResult,
   syncOnce,
 } from '../../core/project/engine';
+import {
+  MCP_TRANSPORT_UNMEASURED_HINT,
+  mcpTransportUnmeasuredReason,
+} from '../../core/project/projectors/mcp-transport';
 import { SYNC_META_FILE } from '../../core/project/sync-meta';
 import { dryRunItem } from '../../core/project/writer';
 import { getUi, type Ui } from '../../infra/ui';
@@ -211,6 +215,14 @@ export function printSyncResult(result: SyncResult, ui: Ui = getUi()): void {
       const label = notice.support === 'unsupported' ? 'skipped' : 'degraded';
       lines.push(`  [${notice.targetId}] ${label}: ${ui.yellow(notice.detail)}`);
       lines.push(`    ${ui.dim(notice.hint)}`);
+    }
+  }
+  if (result.mcpTransportUnmeasuredTargets.length > 0) {
+    // 矩阵外的 target（声明式适配器 / 未实测内置 id）：判定没跑，说清楚而非静默
+    lines.push('', ui.yellow(ui.bold('mcp transport unmeasured:')));
+    for (const targetId of result.mcpTransportUnmeasuredTargets) {
+      lines.push(`  [${targetId}] ${ui.yellow(mcpTransportUnmeasuredReason(targetId))}`);
+      lines.push(`    ${ui.dim(MCP_TRANSPORT_UNMEASURED_HINT)}`);
     }
   }
   if (result.transactionWarnings.length > 0) {

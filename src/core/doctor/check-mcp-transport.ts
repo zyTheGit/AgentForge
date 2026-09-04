@@ -19,7 +19,13 @@
  */
 import type { EffectiveConfig } from '../config/defaults';
 import { CLAUDE_USER_MCP_SKIP_REASON } from '../project/projectors/claude';
-import { collectMcpTransportNoticesForTargets } from '../project/projectors/mcp-transport';
+import {
+  collectMcpTransportNoticesForTargets,
+  collectUnmeasuredMcpTransportTargets,
+  MCP_TRANSPORT_UNMEASURED_HINT,
+  mcpTransportUnmeasuredItem,
+  mcpTransportUnmeasuredReason,
+} from '../project/projectors/mcp-transport';
 import { CLAUDE_USER_MCP_NOTICE_ITEM } from '../project/sync-notices';
 import type { DoctorCheckResult } from './check-types';
 
@@ -41,14 +47,34 @@ export function checkMcpTransport(results: DoctorCheckResult[], config: Effectiv
     return;
   }
 
-  const notices = collectMcpTransportNoticesForTargets(config.profile.targets, servers);
-  if (notices.length === 0) {
+  // 矩阵外的 target 先各出一条占位 warn：落差判定对它们压根没跑，下面的结论
+  // （无论 ok 还是 warn）都只覆盖已实测 target，不能让它们混在同一句里
+  const unmeasuredTargets = collectUnmeasuredMcpTransportTargets(config.profile.targets, servers);
+  for (const targetId of unmeasuredTargets) {
     results.push({
       section: 'config',
-      level: 'ok',
-      item: 'mcp-transport',
-      detail: `${servers.length} 个 MCP server 的 transport 在启用的 target（${config.profile.targets.join(' / ')}）上均可无损表达`,
+      level: 'warn',
+      item: mcpTransportUnmeasuredItem(targetId),
+      detail: mcpTransportUnmeasuredReason(targetId),
+      hint: MCP_TRANSPORT_UNMEASURED_HINT,
     });
+  }
+  const measuredTargets = config.profile.targets.filter(
+    (targetId) => !unmeasuredTargets.includes(targetId),
+  );
+
+  const notices = collectMcpTransportNoticesForTargets(config.profile.targets, servers);
+  if (notices.length === 0) {
+    // 一个已实测 target 都没有时不给这条 ok：对空集合说"均可无损表达"是假结论，
+    // 情况已由上面每 target 一条的 unmeasured warn 说清
+    if (measuredTargets.length > 0) {
+      results.push({
+        section: 'config',
+        level: 'ok',
+        item: 'mcp-transport',
+        detail: `${servers.length} 个 MCP server 的 transport 在启用的已实测 target（${measuredTargets.join(' / ')}）上均可无损表达`,
+      });
+    }
     return;
   }
 
