@@ -124,6 +124,10 @@ function initSummaryLines(
     ui.bold('created dirs:'),
     ...result.createdDirs.map((d) => `  ${ui.path(d)}`),
     '',
+    // templates/ 建出来是空的（它只收用户自写的模板），而 profile.yaml 又写着
+    // templates: [base/default]——不点一句容易被当成"内置模板没下载下来"。
+    `${ui.dim('note: built-in templates ship inside aforge - run')} ${ui.code('aforge template list')}`,
+    '',
     ui.bold('detected (snapshot saved to habits.yaml):'),
     ...detectionSummary(result.detection, ui),
     '',

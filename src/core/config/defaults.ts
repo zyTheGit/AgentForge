@@ -61,7 +61,10 @@ export function windowsDefaultProfile(): ProfileInput {
     templates: ['base/default'],
     skills: { copy_mode: 'copy' },
     projection: { marker_mode: 'replace_between_markers', line_ending: 'lf' },
-    learning: { default_scope: 'project', auto_promote: false },
+    // auto_capture 显式写出缺省档位（Spec §4.2 代码块含此行）：不写也是 off，
+    // 但 init 落盘的 profile.yaml 里少了它，用户只看到旁边 boolean 的 auto_promote，
+    // 容易误以为自动学习开关也是 boolean（§7.4 是 off|prompt|hook 三档）。
+    learning: { default_scope: 'project', auto_capture: 'off', auto_promote: false },
   };
 }
 

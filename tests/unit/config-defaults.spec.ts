@@ -8,6 +8,7 @@ import {
   resolveEffectiveConfig,
   windowsDefaultProfile,
 } from '../../src/core/config/defaults';
+import { serializeYamlDoc } from '../../src/core/config/serialize';
 import { readEnv } from '../../src/core/env';
 import { ConfigError } from '../../src/core/errors';
 import { createFakeHost } from './test-utils';
@@ -32,12 +33,21 @@ describe('内置默认值（Spec §4.2 Windows 安装默认值 / §7.1）', () =
       templates: ['base/default'],
       skills: { copy_mode: 'copy' },
       projection: { marker_mode: 'replace_between_markers', line_ending: 'lf' },
-      learning: { default_scope: 'project', auto_promote: false },
+      learning: { default_scope: 'project', auto_capture: 'off', auto_promote: false },
     });
   });
 
   it('defaultHabits → 空骨架 + detected: {}', () => {
     expect(defaultHabits()).toEqual({ version: 1, detected: {} });
+  });
+
+  // 裸 `off` 在 YAML 1.1 是 boolean false、在 1.2 core schema 才是字符串。init 落盘的
+  // profile.yaml 走的就是这条路径，档位被读成 false 会让每次装配都 ConfigError(2)。
+  it('落盘的 auto_capture: off 经 YAML 往返仍是字符串档位（不退化成 boolean）', async () => {
+    const host = createFakeHost();
+    host.files.set(PROJECT_PROFILE, serializeYamlDoc(windowsDefaultProfile()));
+    const cfg = await resolveEffectiveConfig(envOf(), USER_SOT, PROJECT_SOT, host);
+    expect(cfg.profile.learning.auto_capture).toBe('off');
   });
 });
 
