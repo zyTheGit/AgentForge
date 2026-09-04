@@ -134,7 +134,7 @@ scopes:
 4. **`merge_json` 数组语义不扩**：本次不触碰会话钩子（issue #56 的前置条件），三个新 target 的 `learning.auto_capture: hook` 档均等同 `off` + 显式降级提示，与 claude / opencode / pi 同口径。
 5. **白名单扩容先例**：`GROK_HOME` 进 `ADAPTER_ENV_WHITELIST` 的判据见 §3.3；`schema/adapter.schema.json` 描述、`docs/profile.md` 白名单清单、环境诊断输出与测试同 PR 更新。
 6. **skills 与兄弟目录扫描的重复投影**：Cursor/Gemini 官方会扫描 `.agents/skills/` 等兄弟目录（codex 的落点），多 target 并存时技能会在**上游清单**重复——重复来自「投影落点」与「上游扫描规则」的重叠，不是 AgentForge 写重。口径：AgentForge 自身不向共享扫描目录重复投影；上游扫描导致的重复经 doctor warn + `docs/skills.md` 已知限制处理，**不算出口失败**；「是否可关兄弟目录扫描」列入探针，条件投影（§2.2 非目标 7）另开 issue。
-7. **`skills_dir` 必填 → 可缺省**：现行 schema（`schemas/adapter.schema.json` 与 `docs/profile.md`）要求每个已声明 scope 的 `skills_dir` 必填。为让「与 codex 并存时删去 `skills_dir` 借道 `.agents/skills/`」成为用户可操作的合法配置，实现阶段将 `skills_dir` 改为可缺省（缺省 = 不投影，与 `commands_dir` / `mcp_file` 同口径）；`Projector.skillDir` 契约位（`skill remove` 清理提示等）的空值行为同 PR 定义。
+7. **`skills_dir` 必填 → 可缺省**（**已落地**，PR #90）：原 schema（`schemas/adapter.schema.json` 与 `docs/profile.md`）要求每个已声明 scope 的 `skills_dir` 必填，导致「与 codex 并存时删去 `skills_dir` 借道 `.agents/skills/`」这条文档推荐的做法压根写不出来。现已改为可缺省（缺省 = 不投影技能，与 `commands_dir` / `mcp_file` 同口径）；`Projector.skillDir` / `skillPath` 契约位的空值行为定为抛 `ConfigError`，调用方跳过（`skill add` / `remove` 的提示行少列一个 target，命令照常成功）。遗留：四个落点字段对「声明了但变量算不出来」的口径仍不统一（`skills_dir` 报错 → 整份适配器被拒；另三个静默跳过，而这可能是跨平台 fallback 的有意写法），另开 issue 定夺。
 8. **Gemini CLI 产品存续**：已进入向 Antigravity CLI 迁移阶段（停损条件见 §3.2），B 开工前与中途各复核一次。
 
 ---
@@ -164,4 +164,4 @@ scopes:
 - 2026-09-04，三轮（独立评审 → 交叉评议 D1–D7 → 合并案表态），与会者：opencode（`opencode-go/grok-4.6`）、pi（`deepseek/deepseek-v4-pro`）、codex（`gpt-5.6-terra`）；主持：ZCode。
 - 全票通过：D1 护栏前置独立 PR（采纳 pi「blocker」修正与 codex「能力注册表」措辞）、D2 根 `AGENTS.md` 由适配器声明 `main_rule` 幂等共存、D3 具名 dialect / 不做参数化映射 / Gemini 先 stdio 降级、D4 能力字段只读事实化、D6 `GROK_HOME` 白名单判据、D7 Gemini 已知限制与停损条件。
 - 分歧收敛点：D5（skills 重复投影）三方一致选**乙案**——默认照常声明 `skills_dir` + 文档指引 + doctor warn，实测前置探针，条件投影另开 issue；opencode 补充 `skills_dir` 须改可缺省，pi 补充「实测结论是 warn 的触发依据」。
-- 三方共同核实的实现事实（已并入正文）：transport 矩阵崩溃路径（`mcp-transport.ts:150`、`sync-notices.ts:240`、`check-mcp-transport.ts:44`）；`skills_dir` 现行必填；`main_rule` 分顶层开关 / scope 落点两层；dialect 枚举现状 `mcpServers | opencode`；`ADAPTER_ALLOWED_ACTIONS = ['write','merge_marker','merge_json']`。
+- 三方共同核实的实现事实（已并入正文）：transport 矩阵崩溃路径（`mcp-transport.ts:150`、`sync-notices.ts:240`、`check-mcp-transport.ts:44`）；`skills_dir` 评审当时必填（现已改为可缺省，见 §5.7）；`main_rule` 分顶层开关 / scope 落点两层；dialect 枚举现状 `mcpServers | opencode`；`ADAPTER_ALLOWED_ACTIONS = ['write','merge_marker','merge_json']`。

@@ -248,6 +248,41 @@ describe('loadDeclarativeAdapters — 失败分类与退出码归属', () => {
     expect(onlyFailure(report).kind).toBe('template');
   });
 
+  it('缺省 skills_dir → 照常 register（加载期的 sites 收集吸收 undefined，不算失败）', async () => {
+    const report = await load(
+      createAdapterHost({
+        [path.join(USER_ADAPTERS, 'no-skills.yaml')]: [
+          'version: 1',
+          'id: no-skills',
+          'scopes:',
+          '  user:',
+          '    base: "{userHome}/.my"',
+          '    main_rule: "{base}/AGENTS.md"',
+        ].join('\n'),
+      }),
+    );
+    expect(report.failures).toEqual([]);
+    expect(report.loaded.map((entry) => entry.id)).toEqual(['no-skills']);
+  });
+
+  it('声明了 skills_dir 但变量算不出 → kind=template，整份不 register（连 main_rule 都不投）', async () => {
+    const report = await failOn(
+      'unresolved.yaml',
+      [
+        'version: 1',
+        'id: unresolved',
+        'scopes:',
+        '  user:',
+        '    base: "{userHome}/.my"',
+        '    main_rule: "{base}/AGENTS.md"',
+        // XDG_DATA_HOME 在白名单内但夹具没给值 → 渲染不出，与「整行删掉」不是一回事
+        '    skills_dir: "{env:XDG_DATA_HOME}/skills"',
+      ].join('\n'),
+    );
+    expect(onlyFailure(report).kind).toBe('template');
+    expect(report.loaded).toEqual([]);
+  });
+
   it('边界 4：单文件超字节上限 → kind=limit（不进 YAML 解析）', async () => {
     const report = await failOn('fat.yaml', 'x'.repeat(ADAPTER_MAX_FILE_BYTES + 1));
     expect(onlyFailure(report).kind).toBe('limit');

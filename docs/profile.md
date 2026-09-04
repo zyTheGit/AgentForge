@@ -102,7 +102,7 @@ scopes:
 
 `scopes.project` / `scopes.user` 至少要有一个；每个已声明 scope 只有 `base` 必填，其余四项（`skills_dir` / `main_rule` / `commands_dir` / `mcp_file`）缺省即该类产物不投影。声明了 `mcp_file` 就必须给顶层 `mcp.dialect`。
 
-**`skills_dir` 缺省的用途**：与 codex 之类会自己读 `.agents/skills/` 的 target 并存时，删掉 `skills_dir` 就能让 AgentForge 不再往那儿写第二份技能（否则同一份技能被两个 target 各投一次）。代价是这个 scope 没有技能落点，`Projector.skillDir` / `skillPath` 拿不到值——`aforge skill add` / `remove` 的「装完/删完去哪儿看」提示行会跳过该 target（不是报错，整条命令照常成功）。注意区分两种情况：**整行删掉** = 不投影；**写了但变量解析不出来**（如 `{env:FOO}` 而 `FOO` 未设）= 报错，因为写了却静默不生效比没写更难查。
+**`skills_dir` 缺省的用途**：与 codex 之类会自己读 `.agents/skills/` 的 target 并存时，删掉 `skills_dir` 就能让 AgentForge 不再往那儿写第二份技能（否则同一份技能被两个 target 各投一次）。代价是这个 scope 没有技能落点，`Projector.skillDir` / `skillPath` 拿不到值——`aforge skill add` / `remove` 的「装完/删完去哪儿看」提示行会跳过该 target（不是报错，整条命令照常成功）。注意区分两种情况：**整行删掉** = 不投影技能，其余产物照常；**写了但变量解析不出来**（如 `{env:FOO}` 而 `FOO` 未设）= **该适配器整份加载失败**，本 target 的 skills / main_rule / commands / MCP 全都不投影，失败以 `kind=template` 出现在 `aforge doctor` 的适配器报告里。后者之所以不静默降级，是因为写了却不生效比没写更难查。
 
 ### 只接受数据，不接受代码
 

@@ -31,6 +31,7 @@ import {
 export interface ParsedAdapterScope {
   /** base 候选（按声明顺序；取第一个可解析的）。 */
   readonly base: readonly ParsedPathTemplate[];
+  /** 缺省（yaml 里没写 `skills_dir`）→ `undefined`；与「写了但解析失败」不是一回事。 */
   readonly skillsDir: ParsedPathTemplate | undefined;
   readonly mainRule: ParsedPathTemplate | undefined;
   readonly commandsDir: ParsedPathTemplate | undefined;
@@ -55,6 +56,20 @@ export interface AdapterRuntime {
   /** 加载时刻白名单环境变量的取值（plan 是纯函数，不能自己读环境）。 */
   readonly envValues: Readonly<Partial<Record<AdapterEnvName, string>>>;
   readonly scopes: Readonly<Partial<Record<Scope, ParsedAdapterScope>>>;
+}
+
+/**
+ * 单个落点模板的求值结果。
+ *
+ * `absent`（yaml 里没写）与 `unresolved`（写了但当前环境算不出，如 `{env:APPDATA}`
+ * 在 macOS 上）必须分开：前者是「不投影这类产物」的正常声明，后者可能是笔误、
+ * 也可能是跨平台适配器有意为之（非 base 字段没有候选列表机制表达 fallback）。
+ */
+type SiteRender = { kind: 'absent' } | { kind: 'unresolved' } | { kind: 'ok'; path: string };
+
+/** 现行口径：`absent` 与 `unresolved` 都当作「该类产物不投影」。 */
+function pathOf(site: SiteRender): string | undefined {
+  return site.kind === 'ok' ? site.path : undefined;
 }
 
 /** 一个 scope 求值后的绝对落点。 */
@@ -153,23 +168,29 @@ export function resolveAdapterScope(
   }
   const withBase: TemplateBindings = { ...bindings, base };
 
-  const render = (template: ParsedPathTemplate | undefined, name: string): string | undefined => {
+  // 三态而非 string | undefined：「压根没声明」与「声明了但当前环境算不出」是两件事，
+  // 折叠成同一个 undefined 后调用方无法区分。目前四个字段都按「都不投影」处理（见下方
+  // pathOf），只有 skills_dir 额外对 unresolved 报错——把区分能力留在这里，口径要统一
+  // 时只改调用处
+  const render = (template: ParsedPathTemplate | undefined, name: string): SiteRender => {
     if (template === undefined) {
-      return undefined;
+      return { kind: 'absent' };
     }
     const resolved = renderPathTemplate(template, withBase, api);
     if (resolved === undefined) {
-      return undefined;
+      return { kind: 'unresolved' };
     }
     assertWithinAllowedRoots(resolved, allowed, os, api, `${runtime.doc.id}.${scope}.${name}`);
-    return resolved;
+    return { kind: 'ok', path: resolved };
   };
 
   assertWithinAllowedRoots(base, allowed, os, api, `${runtime.doc.id}.${scope}.base`);
   const skillsDir = render(parsed.skillsDir, 'skills_dir');
   // 声明了却算不出落点 → 报错：用户写了 skills_dir 却静默不投影，比没写更难查。
-  // 压根没声明 → undefined，与 commands_dir / mcp_file 同口径（本 scope 不投影技能）
-  if (parsed.skillsDir !== undefined && skillsDir === undefined) {
+  // 压根没声明 → undefined，与 commands_dir / mcp_file 同口径（本 scope 不投影技能）。
+  // 注意这条口径与另三个字段不一致（它们的 unresolved 也静默跳过），统一口径的取舍见
+  // issue「声明式适配器四个落点字段的 unresolved 口径统一」
+  if (skillsDir.kind === 'unresolved') {
     throw new AdapterTemplateError(
       `${runtime.doc.id}.${scope}: skills_dir 不可解析`,
       '已声明的 skills_dir 其变量必须在当前环境可解析；确实不想投影技能就整行删掉',
@@ -177,10 +198,10 @@ export function resolveAdapterScope(
   }
   return {
     base,
-    skillsDir,
-    mainRule: render(parsed.mainRule, 'main_rule'),
-    commandsDir: render(parsed.commandsDir, 'commands_dir'),
-    mcpFile: render(parsed.mcpFile, 'mcp_file'),
+    skillsDir: pathOf(skillsDir),
+    mainRule: pathOf(render(parsed.mainRule, 'main_rule')),
+    commandsDir: pathOf(render(parsed.commandsDir, 'commands_dir')),
+    mcpFile: pathOf(render(parsed.mcpFile, 'mcp_file')),
     allowed,
   };
 }

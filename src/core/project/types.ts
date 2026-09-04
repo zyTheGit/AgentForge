@@ -213,6 +213,10 @@ export interface Projector {
    * **当前没有生产调用点**（命令层只用 `skillPath`，四个内置 projector 只做赋值）：
    * 保留它是为第三方 target 与后续 doctor 检查（「skills 根存在 / 有残留」这类需要
    * 目录本身而非单个文件的诊断）预留——不是死代码，删了第二层还得加回来。
+   *
+   * @throws ConfigError 声明式适配器可能拿不到落点：该 scope 未声明，或声明了但没给
+   * `skills_dir`（缺省 = 不投影技能，是合法配置）。内置四家恒有值。调用方必须自行
+   * 跳过失败的 target，不能假设每个 projector 都能给出路径。
    */
   skillDir(ctx: ProjectContext): string;
   /** 单个技能的 `SKILL.md` 绝对路径（= `<skillDir>/<name>/SKILL.md`）。 */

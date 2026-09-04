@@ -156,24 +156,31 @@ export function buildDeclarativeProjector(runtime: AdapterRuntime): Projector {
     resolveAdapterScope(runtime, ctx.scope, ctx.rootDir, ctx.os, pathApiFor(ctx.os));
 
   /**
-   * skills 根目录（契约位，真正被用上：`skill remove` 的清理提示与后续 doctor 检查）。
+   * skills 根目录（契约位；命令层实际用的是 `skillPath`，保留给后续 doctor 的 skills
+   * 根检查，见 `Projector.skillDir` 的接口注释）。
    *
    * 两种情况都抛 ConfigError 而不是编一个路径：该 scope 未声明、或声明了但没给
-   * `skills_dir`（缺省 = 不投影技能）。编出来的路径 sync 永远不会写，打给用户等于
-   * 假信息。调用方（命令层的路径清单）对失败的 target 跳过即可。
+   * `skills_dir`（缺省 = 不投影技能，是**合法配置**）。编出来的路径 sync 永远不会写，
+   * 打给用户等于假信息。调用方（命令层的路径清单）对失败的 target 跳过即可。
    */
   const skillDir = (ctx: ProjectContext): string => {
     const resolved = resolveScope(ctx);
     if (resolved?.skillsDir !== undefined) {
       return resolved.skillsDir;
     }
-    const reason =
+    // hint 必须分两句：缺省 skills_dir 是本适配器有意的选择（借道上游自己的技能目录），
+    // 对这种用户还劝他「补上或去掉该 target」等于劝他改回一个本就合法的配置
+    const [reason, hint] =
       resolved === undefined
-        ? `未声明 ${ctx.scope} scope 的落点`
-        : `未声明 ${ctx.scope} 的技能落点`;
-    throw new ConfigError(`${id}: ${reason}`, {
-      hint: `在 ${runtime.file} 的 scopes.${ctx.scope} 下声明 base 与 skills_dir，或把该 target 从 profile.targets 里去掉`,
-    });
+        ? [
+            `未声明 ${ctx.scope} scope 的落点`,
+            `在 ${runtime.file} 的 scopes.${ctx.scope} 下声明 base 与 skills_dir，或把该 target 从 profile.targets 里去掉`,
+          ]
+        : [
+            `未声明 ${ctx.scope} 的技能落点`,
+            `该 scope 没声明 skills_dir，按设计不投影技能（合法配置，本行提示已跳过该 target）；确实想投就在 ${runtime.file} 的 scopes.${ctx.scope} 下补 skills_dir`,
+          ];
+    throw new ConfigError(`${id}: ${reason}`, { hint });
   };
 
   return {

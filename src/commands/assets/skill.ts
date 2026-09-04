@@ -23,6 +23,7 @@ import type { Command } from 'commander';
 import { defaultHabits, windowsDefaultProfile } from '../../core/config/defaults';
 import { resolveWriteTargetLayer, type TargetLayer } from '../../core/config/target-layer';
 import { type EnvSnapshot, readEnv, type Scope } from '../../core/env';
+import { ConfigError } from '../../core/errors';
 import { resolveProjectSoT, resolveUserSoT } from '../../core/paths';
 import { projectorRegistry } from '../../core/project/projectors/registry';
 import { withSotLock } from '../../core/project/sync-lock';
@@ -199,13 +200,18 @@ export function projectedSkillDocPaths(
     env,
   };
   return projectorRegistry.list().flatMap((projector) => {
-    // 声明式适配器（issue #53）可能没声明当前 scope，或模板算不出落点 → skillPath 抛
-    // ConfigError(2)。这里是「装完/删完去哪儿看」的提示行，不能因为一个第三方
-    // adapter 写错就让整条 skill 命令失败（诊断归 aforge doctor）。
+    // 声明式适配器（issue #53）拿不到落点的三种情形都抛 ConfigError：没声明当前 scope、
+    // 没声明 skills_dir（缺省 = 不投影技能，**合法配置**，不是写错）、模板算不出落点。
+    // 这里是「装完/删完去哪儿看」的提示行，少列一个 target 不该让整条 skill 命令失败
+    // （配置类诊断归 aforge doctor）。但只吞 ConfigError——编程错误（TypeError 等）
+    // 继续抛，否则一个实现 bug 会伪装成「这个 target 没有技能落点」永久静默
     try {
       return [projector.skillPath(planCtx, skillName)];
-    } catch {
-      return [];
+    } catch (err) {
+      if (err instanceof ConfigError) {
+        return [];
+      }
+      throw err;
     }
   });
 }
