@@ -110,7 +110,7 @@
               "maxLength": 240
             }
           },
-          "required": ["base", "skills_dir"],
+          "required": ["base"],
           "additionalProperties": false
         },
         "user": {
@@ -156,7 +156,7 @@
               "maxLength": 240
             }
           },
-          "required": ["base", "skills_dir"],
+          "required": ["base"],
           "additionalProperties": false
         }
       },
