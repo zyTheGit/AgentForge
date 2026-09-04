@@ -178,6 +178,17 @@ export function buildDeclarativeProjector(runtime: AdapterRuntime): Projector {
      */
     writesSessionHooks: false,
 
+    /**
+     * 按 yaml **是否声明了任一 scope 的 `mcp_file`** 决定（schema 保证声明它就有
+     * 顶层 `mcp.dialect`，见 adapter.ts 的 refine）。
+     *
+     * 只投 `main_rule` / `skills_dir` 的适配器压根没有 MCP 产物，报它的 transport
+     * 能力落差（或"未实测"）等于给用户一条**指向不存在产物**、且他无法消除的提示。
+     */
+    writesMcp: (['project', 'user'] as const).some(
+      (scope) => runtime.doc.scopes[scope]?.mcp_file !== undefined,
+    ),
+
     skillDir,
 
     skillPath(ctx: ProjectContext, skillName: string): string {

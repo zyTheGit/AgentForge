@@ -83,6 +83,20 @@ export function hookCapableTargetIds(projectors: readonly Projector[]): string[]
 }
 
 /**
+ * 有 MCP 落点的 target id（按 projector 的 `writesMcp` 能力声明筛，升序稳定）。
+ *
+ * 与 `hookCapableTargetIds` 同一处理口径：能力声明住在各 projector 里，这里只筛。
+ * 唯一消费方是 unmeasured 占位提示——只投 `main_rule` / `skills_dir` 的声明式适配器
+ * 压根没有 MCP 产物，不该收到 transport 相关的任何结论。
+ */
+export function mcpCapableTargetIds(projectors: readonly Projector[]): string[] {
+  return projectors
+    .filter((p) => p.writesMcp)
+    .map((p) => p.id)
+    .sort();
+}
+
+/**
  * 把本次参与的 target 按"有没有钩子落点"分成两半（纯函数）。
  *
  * sync 只需要 incapable（打降级提示），`aforge status` / `aforge doctor` 两边都要
@@ -251,6 +265,7 @@ export function collectSyncAdvisories(input: SyncAdvisoryInput): SyncAdvisories 
     mcpTransportUnmeasuredTargets: collectUnmeasuredMcpTransportTargets(
       input.targetIds,
       input.mcpServers,
+      mcpCapableTargetIds(input.projectors),
     ),
     mcpScopeNotices: collectMcpScopeNotices(input),
     sessionHookNotices: collectSessionHookNotices(

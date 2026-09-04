@@ -154,6 +154,9 @@ export const opencodeProjector: Projector = {
    */
   writesSessionHooks: false,
 
+  /** `opencode.json` 的 `mcp` 键（type: local / remote，见 projectors/mcp-transport）。 */
+  writesMcp: true,
+
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];
 

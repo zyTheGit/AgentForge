@@ -27,6 +27,7 @@ import {
   collectSessionHookNotices,
   collectSyncAdvisories,
   hookCapableTargetIds,
+  mcpCapableTargetIds,
   partitionSessionHookTargets,
   SESSION_HOOK_NOTICE_ITEM,
   type SyncAdvisoryInput,
@@ -42,11 +43,12 @@ import {
 } from '../../../src/schema';
 
 /** 只用于查能力的 projector 桩（plan 不会被这些纯函数调用，故返回空计划）。 */
-function fakeProjector(id: string, writesSessionHooks: boolean): Projector {
+function fakeProjector(id: string, writesSessionHooks: boolean, writesMcp = true): Projector {
   return {
     id,
     skillInvokePrefix: '/',
     writesSessionHooks,
+    writesMcp,
     skillDir: (ctx) => `${ctx.rootDir}\\.${id}\\skills`,
     skillPath: (ctx, name) => `${ctx.rootDir}\\.${id}\\skills\\${name}\\SKILL.md`,
     plan(): ProjectionPlan {
@@ -55,12 +57,19 @@ function fakeProjector(id: string, writesSessionHooks: boolean): Projector {
   };
 }
 
-/** 两支持两不支持的 projector 全集（顺序刻意打乱，用于验证输出是稳定排序的）。 */
+/**
+ * 两支持两不支持的 projector 全集（顺序刻意打乱，用于验证输出是稳定排序的）。
+ *
+ * 末两个是声明式适配器的两种形态：`my-agent` 声明了 `mcp_file`（有 MCP 落点），
+ * `no-mcp-agent` 只投规则与技能（无落点，transport 结论对它无意义）。
+ */
 const PROJECTORS: readonly Projector[] = [
   fakeProjector('zeta', false),
   fakeProjector('codex', true),
   fakeProjector('alpha', true),
   fakeProjector('claude', false),
+  fakeProjector('my-agent', false, true),
+  fakeProjector('no-mcp-agent', false, false),
 ];
 
 function profileWith(autoCapture: AutoCapture, targets: readonly string[] = ['codex']) {
@@ -78,6 +87,27 @@ describe('hookCapableTargetIds（能力声明来自 projector）', () => {
 
   it('真实注册表：四家里只有 codex 支持声明式会话钩子（§7.4 支持矩阵）', () => {
     expect(hookCapableTargetIds(projectorRegistry.list())).toEqual(['codex']);
+  });
+});
+
+describe('mcpCapableTargetIds（有 MCP 落点的 target）', () => {
+  it('只保留 writesMcp=true 的 id，且升序稳定', () => {
+    expect(mcpCapableTargetIds(PROJECTORS)).toEqual([
+      'alpha',
+      'claude',
+      'codex',
+      'my-agent',
+      'zeta',
+    ]);
+  });
+
+  it('真实注册表：四家内置全有 MCP 落点', () => {
+    expect(mcpCapableTargetIds(projectorRegistry.list())).toEqual([
+      'claude',
+      'codex',
+      'opencode',
+      'pi',
+    ]);
   });
 });
 
@@ -256,6 +286,17 @@ describe('collectSyncAdvisories（五类提示汇总，dry-run 与实际写入�
     expect(advisories.mcpTransportNotices.map((n) => n.targetId)).toEqual(['codex']);
     // 每 target 一条占位，不是每 server 一条
     expect(advisories.mcpTransportUnmeasuredTargets).toEqual(['my-agent']);
+  });
+
+  it('没有 MCP 落点的声明式 id 不报 unmeasured（它压根没有 MCP 产物）', () => {
+    expect(
+      collectSyncAdvisories(
+        input({
+          targetIds: ['codex', 'no-mcp-agent'],
+          mcpServers: [SSE_SERVER],
+        }),
+      ).mcpTransportUnmeasuredTargets,
+    ).toEqual([]);
   });
 
   it('没有 MCP server → 声明式 id 也不出 unmeasured（没内容就没得说）', () => {

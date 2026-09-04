@@ -350,6 +350,9 @@ export const codexProjector: Projector = {
    */
   writesSessionHooks: true,
 
+  /** `config.toml` 的 `[mcp_servers.<name>]` 表块（sse 整条跳过，见能力矩阵）。 */
+  writesMcp: true,
+
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];
 

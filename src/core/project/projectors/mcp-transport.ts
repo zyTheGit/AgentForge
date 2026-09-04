@@ -203,20 +203,30 @@ export const MCP_TRANSPORT_UNMEASURED_HINT =
   '投影照常进行，但该 target 对 stdio / http / sse 的实际支持程度未经实测：连接失败时先手工核对产物字段是否为上游认得的形状';
 
 /**
- * 本轮投影里**不在能力矩阵内**的 target（声明式适配器 id）。
+ * 本轮投影里**不在能力矩阵内、但确实有 MCP 落点**的 target（声明式适配器 id）。
  *
  * 每个 target 恰一条，**不是每个 server 一条**：落差判定压根没跑，逐 server 重复同一句
  * 「未实测」只是噪音。没有**启用**的 server 时返回空数组——没有可投影的 MCP 内容就没有
  * 可说的事（口径同 `collectMcpScopeNotices` 的 `enabledMcpServerNames(...) > 0`）。
+ *
+ * `mcpCapableIds` 是「有 MCP 落点」的 target 集合（由 `Projector.writesMcp` 判定，
+ * 调用方用 `sync-notices.mcpCapableTargetIds` 取）。没有落点的适配器一律不报：它压根
+ * 没有 MCP 产物，给它一条指向不存在产物、且用户无法消除的提示比不给更糟。
  */
 export function collectUnmeasuredMcpTransportTargets(
   targetIds: readonly string[],
   servers: readonly McpServer[],
+  mcpCapableIds: readonly string[],
 ): string[] {
   if (enabledMcpServerNames(servers).length === 0) {
     return [];
   }
-  return [...new Set(targetIds.filter((targetId) => !isMcpProjectionTargetId(targetId)))];
+  const capable = new Set(mcpCapableIds);
+  return [
+    ...new Set(
+      targetIds.filter((targetId) => !isMcpProjectionTargetId(targetId) && capable.has(targetId)),
+    ),
+  ];
 }
 
 /**
