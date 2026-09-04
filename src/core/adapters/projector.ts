@@ -104,12 +104,16 @@ function planItems(
     });
   }
 
-  for (const skill of ctx.skillsToMaterialize) {
-    items.push({
-      path: skillDocPath(api, resolved.skillsDir, skill.name),
-      action: 'write',
-      content: skill.content,
-    });
+  // skills_dir 缺省 → 本 scope 不投影技能（与 commands_dir / mcp_file 同口径）。
+  // 「与 codex 并存时删掉 skills_dir、借道上游自己的 .agents/skills/」就靠这条成立
+  if (resolved.skillsDir !== undefined) {
+    for (const skill of ctx.skillsToMaterialize) {
+      items.push({
+        path: skillDocPath(api, resolved.skillsDir, skill.name),
+        action: 'write',
+        content: skill.content,
+      });
+    }
   }
 
   if (resolved.commandsDir !== undefined) {
@@ -154,15 +158,20 @@ export function buildDeclarativeProjector(runtime: AdapterRuntime): Projector {
   /**
    * skills 根目录（契约位，真正被用上：`skill remove` 的清理提示与后续 doctor 检查）。
    *
-   * 该 scope 未声明时抛 ConfigError 而不是编一个路径：编出来的路径 sync 永远不会写，
-   * 打给用户等于假信息。调用方（命令层的路径清单）对失败的 target 跳过即可。
+   * 两种情况都抛 ConfigError 而不是编一个路径：该 scope 未声明、或声明了但没给
+   * `skills_dir`（缺省 = 不投影技能）。编出来的路径 sync 永远不会写，打给用户等于
+   * 假信息。调用方（命令层的路径清单）对失败的 target 跳过即可。
    */
   const skillDir = (ctx: ProjectContext): string => {
     const resolved = resolveScope(ctx);
-    if (resolved !== undefined) {
+    if (resolved?.skillsDir !== undefined) {
       return resolved.skillsDir;
     }
-    throw new ConfigError(`${id}: 未声明 ${ctx.scope} scope 的落点`, {
+    const reason =
+      resolved === undefined
+        ? `未声明 ${ctx.scope} scope 的落点`
+        : `未声明 ${ctx.scope} 的技能落点`;
+    throw new ConfigError(`${id}: ${reason}`, {
       hint: `在 ${runtime.file} 的 scopes.${ctx.scope} 下声明 base 与 skills_dir，或把该 target 从 profile.targets 里去掉`,
     });
   };

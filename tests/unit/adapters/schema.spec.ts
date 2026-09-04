@@ -5,7 +5,7 @@
  * - `action` 只有 `write` / `merge_marker`（`merge_toml` 连字段都不存在）；
  * - `mcp.dialect` 是内置枚举（`mcpServers` / `opencode`），不接受自由字段映射。
  *
- * 其余为默认值与必填项：`skills_dir` 必填（`Projector.skillDir` 要有真值）、
+ * 其余为默认值与必填项：只有 `base` 必填（`skills_dir` 等四项缺省 = 不投影该类产物）、
  * 至少一个 scope、`mcp_file` 与 `mcp.dialect` 成对。
  */
 import { describe, expect, it } from 'vitest';
@@ -35,9 +35,16 @@ describe('AdapterSchema — 默认值与必填项', () => {
     expect(doc.mcp).toBeUndefined();
   });
 
-  it('skills_dir 必填——skillDir 契约位不能靠编路径糊过去', () => {
+  it('skills_dir 可缺省——「与 codex 并存时删掉它借道 .agents/skills/」得是合法配置', () => {
+    const doc = AdapterSchema.parse(
+      minimal({ scopes: { user: { base: '{userHome}/.my' } } } as never),
+    );
+    expect(doc.scopes.user?.skills_dir).toBeUndefined();
+  });
+
+  it('base 仍必填——说不出根目录的 scope 无处落盘', () => {
     expect(() =>
-      AdapterSchema.parse(minimal({ scopes: { user: { base: '{userHome}/.my' } } } as never)),
+      AdapterSchema.parse(minimal({ scopes: { user: { skills_dir: '{userHome}/s' } } } as never)),
     ).toThrow();
   });
 

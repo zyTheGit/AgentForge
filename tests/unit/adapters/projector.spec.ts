@@ -11,7 +11,8 @@
  * - 主规则 toggle 复用 §8.7 的三种既有语义；
  * - commands 的 subdir / flatten 两档；
  * - MCP 的两种内置 dialect payload + soft 标记；
- * - `skillDir` / `skillPath` 是真值（不是编出来的路径）；未声明该 scope → 抛 ConfigError；
+ * - `skillDir` / `skillPath` 是真值（不是编出来的路径）；未声明该 scope、或该 scope
+ *   没声明 `skills_dir`（缺省 = 不投影技能）→ 抛 ConfigError；
  * - `writesSessionHooks` 恒 false（声明式装不了会话钩子）；
  * - plan 是纯函数；产物数量上限；每一项都过 containment。
  */
@@ -234,13 +235,34 @@ describe('buildDeclarativeProjector — MCP dialect', () => {
 });
 
 describe('buildDeclarativeProjector — 接口契约位', () => {
-  it('skillDir / skillPath 给出真实落点（skills_dir 必填，故不存在"编一个路径"）', () => {
+  it('skillDir / skillPath 给出真实落点（声明了 skills_dir 时不存在"编一个路径"）', () => {
     const projector = buildDeclarativeProjector(runtimeOf());
     const ctx = buildCtx();
     expect(projector.skillDir(ctx)).toBe('C:\\proj\\.my\\skills');
     expect(projector.skillPath(ctx, 'demo')).toBe(
       path.win32.join('C:\\proj\\.my\\skills', 'demo', 'SKILL.md'),
     );
+  });
+
+  it('scope 声明了但没 skills_dir：plan 跳过技能，skillDir 抛 ConfigError(2)', () => {
+    const projector = buildDeclarativeProjector(
+      runtimeOf({
+        scopes: { project: { base: '{projectRoot}/.my', main_rule: '{base}/AGENTS.md' } },
+      } as never),
+    );
+    const ctx = buildCtx({ skillsToMaterialize: [{ name: 'code-review', content: 'body' }] });
+    // 主规则照常投，技能一项不投——「借道上游自己的 skills 目录」就靠这条
+    expect(projector.plan(ctx).items).toEqual([
+      { path: 'C:\\proj\\.my\\AGENTS.md', action: 'merge_marker', content: '# AgentForge Rules\n' },
+    ]);
+    let caught: unknown;
+    try {
+      projector.skillDir(ctx);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ConfigError);
+    expect((caught as ConfigError).message).toContain('未声明 project 的技能落点');
   });
 
   it('未声明的 scope：plan 返回空 items，skillDir 抛 ConfigError(2) 并指向适配器文件', () => {
@@ -256,6 +278,16 @@ describe('buildDeclarativeProjector — 接口契约位', () => {
     }
     expect(caught).toBeInstanceOf(ConfigError);
     expect((caught as ConfigError).hint).toContain('my-agent.yaml');
+  });
+
+  it('声明了 skills_dir 但变量算不出来 → 抛错（写了却静默不生效比没写更难查）', () => {
+    const projector = buildDeclarativeProjector(
+      // envValues 为空 → {env:XDG_DATA_HOME} 解析不出，与「整行删掉」不是一回事
+      runtimeOf({
+        scopes: { project: { base: '{projectRoot}/.my', skills_dir: '{env:XDG_DATA_HOME}/s' } },
+      } as never),
+    );
+    expect(() => projector.plan(buildCtx())).toThrow(/skills_dir 不可解析/);
   });
 
   it('writesSessionHooks 恒 false（声明式装不了会话钩子，不能假装能）', () => {

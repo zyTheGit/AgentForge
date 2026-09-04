@@ -31,7 +31,7 @@ import {
 export interface ParsedAdapterScope {
   /** base 候选（按声明顺序；取第一个可解析的）。 */
   readonly base: readonly ParsedPathTemplate[];
-  readonly skillsDir: ParsedPathTemplate;
+  readonly skillsDir: ParsedPathTemplate | undefined;
   readonly mainRule: ParsedPathTemplate | undefined;
   readonly commandsDir: ParsedPathTemplate | undefined;
   readonly mcpFile: ParsedPathTemplate | undefined;
@@ -60,7 +60,8 @@ export interface AdapterRuntime {
 /** 一个 scope 求值后的绝对落点。 */
 export interface ResolvedAdapterScope {
   readonly base: string;
-  readonly skillsDir: string;
+  /** 缺省（未声明 `skills_dir`）→ `undefined`：本 scope 不投影技能。 */
+  readonly skillsDir: string | undefined;
   readonly mainRule: string | undefined;
   readonly commandsDir: string | undefined;
   readonly mcpFile: string | undefined;
@@ -96,10 +97,7 @@ function parseOneScope(scope: AdapterScope, field: string): ParsedAdapterScope {
       : parsePathTemplate(value, { allowBase: true, field: `${field}.${name}` });
   return {
     base,
-    skillsDir: parsePathTemplate(scope.skills_dir, {
-      allowBase: true,
-      field: `${field}.skills_dir`,
-    }),
+    skillsDir: artifact(scope.skills_dir, 'skills_dir'),
     mainRule: artifact(scope.main_rule, 'main_rule'),
     commandsDir: artifact(scope.commands_dir, 'commands_dir'),
     mcpFile: artifact(scope.mcp_file, 'mcp_file'),
@@ -169,10 +167,12 @@ export function resolveAdapterScope(
 
   assertWithinAllowedRoots(base, allowed, os, api, `${runtime.doc.id}.${scope}.base`);
   const skillsDir = render(parsed.skillsDir, 'skills_dir');
-  if (skillsDir === undefined) {
+  // 声明了却算不出落点 → 报错：用户写了 skills_dir 却静默不投影，比没写更难查。
+  // 压根没声明 → undefined，与 commands_dir / mcp_file 同口径（本 scope 不投影技能）
+  if (parsed.skillsDir !== undefined && skillsDir === undefined) {
     throw new AdapterTemplateError(
       `${runtime.doc.id}.${scope}: skills_dir 不可解析`,
-      'skills_dir 是必填项，且其变量必须在当前环境可解析',
+      '已声明的 skills_dir 其变量必须在当前环境可解析；确实不想投影技能就整行删掉',
     );
   }
   return {

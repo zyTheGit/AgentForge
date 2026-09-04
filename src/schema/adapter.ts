@@ -105,15 +105,17 @@ const PathTemplate = z.string().min(1).max(240);
  * 覆盖的表达方式——`['{env:MY_AGENT_DIR}', '{userHome}/.my/agent']` 等价于内置
  * target 的 `CODEX_HOME ?? ~/.codex`，不需要额外的 `env_override` 字段。
  *
- * `skills_dir` **必填**：`Projector.skillDir` / `skillPath` 是接口契约位（命令层的
- * `skill remove` 清理提示、后续 doctor 的 skills 根检查都依赖它），一个连技能落点
- * 都说不出的 target 无法满足契约。其余三项可选，缺省即该类产物不投影。
+ * 除 `base` 外**全部可选**，缺省即该类产物不投影。`skills_dir` 也在其中：为让「与
+ * codex 并存时删掉 `skills_dir`、借道上游自己的 `.agents/skills/`」成为合法配置，
+ * 它与 `commands_dir` / `mcp_file` 同口径（缺省 = 不投影，不 warn 不报错）。
+ * 代价是 `Projector.skillDir` / `skillPath` 这两个契约位没有值可返回——见
+ * `core/adapters/projector.ts` 里 `skillDir` 的空值行为（抛 ConfigError，调用方跳过）。
  */
 export const AdapterScopeSchema = z
   .object({
     base: z.union([PathTemplate, z.array(PathTemplate).min(1).max(4)]),
-    /** 技能根目录（必填）；单个技能落在 `<skills_dir>/<name>/SKILL.md`。 */
-    skills_dir: PathTemplate,
+    /** 技能根目录（缺省 → 该 scope 不投影技能）；单个技能落在 `<skills_dir>/<name>/SKILL.md`。 */
+    skills_dir: PathTemplate.optional(),
     /** 主规则文件（缺省 → 该 scope 不投影主规则）。 */
     main_rule: PathTemplate.optional(),
     /** 命令/prompt 薄壳目录（缺省 → 不投影命令薄壳）。 */
