@@ -185,6 +185,22 @@ export interface Projector {
    * 显式降级，不静默失效。理由与支持矩阵见 docs/learning.md。
    */
   readonly writesSessionHooks: boolean;
+  /**
+   * 该 target 是否有 MCP 落点（Spec §4.2 `mcp.servers` / §8.3-§8.6）。
+   *
+   * 同 `writesSessionHooks` 的处理口径：能力与"MCP 写进哪个文件"是同一份 target
+   * 知识，写在各 projector 里，新增 target 时 TS 会强制补上（漏掉即编译失败）。
+   *
+   * 四家内置全为 `true`。声明式适配器按 `adapters/<id>.yaml` **是否声明了任一 scope
+   * 的 `mcp_file`** 决定——只投 `main_rule` / `skills_dir` 的适配器压根没有 MCP 产物，
+   * 谈它的 transport 能力落差是无意义的（否则会收到一条自己无法消除、且指向不存在
+   * 产物的提示，见 `collectUnmeasuredMcpTransportTargets`）。
+   *
+   * **只表达"有没有落点"，不表达"本轮这个 scope 写不写"**：claude 的 user scope 不投
+   * MCP 是 scope 维度的事，由 `sync-notices.collectMcpScopeNotices`（issue #52）单独
+   * 说明——与 `writesSessionHooks` 把"能力"和"档位"分开的分工一致。
+   */
+  readonly writesMcp: boolean;
   plan(ctx: ProjectContext): ProjectionPlan;
   /**
    * 该 target 的 skills 根目录（`<...>/skills`，随 scope 变化）。

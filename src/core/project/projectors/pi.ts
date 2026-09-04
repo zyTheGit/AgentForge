@@ -173,6 +173,9 @@ export const piProjector: Projector = {
    */
   writesSessionHooks: false,
 
+  /** pi-mcp-adapter 的 `mcp.json`（无 `type` 键、`httpTransport` 显式声明）。 */
+  writesMcp: true,
+
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];
 

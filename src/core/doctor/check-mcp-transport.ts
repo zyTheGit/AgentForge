@@ -28,7 +28,8 @@ import {
   mcpTransportUnmeasuredItem,
   mcpTransportUnmeasuredReason,
 } from '../project/projectors/mcp-transport';
-import { CLAUDE_USER_MCP_NOTICE_ITEM } from '../project/sync-notices';
+import { projectorRegistry } from '../project/projectors/registry';
+import { CLAUDE_USER_MCP_NOTICE_ITEM, mcpCapableTargetIds } from '../project/sync-notices';
 import type { DoctorCheckResult } from './check-types';
 
 /**
@@ -56,8 +57,15 @@ export function checkMcpTransport(results: DoctorCheckResult[], config: Effectiv
   }
 
   // 矩阵外的 target 先各出一条占位 warn：落差判定对它们压根没跑，下面的结论
-  // （无论 ok 还是 warn）都只覆盖已实测 target，不能让它们混在同一句里
-  for (const targetId of collectUnmeasuredMcpTransportTargets(config.profile.targets, servers)) {
+  // （无论 ok 还是 warn）都只覆盖已实测 target，不能让它们混在同一句里。
+  // 能力集合现读注册表（同 check-consistency 的既有先例）：没有 MCP 落点的声明式
+  // 适配器不在其中，不会收到一条指向不存在产物的提示
+  const unmeasured = collectUnmeasuredMcpTransportTargets(
+    config.profile.targets,
+    servers,
+    mcpCapableTargetIds(projectorRegistry.list()),
+  );
+  for (const targetId of unmeasured) {
     results.push({
       section: 'config',
       level: 'warn',

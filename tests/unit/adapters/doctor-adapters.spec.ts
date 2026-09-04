@@ -323,29 +323,61 @@ describe('runDoctorChecks — 声明式 id × MCP transport 矩阵（PRD 适配�
     await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), 'version: 1\n');
   }
 
-  it('声明式 id + enabled server → 不崩溃，unmeasured warn 恰一条且不影响退出码', async () => {
+  /** 声明了 `mcp_file` 的适配器（有 MCP 落点 → `writesMcp: true`）。 */
+  function adapterYamlWithMcp(id: string): string {
+    return [
+      'version: 1',
+      `id: ${id}`,
+      'mcp:',
+      '  dialect: mcpServers',
+      'scopes:',
+      '  project:',
+      '    base: "{projectRoot}/.my"',
+      '    skills_dir: "{base}/skills"',
+      '    main_rule: "{base}/AGENTS.md"',
+      '    mcp_file: "{base}/mcp.json"',
+    ].join('\n');
+  }
+
+  it('声明式 id + enabled server → 不崩溃，且不把它算进「已实测」', async () => {
     const host = createDoctorHost();
-    await host.writeFile(path.join(USER_ADAPTERS, 'my-agent.yaml'), adapterYaml('my-agent'));
+    await host.writeFile(path.join(USER_ADAPTERS, 'my-agent.yaml'), adapterYamlWithMcp('my-agent'));
     await loadWith(host);
     await seedWithMcp(host, '[claude, my-agent]', THREE_SERVERS);
 
     const report = await doctor(host);
     // 此前这里是 TypeError：整份报告被带走，doctor 在最需要它的时刻整份消失
     expect(report.exitCode).toBe(0);
-    const unmeasured = report.results.filter((r) => r.item.endsWith('-unmeasured'));
-    expect(unmeasured.map((r) => r.item)).toEqual(['mcp-transport/my-agent-unmeasured']);
-    expect(unmeasured[0]?.level).toBe('warn');
-    expect(unmeasured[0]?.detail).toContain('my-agent');
     // 已实测 target 的结论照常给，且只点名已实测的那些
     const ok = resultOf(report, 'mcp-transport');
     expect(ok.level).toBe('ok');
     expect(ok.detail).toContain('claude');
     expect(ok.detail).not.toContain('my-agent');
+    // 本 spec 用注入的 Registry 加载（不污染全局 projectorRegistry），而 doctor 的能力
+    // 查询走全局注册表——所以这里看不到 unmeasured warn。「有 mcp_file 就报一条」的
+    // 正向断言在 sync-notices.spec.ts（那层可注入 projector 名单）
+    expect(report.results.filter((r) => r.item.endsWith('-unmeasured'))).toEqual([]);
+  });
+
+  it('没有 mcp_file 的适配器 → 不出 unmeasured（它压根没有 MCP 产物）', async () => {
+    const host = createDoctorHost();
+    // adapterYaml 只声明 main_rule / skills_dir，无 mcp_file → writesMcp: false
+    await host.writeFile(
+      path.join(USER_ADAPTERS, 'no-mcp-agent.yaml'),
+      adapterYaml('no-mcp-agent'),
+    );
+    await loadWith(host);
+    await seedWithMcp(host, '[claude, no-mcp-agent]', THREE_SERVERS);
+
+    const report = await doctor(host);
+    expect(report.exitCode).toBe(0);
+    // 报一条它无法消除、且 hint 指向不存在产物的提示，比不报更糟
+    expect(report.results.filter((r) => r.item.endsWith('-unmeasured'))).toEqual([]);
   });
 
   it('声明式 id 但没有 MCP server → 不出 unmeasured（没内容就没得说）', async () => {
     const host = createDoctorHost();
-    await host.writeFile(path.join(USER_ADAPTERS, 'my-agent.yaml'), adapterYaml('my-agent'));
+    await host.writeFile(path.join(USER_ADAPTERS, 'my-agent.yaml'), adapterYamlWithMcp('my-agent'));
     await loadWith(host);
     await seedProjectSoT(host, '[claude, my-agent]');
 
@@ -356,7 +388,7 @@ describe('runDoctorChecks — 声明式 id × MCP transport 矩阵（PRD 适配�
 
   it('声明了 server 但全部 enabled: false → 不把声明式 id 说成「已实测」', async () => {
     const host = createDoctorHost();
-    await host.writeFile(path.join(USER_ADAPTERS, 'my-agent.yaml'), adapterYaml('my-agent'));
+    await host.writeFile(path.join(USER_ADAPTERS, 'my-agent.yaml'), adapterYamlWithMcp('my-agent'));
     await loadWith(host);
     await seedWithMcp(
       host,

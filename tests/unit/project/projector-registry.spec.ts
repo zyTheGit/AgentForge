@@ -61,6 +61,8 @@ const fakeProjector: Projector = {
   skillInvokePrefix: '/',
   // 第三方 target 没有可声明式写入的会话钩子落点（§7.4）
   writesSessionHooks: false,
+  // 该桩不声明 mcp_file，故无 MCP 落点（transport 结论对它无意义）
+  writesMcp: false,
   skillDir: (ctx) => `${ctx.rootDir}\\.fake\\skills`,
   skillPath: (ctx, name) => `${ctx.rootDir}\\.fake\\skills\\${name}\\SKILL.md`,
   plan: (ctx): ProjectionPlan => ({

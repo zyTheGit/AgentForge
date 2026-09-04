@@ -329,6 +329,12 @@ describe('enabledMcpServerNames（§7.6 prune 记账口径）', () => {
 // ---------------------------------------------------------------------------
 
 describe('矩阵外 target id 的护栏（此前 as 强转 → TypeError 崩 sync/doctor）', () => {
+  /**
+   * 有 MCP 落点的 target 集合（生产路径由 `sync-notices.mcpCapableTargetIds` 从
+   * `Projector.writesMcp` 取）。`no-mcp-agent` 刻意不在其中。
+   */
+  const MCP_CAPABLE = ['claude', 'opencode', 'codex', 'pi', 'my-agent', 'cursor'];
+
   it('isMcpProjectionTargetId：四个内置 id 为真，声明式 / 原型链键为假', () => {
     for (const id of ['claude', 'opencode', 'codex', 'pi']) {
       expect(isMcpProjectionTargetId(id)).toBe(true);
@@ -364,18 +370,32 @@ describe('矩阵外 target id 的护栏（此前 as 强转 → TypeError 崩 syn
 
   it('collectUnmeasuredMcpTransportTargets：每 target 恰一条、去重、不含内置 id', () => {
     expect(
-      collectUnmeasuredMcpTransportTargets(['claude', 'my-agent', 'cursor'], [STDIO, HTTP, SSE]),
+      collectUnmeasuredMcpTransportTargets(
+        ['claude', 'my-agent', 'cursor'],
+        [STDIO, HTTP, SSE],
+        MCP_CAPABLE,
+      ),
     ).toEqual(['my-agent', 'cursor']);
     // 三个 server 也只出一条：落差判定压根没跑，逐 server 重复同一句是噪音
-    expect(collectUnmeasuredMcpTransportTargets(['my-agent', 'my-agent'], [STDIO])).toEqual([
-      'my-agent',
-    ]);
+    expect(
+      collectUnmeasuredMcpTransportTargets(['my-agent', 'my-agent'], [STDIO], MCP_CAPABLE),
+    ).toEqual(['my-agent']);
+  });
+
+  it('collectUnmeasuredMcpTransportTargets：无 MCP 落点的声明式 id 不报（无产物可谈）', () => {
+    // no-mcp-agent 不在 mcpCapableIds 里：它只投规则/技能，谈 transport 落差没有意义
+    expect(
+      collectUnmeasuredMcpTransportTargets(['my-agent', 'no-mcp-agent'], [STDIO], MCP_CAPABLE),
+    ).toEqual(['my-agent']);
+    expect(collectUnmeasuredMcpTransportTargets(['no-mcp-agent'], [STDIO], MCP_CAPABLE)).toEqual(
+      [],
+    );
   });
 
   it('collectUnmeasuredMcpTransportTargets：无可投影 server → 空（没 MCP 内容就没得说）', () => {
-    expect(collectUnmeasuredMcpTransportTargets(['my-agent'], [])).toEqual([]);
+    expect(collectUnmeasuredMcpTransportTargets(['my-agent'], [], MCP_CAPABLE)).toEqual([]);
     const disabled = server({ name: 'off', transport: 'stdio', command: 'x', enabled: false });
-    expect(collectUnmeasuredMcpTransportTargets(['my-agent'], [disabled])).toEqual([]);
+    expect(collectUnmeasuredMcpTransportTargets(['my-agent'], [disabled], MCP_CAPABLE)).toEqual([]);
   });
 
   it('item 名与文案带上 target id（doctor / sync 共用同一份）', () => {

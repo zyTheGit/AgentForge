@@ -187,6 +187,15 @@ export const claudeProjector: Projector = {
    */
   writesSessionHooks: false,
 
+  /**
+   * `.mcp.json` 的 `mcpServers` 键。
+   *
+   * 恒 `true`：这是「有没有落点」的能力位。user scope 不投影是 scope 维度的取舍
+   * （见 `claudeMcpPath` 与 issue #52），由 `sync-notices.collectMcpScopeNotices`
+   * 单独说明，不在这里表达。
+   */
+  writesMcp: true,
+
   plan(ctx: ProjectContext): ProjectionPlan {
     const items: ProjectionPlanItem[] = [];
 
