@@ -113,6 +113,7 @@ scopes:
 - **非标准 MCP payload 形状**。只有 `mcpServers`（Claude `.mcp.json` 形状）与 `opencode`（`opencode.json` 形状）两种内置 dialect，不接受自由字段映射——`{type:'local', command:[cmd, ...args]}` 是映射逻辑，transport 能力落差（codex 无 sse、opencode 无法区分 sse/http）也只能由归一化层表达。
 - **`soft` 的行为语义**。可以标 `mcp.soft: true` 复用引擎既有的 best-effort 语义（失败只 warning、不回滚），但不能自定义「失败时怎么办」。
 - **会话钩子**。声明式 target 的 `writesSessionHooks` 恒为 `false`；`learning.auto_capture: hook` 对它等同 `off`，`aforge doctor` / `status` 会如实说明。
+- **transport 能力矩阵**。矩阵只装四个内置 target 的实测结论。声明了它、又声明了 MCP server（且至少一个 `enabled`）时，`aforge sync` 在 `mcp transport unmeasured:` 段打一行提示、`aforge doctor` 报一条 `mcp-transport/<id>-unmeasured` warn，**每 target 一条**（不是每 server 一条）：投影照常，只是「该 target 对 stdio / http / sse 到底支持到什么程度」没有实测依据，不猜默认值。warn 不影响退出码。
 
 ### 安全边界
 

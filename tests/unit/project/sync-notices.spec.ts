@@ -244,6 +244,27 @@ describe('collectSyncAdvisories（五类提示汇总，dry-run 与实际写入�
     expect(collectSyncAdvisories(input()).mcpTransportNotices).toEqual([]);
   });
 
+  it('声明式 id + enabled server：不崩溃，落差判定跳过它、unmeasured 恰一条', () => {
+    const advisories = collectSyncAdvisories(
+      input({
+        profile: profileWith('off', ['codex', 'claude']),
+        targetIds: ['codex', 'claude', 'my-agent'],
+        mcpServers: [SSE_SERVER],
+      }),
+    );
+    // 内置 id 的落差判定不受影响（此前整个调用会 TypeError 崩掉）
+    expect(advisories.mcpTransportNotices.map((n) => n.targetId)).toEqual(['codex']);
+    // 每 target 一条占位，不是每 server 一条
+    expect(advisories.mcpTransportUnmeasuredTargets).toEqual(['my-agent']);
+  });
+
+  it('没有 MCP server → 声明式 id 也不出 unmeasured（没内容就没得说）', () => {
+    expect(
+      collectSyncAdvisories(input({ targetIds: ['codex', 'my-agent'] }))
+        .mcpTransportUnmeasuredTargets,
+    ).toEqual([]);
+  });
+
   it('未参与本轮的 target 不报 MCP 落差（--targets 只留 claude）', () => {
     expect(
       collectSyncAdvisories(

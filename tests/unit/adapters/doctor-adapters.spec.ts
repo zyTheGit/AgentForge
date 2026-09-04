@@ -300,3 +300,78 @@ describe('runDoctorChecks — 适配器坏掉时报告不被截断', () => {
     expect(report.exitCode).toBe(0);
   });
 });
+
+describe('runDoctorChecks — 声明式 id × MCP transport 矩阵（PRD 适配器扩展 Phase 0 护栏）', () => {
+  /** 三种 transport 各一个 enabled server：unmeasured 仍应只报一条（不逐 server 刷屏）。 */
+  const THREE_SERVERS = [
+    '    - name: fs',
+    '      transport: stdio',
+    '      command: fs-server',
+    '    - name: api',
+    '      transport: http',
+    '      url: https://example.com/mcp',
+    '    - name: ev',
+    '      transport: sse',
+    '      url: https://example.com/sse',
+  ].join('\n');
+
+  async function seedWithMcp(host: FakeHost, targets: string, servers: string): Promise<void> {
+    await host.writeFile(
+      path.join(PROJECT_SOT, 'profile.yaml'),
+      `version: 1\nscope: project\ntargets: ${targets}\nmcp:\n  servers:\n${servers}\n`,
+    );
+    await host.writeFile(path.join(PROJECT_SOT, 'habits.yaml'), 'version: 1\n');
+  }
+
+  it('声明式 id + enabled server → 不崩溃，unmeasured warn 恰一条且不影响退出码', async () => {
+    const host = createDoctorHost();
+    await host.writeFile(path.join(USER_ADAPTERS, 'my-agent.yaml'), adapterYaml('my-agent'));
+    await loadWith(host);
+    await seedWithMcp(host, '[claude, my-agent]', THREE_SERVERS);
+
+    const report = await doctor(host);
+    // 此前这里是 TypeError：整份报告被带走，doctor 在最需要它的时刻整份消失
+    expect(report.exitCode).toBe(0);
+    const unmeasured = report.results.filter((r) => r.item.endsWith('-unmeasured'));
+    expect(unmeasured.map((r) => r.item)).toEqual(['mcp-transport/my-agent-unmeasured']);
+    expect(unmeasured[0]?.level).toBe('warn');
+    expect(unmeasured[0]?.detail).toContain('my-agent');
+    // 已实测 target 的结论照常给，且只点名已实测的那些
+    const ok = resultOf(report, 'mcp-transport');
+    expect(ok.level).toBe('ok');
+    expect(ok.detail).toContain('claude');
+    expect(ok.detail).not.toContain('my-agent');
+  });
+
+  it('声明式 id 但没有 MCP server → 不出 unmeasured（没内容就没得说）', async () => {
+    const host = createDoctorHost();
+    await host.writeFile(path.join(USER_ADAPTERS, 'my-agent.yaml'), adapterYaml('my-agent'));
+    await loadWith(host);
+    await seedProjectSoT(host, '[claude, my-agent]');
+
+    const report = await doctor(host);
+    expect(report.exitCode).toBe(0);
+    expect(report.results.filter((r) => r.item.endsWith('-unmeasured'))).toEqual([]);
+  });
+
+  it('声明了 server 但全部 enabled: false → 不把声明式 id 说成「已实测」', async () => {
+    const host = createDoctorHost();
+    await host.writeFile(path.join(USER_ADAPTERS, 'my-agent.yaml'), adapterYaml('my-agent'));
+    await loadWith(host);
+    await seedWithMcp(
+      host,
+      '[claude, my-agent]',
+      '    - name: fs\n      transport: stdio\n      command: fs-server\n      enabled: false',
+    );
+
+    const report = await doctor(host);
+    expect(report.exitCode).toBe(0);
+    // 一条都不投影：既不该报 unmeasured，也不该说「N 个 server 均可无损表达」
+    expect(report.results.filter((r) => r.item.endsWith('-unmeasured'))).toEqual([]);
+    const ok = resultOf(report, 'mcp-transport');
+    expect(ok.level).toBe('ok');
+    expect(ok.detail).toContain('全部 enabled: false');
+    expect(ok.detail).not.toContain('my-agent');
+    expect(ok.detail).not.toContain('无损表达');
+  });
+});

@@ -145,6 +145,13 @@ export interface SyncResult {
    */
   readonly mcpTransportNotices: readonly McpTransportNotice[];
   /**
+   * 不在 transport 能力矩阵内的 target id（每 target 恰一条占位，见 SyncAdvisories）。
+   *
+   * 与 `mcpTransportNotices` 同性质、同不进 `warnings` 的理由：投影是完整的，
+   * 只是那一格的实测结论还不存在。
+   */
+  readonly mcpTransportUnmeasuredTargets: readonly string[];
+  /**
    * 事务设施级警告（**不是**某个 target 的 soft 失败）：崩溃恢复能力降级
    * （备份日志 / 副本写不进去）、保留下来的失败备份目录、恢复阶段需人工核对的条目。
    *

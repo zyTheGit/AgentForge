@@ -19,7 +19,15 @@
  */
 import type { EffectiveConfig } from '../config/defaults';
 import { CLAUDE_USER_MCP_SKIP_REASON } from '../project/projectors/claude';
-import { collectMcpTransportNoticesForTargets } from '../project/projectors/mcp-transport';
+import {
+  collectMcpTransportNoticesForTargets,
+  collectUnmeasuredMcpTransportTargets,
+  enabledMcpServerNames,
+  isMcpProjectionTargetId,
+  MCP_TRANSPORT_UNMEASURED_HINT,
+  mcpTransportUnmeasuredItem,
+  mcpTransportUnmeasuredReason,
+} from '../project/projectors/mcp-transport';
 import { CLAUDE_USER_MCP_NOTICE_ITEM } from '../project/sync-notices';
 import type { DoctorCheckResult } from './check-types';
 
@@ -31,24 +39,49 @@ import type { DoctorCheckResult } from './check-types';
  */
 export function checkMcpTransport(results: DoctorCheckResult[], config: EffectiveConfig): void {
   const servers = config.profile.mcp.servers ?? [];
-  if (servers.length === 0) {
+  // 早退看**启用**的条数，与 collectUnmeasuredMcpTransportTargets / collectMcpScopeNotices
+  // 同口径：全部 enabled: false 时一条都不投影，说"N 个 server 均可无损表达"是假结论
+  const enabledCount = enabledMcpServerNames(servers).length;
+  if (enabledCount === 0) {
     results.push({
       section: 'config',
       level: 'ok',
       item: 'mcp-transport',
-      detail: 'profile.mcp.servers 未声明（无 MCP 投影内容）',
+      detail:
+        servers.length === 0
+          ? 'profile.mcp.servers 未声明（无 MCP 投影内容）'
+          : `profile.mcp.servers 的 ${servers.length} 个 server 全部 enabled: false（无 MCP 投影内容）`,
     });
     return;
   }
 
-  const notices = collectMcpTransportNoticesForTargets(config.profile.targets, servers);
-  if (notices.length === 0) {
+  // 矩阵外的 target 先各出一条占位 warn：落差判定对它们压根没跑，下面的结论
+  // （无论 ok 还是 warn）都只覆盖已实测 target，不能让它们混在同一句里
+  for (const targetId of collectUnmeasuredMcpTransportTargets(config.profile.targets, servers)) {
     results.push({
       section: 'config',
-      level: 'ok',
-      item: 'mcp-transport',
-      detail: `${servers.length} 个 MCP server 的 transport 在启用的 target（${config.profile.targets.join(' / ')}）上均可无损表达`,
+      level: 'warn',
+      item: mcpTransportUnmeasuredItem(targetId),
+      detail: mcpTransportUnmeasuredReason(targetId),
+      hint: MCP_TRANSPORT_UNMEASURED_HINT,
     });
+  }
+  // 已实测集合由守卫**正向**判定，不拿 unmeasured 的补集算：那个函数带 enabled 过滤，
+  // 空结果既可能是"全是内置 id"也可能是"没有启用的 server"，补集会把后者算成全集
+  const measuredTargets = [...new Set(config.profile.targets.filter(isMcpProjectionTargetId))];
+
+  const notices = collectMcpTransportNoticesForTargets(config.profile.targets, servers);
+  if (notices.length === 0) {
+    // 一个已实测 target 都没有时不给这条 ok：对空集合说"均可无损表达"是假结论，
+    // 情况已由上面每 target 一条的 unmeasured warn 说清
+    if (measuredTargets.length > 0) {
+      results.push({
+        section: 'config',
+        level: 'ok',
+        item: 'mcp-transport',
+        detail: `${enabledCount} 个启用的 MCP server 的 transport 在已实测 target（${measuredTargets.join(' / ')}）上均可无损表达`,
+      });
+    }
     return;
   }
 

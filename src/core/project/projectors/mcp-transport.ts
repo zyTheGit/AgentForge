@@ -22,12 +22,25 @@
  *   pi 的原生 server 条目**没有** `type` 字段（写了也只是死键）。写死键等于让用户
  *   以为配置生效——比不写更糟。
  *
+ * 矩阵只覆盖这四个内置 id，而 `profile.targets` 还能填声明式适配器 id。矩阵外的 id
+ * 一律**跳过落差判定**，由 `collectUnmeasuredMcpTransportTargets` 单独收集，doctor / sync
+ * 各出一条占位 warn，不猜默认值（论证见
+ * `collectMcpTransportNoticesForTargets` 与 `isMcpProjectionTargetId` 的注释）。
+ *
  * 本模块为纯函数集合：不做 IO、不读环境、不改写入参。
  */
 import type { McpServer, Transport } from '../../../schema';
+import type { BuiltinTargetId } from '../target-ids';
 
-/** 有 MCP 投影的四个 target（= Spec §4.2 targets 全集）。 */
-export type McpProjectionTargetId = 'claude' | 'opencode' | 'codex' | 'pi';
+/**
+ * 有 MCP 投影的 target = 内置 target 全集（`target-ids.ts` 的单一事实源）。
+ *
+ * 刻意取别名而不是另写一遍四个字面量：矩阵是 `Record<McpProjectionTargetId, …>`，
+ * 与 `BUILTIN_TARGET_IDS` 挂上之后「新增内置 target 却漏填矩阵」才会编译失败。
+ * 手写联合的话新 target 会被 `isMcpProjectionTargetId` 判成矩阵外，**静默**降级成
+ * unmeasured warn——本模块新增的那条通路恰好会把这类漏填从崩溃变成静默。
+ */
+export type McpProjectionTargetId = BuiltinTargetId;
 
 /**
  * 某个 target 对某种 transport 的支持程度。
@@ -101,6 +114,19 @@ const MCP_TRANSPORT_MATRIX: Readonly<
   pi: { stdio: NATIVE, http: NATIVE, sse: NATIVE },
 };
 
+/**
+ * 该 target id 是否在能力矩阵里有一格（矩阵查询的唯一准入判据）。
+ *
+ * 存在的理由：`profile.targets` 的取值域是「四个内置 id + 已加载的声明式适配器 id」
+ * （`target-ids.ts` 的 `knownTargetIds()`），而矩阵只覆盖四个内置 id。此前调用方用
+ * `as McpProjectionTargetId` 把 string 强转进来，声明式 id 会让
+ * `MCP_TRANSPORT_MATRIX[id]` 取到 undefined，下一跳 `[transport]` 直接 TypeError
+ * ——`sync` 与 `doctor` 双双崩在退出码 1。强转掩盖的正是这个真实的取值域落差。
+ */
+export function isMcpProjectionTargetId(targetId: string): targetId is McpProjectionTargetId {
+  return Object.hasOwn(MCP_TRANSPORT_MATRIX, targetId);
+}
+
 /** 查某个 target 对某种 transport 的支持程度（能力矩阵的唯一读取入口）。 */
 export function mcpTransportSupport(
   targetId: McpProjectionTargetId,
@@ -140,20 +166,57 @@ export function collectMcpTransportNotices(
 }
 
 /**
- * 一次投影里全部 target 的降级/跳过结论（sync 引擎与 doctor 的共同入口）。
+ * 一次投影里全部**已实测** target 的降级/跳过结论（sync 引擎与 doctor 的共同入口）。
  *
  * 结论只取决于「SoT 里有哪些 server」×「投影哪些 target」，与写入成败无关，
  * 因此 sync 的 dry-run 也照样给（用户在真写之前就该看到 codex 会跳掉哪条）。
- * `targetIds` 收 `string[]`：调用方拿到的是 profile.targets / PlannedTarget 的
- * targetId，已被 filterTargets / schema 限定在四个注册 target 内。
+ *
+ * `targetIds` 收 `string[]`：调用方拿到的是 profile.targets / PlannedTarget 的 targetId，
+ * 取值域含声明式适配器 id（`knownTargetIds()`），**不止四个内置 id**。矩阵里没有那一格的
+ * id 在此**跳过**，由 `collectUnmeasuredMcpTransportTargets` 单独出一条占位 warn——
+ * 跳过而不是猜一格默认值：猜 native 等于替第三方 target 打包票，猜 unsupported 会
+ * 无声吞掉本该投影的 server。
  */
 export function collectMcpTransportNoticesForTargets(
   targetIds: readonly string[],
   servers: readonly McpServer[],
 ): McpTransportNotice[] {
-  return targetIds.flatMap((targetId) =>
-    collectMcpTransportNotices(targetId as McpProjectionTargetId, servers),
-  );
+  // 先去重：profile.targets 是 z.array(TargetEnum).min(1)，**不做唯一性校验**，
+  // 同一 id 写两遍会产出两条 item 名完全相同的结论（口径同 unmeasured 侧的 Set）
+  return [...new Set(targetIds)]
+    .filter(isMcpProjectionTargetId)
+    .flatMap((targetId) => collectMcpTransportNotices(targetId, servers));
+}
+
+/** 未实测 target 的 doctor item 名（`<id>` 为 target id；sync 侧只打文案不打 item 名）。 */
+export function mcpTransportUnmeasuredItem(targetId: string): string {
+  return `mcp-transport/${targetId}-unmeasured`;
+}
+
+/** 未实测 target 的占位说明（doctor warn 与 sync 输出共用同一份文案）。 */
+export function mcpTransportUnmeasuredReason(targetId: string): string {
+  return `${targetId} 不在 transport 能力矩阵内（矩阵只覆盖四个内置 target 的实测结论），本轮跳过该 target 的 transport 落差判定`;
+}
+
+/** 未实测 target 的消除建议。 */
+export const MCP_TRANSPORT_UNMEASURED_HINT =
+  '投影照常进行，但该 target 对 stdio / http / sse 的实际支持程度未经实测：连接失败时先手工核对产物字段是否为上游认得的形状';
+
+/**
+ * 本轮投影里**不在能力矩阵内**的 target（声明式适配器 id）。
+ *
+ * 每个 target 恰一条，**不是每个 server 一条**：落差判定压根没跑，逐 server 重复同一句
+ * 「未实测」只是噪音。没有**启用**的 server 时返回空数组——没有可投影的 MCP 内容就没有
+ * 可说的事（口径同 `collectMcpScopeNotices` 的 `enabledMcpServerNames(...) > 0`）。
+ */
+export function collectUnmeasuredMcpTransportTargets(
+  targetIds: readonly string[],
+  servers: readonly McpServer[],
+): string[] {
+  if (enabledMcpServerNames(servers).length === 0) {
+    return [];
+  }
+  return [...new Set(targetIds.filter((targetId) => !isMcpProjectionTargetId(targetId)))];
 }
 
 /**
