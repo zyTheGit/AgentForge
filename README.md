@@ -73,7 +73,16 @@ aforge learn --file notes.md                                        # 直接给�
 
 `--file -` 读的是**要沉淀的条目正文**，一次调用记一条。它必须有管道或重定向——在交互终端裸敲会直接报错并提示这三种形态，不会挂在那里等输入。
 
-让 agent 自己沉淀经验：把 `learning.auto_capture` 设为 `prompt`（投影正文里多一段协议，告诉 agent 什么时候该调 `aforge learn --file -`）或 `hook`（codex 侧会话钩子注入）。没有钩子落点的三家可以手工挂载同一份协议，写法见 [learning](docs/learning.md#手工挂载把协议塞进没有落点的三家)。
+让 agent 自己沉淀经验：改 `profile.yaml` 的 `learning.auto_capture`（三档 `off` / `prompt` / `hook`，**不是 boolean**），再跑一次 `aforge sync` 才生效：
+
+```yaml
+learning:
+  auto_capture: prompt   # 投影正文里多一段 ## Learning Protocol，告诉 agent 何时调 aforge learn --file -
+```
+
+`hook` 档改由会话钩子注入同一份协议，但**只有 codex 有可声明式写入的落点**；claude / opencode / pi 在这一档等同 `off`（什么都不插），这三家请用 `prompt`，或手工挂载同一份协议（写法见 [learning](docs/learning.md#手工挂载把协议塞进没有落点的三家)）。
+
+确认是否已生效看 `aforge status` 的 learning 一节——`prompt` 档会补一行 `projected rules include a ## Learning Protocol section`，`hook` 档会点名钩子写给了谁；`aforge doctor` 与产物里的 `## Learning Protocol` 段头同样可查。
 
 **`aforge learn --print-protocol` 的输出不能喂回 `aforge learn`。** 它打印的是**给 agent 看的协议**，不是条目正文；管道进去只会把协议本身存成一条 learning。
 
