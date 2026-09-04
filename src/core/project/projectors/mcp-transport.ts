@@ -23,15 +23,24 @@
  *   以为配置生效——比不写更糟。
  *
  * 矩阵只覆盖这四个内置 id，而 `profile.targets` 还能填声明式适配器 id。矩阵外的 id
- * 一律**跳过落差判定**并由 `collectUnmeasuredMcpTransportTargets` 出一条占位 warn，
- * 不猜默认值（详见该函数与 `isMcpProjectionTargetId` 的注释）。
+ * 一律**跳过落差判定**，由 `collectUnmeasuredMcpTransportTargets` 单独收集，doctor / sync
+ * 各出一条占位 warn，不猜默认值（论证见
+ * `collectMcpTransportNoticesForTargets` 与 `isMcpProjectionTargetId` 的注释）。
  *
  * 本模块为纯函数集合：不做 IO、不读环境、不改写入参。
  */
 import type { McpServer, Transport } from '../../../schema';
+import type { BuiltinTargetId } from '../target-ids';
 
-/** 有 MCP 投影的四个 target（= Spec §4.2 targets 全集）。 */
-export type McpProjectionTargetId = 'claude' | 'opencode' | 'codex' | 'pi';
+/**
+ * 有 MCP 投影的 target = 内置 target 全集（`target-ids.ts` 的单一事实源）。
+ *
+ * 刻意取别名而不是另写一遍四个字面量：矩阵是 `Record<McpProjectionTargetId, …>`，
+ * 与 `BUILTIN_TARGET_IDS` 挂上之后「新增内置 target 却漏填矩阵」才会编译失败。
+ * 手写联合的话新 target 会被 `isMcpProjectionTargetId` 判成矩阵外，**静默**降级成
+ * unmeasured warn——本模块新增的那条通路恰好会把这类漏填从崩溃变成静默。
+ */
+export type McpProjectionTargetId = BuiltinTargetId;
 
 /**
  * 某个 target 对某种 transport 的支持程度。
@@ -172,12 +181,14 @@ export function collectMcpTransportNoticesForTargets(
   targetIds: readonly string[],
   servers: readonly McpServer[],
 ): McpTransportNotice[] {
-  return targetIds
+  // 先去重：profile.targets 是 z.array(TargetEnum).min(1)，**不做唯一性校验**，
+  // 同一 id 写两遍会产出两条 item 名完全相同的结论（口径同 unmeasured 侧的 Set）
+  return [...new Set(targetIds)]
     .filter(isMcpProjectionTargetId)
     .flatMap((targetId) => collectMcpTransportNotices(targetId, servers));
 }
 
-/** 未实测 target 的 doctor / sync item 名（`<id>` 为 target id）。 */
+/** 未实测 target 的 doctor item 名（`<id>` 为 target id；sync 侧只打文案不打 item 名）。 */
 export function mcpTransportUnmeasuredItem(targetId: string): string {
   return `mcp-transport/${targetId}-unmeasured`;
 }
@@ -192,11 +203,11 @@ export const MCP_TRANSPORT_UNMEASURED_HINT =
   '投影照常进行，但该 target 对 stdio / http / sse 的实际支持程度未经实测：连接失败时先手工核对产物字段是否为上游认得的形状';
 
 /**
- * 本轮投影里**不在能力矩阵内**的 target（声明式适配器 / 尚未实测的内置 id）。
+ * 本轮投影里**不在能力矩阵内**的 target（声明式适配器 id）。
  *
  * 每个 target 恰一条，**不是每个 server 一条**：落差判定压根没跑，逐 server 重复同一句
- * 「未实测」只是噪音。`servers` 为空时返回空数组——没有 MCP 内容就没有可说的事，
- * 与 `checkMcpTransport` 的 `servers.length === 0` 早退同口径。
+ * 「未实测」只是噪音。没有**启用**的 server 时返回空数组——没有可投影的 MCP 内容就没有
+ * 可说的事（口径同 `collectMcpScopeNotices` 的 `enabledMcpServerNames(...) > 0`）。
  */
 export function collectUnmeasuredMcpTransportTargets(
   targetIds: readonly string[],

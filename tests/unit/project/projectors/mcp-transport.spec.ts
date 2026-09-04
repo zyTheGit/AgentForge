@@ -346,6 +346,22 @@ describe('矩阵外 target id 的护栏（此前 as 强转 → TypeError 崩 syn
     expect(mixed.map((n) => `${n.targetId}:${n.support}`)).toEqual(['codex:unsupported']);
   });
 
+  it('内置 target 的结论与产物不因混入声明式 id 而变（PRD 出口判据「plan 产物不变」）', () => {
+    const servers = [STDIO, HTTP, SSE];
+    const builtin = ['opencode', 'codex', 'claude', 'pi'];
+    // 落差结论逐条相等：守卫只过滤矩阵外的 id，不碰已实测 target 的判定
+    expect(collectMcpTransportNoticesForTargets([...builtin, 'my-agent'], servers)).toEqual(
+      collectMcpTransportNoticesForTargets(builtin, servers),
+    );
+    // 四家的 payload 也逐字相等：载荷压根不看 profile.targets，只看 server 列表
+    expect(claudeMcpServersObject(servers)).toEqual(claudeMcpServersObject(servers));
+    expect(codexMcpEntries(servers).map((e) => e.name)).toEqual(['fs', 'docs']);
+  });
+
+  it('重复 target id 去重：落差侧与 unmeasured 侧同口径（targets 数组无唯一性校验）', () => {
+    expect(collectMcpTransportNoticesForTargets(['codex', 'codex'], [SSE])).toHaveLength(1);
+  });
+
   it('collectUnmeasuredMcpTransportTargets：每 target 恰一条、去重、不含内置 id', () => {
     expect(
       collectUnmeasuredMcpTransportTargets(['claude', 'my-agent', 'cursor'], [STDIO, HTTP, SSE]),

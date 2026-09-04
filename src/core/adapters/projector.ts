@@ -14,8 +14,9 @@
  * - 命令薄壳路径与命名空间降级：`commandFilePath` / `flatCommandFilePath`；
  * - 命令薄壳正文：`project/commands.renderCommandShell`（`$1..$9` / `$ARGUMENTS`
  *   归一化已在 SoT 侧做完，声明式 target 免费继承）；
- * - MCP payload：`projectors/mcp-transport` 的两个内置 dialect（能力落差与降级
- *   结论也走同一张矩阵）。
+ * - MCP payload：`projectors/mcp-transport` 的两个内置 dialect。**能力落差判定不继承**
+ *   ——声明式 id 不在 `MCP_TRANSPORT_MATRIX` 里（矩阵只装四个内置 target 的实测结论），
+ *   由 `collectUnmeasuredMcpTransportTargets` 出 unmeasured 占位，不猜默认值。
  *
  * 每一项产出都过两道校验：动作在 `ADAPTER_ALLOWED_ACTIONS` 内（`merge_toml` 永不
  * 出现），路径过 containment（plan 是热路径也照跑——纯字符串运算，代价可忽略，

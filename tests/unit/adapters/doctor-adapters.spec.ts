@@ -353,4 +353,25 @@ describe('runDoctorChecks — 声明式 id × MCP transport 矩阵（PRD 适配�
     expect(report.exitCode).toBe(0);
     expect(report.results.filter((r) => r.item.endsWith('-unmeasured'))).toEqual([]);
   });
+
+  it('声明了 server 但全部 enabled: false → 不把声明式 id 说成「已实测」', async () => {
+    const host = createDoctorHost();
+    await host.writeFile(path.join(USER_ADAPTERS, 'my-agent.yaml'), adapterYaml('my-agent'));
+    await loadWith(host);
+    await seedWithMcp(
+      host,
+      '[claude, my-agent]',
+      '    - name: fs\n      transport: stdio\n      command: fs-server\n      enabled: false',
+    );
+
+    const report = await doctor(host);
+    expect(report.exitCode).toBe(0);
+    // 一条都不投影：既不该报 unmeasured，也不该说「N 个 server 均可无损表达」
+    expect(report.results.filter((r) => r.item.endsWith('-unmeasured'))).toEqual([]);
+    const ok = resultOf(report, 'mcp-transport');
+    expect(ok.level).toBe('ok');
+    expect(ok.detail).toContain('全部 enabled: false');
+    expect(ok.detail).not.toContain('my-agent');
+    expect(ok.detail).not.toContain('无损表达');
+  });
 });
